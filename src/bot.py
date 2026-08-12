@@ -3855,7 +3855,10 @@ def cmd_duo_live(args):
     from src.data.odds_client import OddsClient
     from src.model.predict import predict_fight
     from src.model.train import load_model
-    from src.polymarket.markets import get_ufc_fight_markets
+    from src.polymarket.markets import (
+        GammaEventsUnavailableError,
+        get_ufc_fight_markets,
+    )
     from src.polymarket.client import ClobClientWrapper
     from src.strategy.duo_trader import (
         OpenOrderReservationUnavailableError,
@@ -4164,16 +4167,64 @@ def cmd_duo_live(args):
         try:
             markets = get_ufc_fight_markets(
                 bout_contexts=list(polymarket_bout_contexts.values()),
+                require_fresh=True,
             )
         except TypeError as exc:
             # Preserve compatibility with legacy integrations/test doubles that
-            # still expose the original zero-argument callable.
-            if "bout_contexts" not in str(exc):
+            # predate the fresh-read flag or expose the original zero-argument
+            # callable. The in-tree implementation always supports both.
+            if "require_fresh" in str(exc):
+                try:
+                    markets = get_ufc_fight_markets(
+                        bout_contexts=list(polymarket_bout_contexts.values()),
+                    )
+                except TypeError as legacy_exc:
+                    if "bout_contexts" not in str(legacy_exc):
+                        raise
+                    markets = get_ufc_fight_markets()
+            elif "bout_contexts" in str(exc):
+                markets = get_ufc_fight_markets()
+            else:
                 raise
-            markets = get_ufc_fight_markets()
+    except GammaEventsUnavailableError as e:
+        reason = f"polymarket_gamma_events_unavailable: {e}"
+        logger.info("Live cycle degraded: %s", reason)
+        cancellation_summary = cancel_duo_open_limit_orders(
+            clob=clob,
+            dry_run=dry_run,
+            reason="polymarket_market_data_unavailable",
+        )
+        maintenance_logger = (
+            logger.info
+            if cancellation_summary.get("status") in {"ok", "dry_run"}
+            else logger.warning
+        )
+        maintenance_logger(
+            "Resting-order maintenance completed for unavailable Polymarket market data: %s",
+            cancellation_summary,
+        )
+        _report_progress("Cycle active: degraded - Polymarket market data unavailable")
+        return {
+            "status": "degraded",
+            "reason": reason,
+            "total_orders": 0,
+            "resting_order_maintenance": cancellation_summary,
+        }
     except Exception as e:
-        logger.warning(f"Failed to fetch Polymarket markets: {e}")
-        markets = pd.DataFrame()
+        reason = f"polymarket_market_fetch_failed: {e}"
+        logger.warning("Live cycle degraded: %s", reason)
+        cancellation_summary = cancel_duo_open_limit_orders(
+            clob=clob,
+            dry_run=dry_run,
+            reason="polymarket_market_data_unavailable",
+        )
+        _report_progress("Cycle active: degraded - Polymarket market fetch failed")
+        return {
+            "status": "degraded",
+            "reason": reason,
+            "total_orders": 0,
+            "resting_order_maintenance": cancellation_summary,
+        }
 
     if markets.empty:
         logger.info("No active UFC markets found on Polymarket — predictions will still be cached for the dashboard.")

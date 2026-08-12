@@ -1,4 +1,5 @@
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -16,6 +17,13 @@ class _GammaEventsResponse:
 
     def json(self):
         return self._events
+
+
+@pytest.fixture(autouse=True)
+def _reset_gamma_events_fetch_state():
+    polymarket_markets._reset_ufc_events_fetch_state()
+    yield
+    polymarket_markets._reset_ufc_events_fetch_state()
 
 
 def test_find_ufc_events_logs_recovered_retry_at_info(monkeypatch, caplog):
@@ -46,7 +54,10 @@ def test_find_ufc_events_logs_recovered_retry_at_info(monkeypatch, caplog):
     assert "retrying in 1s" in retry_records[0].getMessage()
 
 
-def test_find_ufc_events_warns_once_only_after_retry_exhaustion(monkeypatch, caplog):
+def test_find_ufc_events_raises_typed_error_once_only_after_retry_exhaustion(
+    monkeypatch,
+    caplog,
+):
     calls = []
 
     def fake_get(*args, **kwargs):
@@ -57,14 +68,17 @@ def test_find_ufc_events_warns_once_only_after_retry_exhaustion(monkeypatch, cap
     monkeypatch.setattr(polymarket_markets.time, "sleep", lambda _seconds: None)
 
     with caplog.at_level(logging.INFO, logger="src.polymarket.markets"):
-        events = polymarket_markets.find_ufc_events()
+        with pytest.raises(
+            polymarket_markets.GammaEventsUnavailableError,
+            match="discovery unavailable after 3 attempts",
+        ):
+            polymarket_markets.find_ufc_events()
 
     failure_records = [
         record
         for record in caplog.records
         if "Failed to fetch UFC events" in record.getMessage()
     ]
-    assert events == []
     assert len(calls) == 3
     assert [record.levelno for record in failure_records] == [
         logging.INFO,
@@ -72,6 +86,197 @@ def test_find_ufc_events_warns_once_only_after_retry_exhaustion(monkeypatch, cap
         logging.WARNING,
     ]
     assert "after 3 attempts" in failure_records[-1].getMessage()
+    assert (
+        failure_records[-1].alert_incident_key
+        == "polymarket_gamma_ufc_events_unavailable"
+    )
+
+
+def test_find_ufc_events_failure_cooldown_suppresses_second_retry_sequence(
+    monkeypatch,
+):
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise polymarket_markets.requests.Timeout("timed out")
+
+    monkeypatch.setattr(polymarket_markets.requests, "get", fake_get)
+    monkeypatch.setattr(polymarket_markets.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(polymarket_markets.GammaEventsUnavailableError):
+        polymarket_markets.find_ufc_events()
+    with pytest.raises(
+        polymarket_markets.GammaEventsUnavailableError,
+        match="retry suppressed",
+    ):
+        polymarket_markets.find_ufc_events()
+
+    assert len(calls) == 3
+
+
+def test_find_ufc_events_short_success_cache_returns_defensive_copy(monkeypatch):
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _GammaEventsResponse([{"id": "event-1", "title": "UFC card"}])
+
+    monkeypatch.setattr(polymarket_markets.requests, "get", fake_get)
+
+    first = polymarket_markets.find_ufc_events()
+    first[0]["title"] = "mutated by caller"
+    second = polymarket_markets.find_ufc_events()
+
+    assert len(calls) == 1
+    assert second == [{"id": "event-1", "title": "UFC card"}]
+
+
+def test_find_ufc_events_fresh_read_bypasses_short_success_cache(monkeypatch):
+    responses = [
+        [{"id": "event-1", "price": "0.40"}],
+        [{"id": "event-1", "price": "0.45"}],
+    ]
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _GammaEventsResponse(responses[len(calls) - 1])
+
+    monkeypatch.setattr(polymarket_markets.requests, "get", fake_get)
+
+    monitor_snapshot = polymarket_markets.find_ufc_events()
+    trading_snapshot = polymarket_markets.find_ufc_events(require_fresh=True)
+
+    assert len(calls) == 2
+    assert monitor_snapshot[0]["price"] == "0.40"
+    assert trading_snapshot[0]["price"] == "0.45"
+
+
+def test_fresh_read_retries_after_older_refresh_completes(monkeypatch):
+    fetch_started = threading.Event()
+    release_fetch = threading.Event()
+    trading_request_started = threading.Event()
+    calls = []
+    results = {}
+    real_next_sequence = polymarket_markets._next_gamma_events_request_sequence
+    responses = [
+        [{"id": "event-1", "snapshot": "monitor"}],
+        [{"id": "event-1", "snapshot": "trading"}],
+    ]
+
+    def controlled_sequence():
+        sequence = real_next_sequence()
+        if (
+            threading.current_thread().name == "gamma-trading-reader"
+            and not trading_request_started.is_set()
+        ):
+            trading_request_started.set()
+        return sequence
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        call_index = len(calls) - 1
+        if call_index == 0:
+            fetch_started.set()
+            assert release_fetch.wait(timeout=2)
+        return _GammaEventsResponse(responses[call_index])
+
+    def read_for_monitor():
+        results["monitor"] = polymarket_markets.find_ufc_events()
+
+    def read_for_trading():
+        results["trading"] = polymarket_markets.find_ufc_events(require_fresh=True)
+
+    monkeypatch.setattr(polymarket_markets.requests, "get", fake_get)
+    monkeypatch.setattr(
+        polymarket_markets,
+        "_next_gamma_events_request_sequence",
+        controlled_sequence,
+    )
+
+    monitor_thread = threading.Thread(target=read_for_monitor)
+    monitor_thread.start()
+    assert fetch_started.wait(timeout=2)
+    trading_thread = threading.Thread(
+        target=read_for_trading,
+        name="gamma-trading-reader",
+    )
+    trading_thread.start()
+    assert trading_request_started.wait(timeout=2)
+    release_fetch.set()
+    monitor_thread.join(timeout=2)
+    trading_thread.join(timeout=2)
+
+    assert not monitor_thread.is_alive()
+    assert not trading_thread.is_alive()
+    assert len(calls) == 2
+    assert results["monitor"] == [{"id": "event-1", "snapshot": "monitor"}]
+    assert results["trading"] == [{"id": "event-1", "snapshot": "trading"}]
+
+
+def test_fresh_read_coalesces_with_fetch_started_after_request(monkeypatch):
+    trading_request_started = threading.Event()
+    continue_trading_request = threading.Event()
+    calls = []
+    results = {}
+    real_next_sequence = polymarket_markets._next_gamma_events_request_sequence
+
+    def controlled_sequence():
+        sequence = real_next_sequence()
+        if (
+            threading.current_thread().name == "gamma-waiting-trading-reader"
+            and not trading_request_started.is_set()
+        ):
+            trading_request_started.set()
+            assert continue_trading_request.wait(timeout=2)
+        return sequence
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _GammaEventsResponse([{"id": "event-1", "snapshot": "shared"}])
+
+    def read_for_trading():
+        results["trading"] = polymarket_markets.find_ufc_events(require_fresh=True)
+
+    monkeypatch.setattr(polymarket_markets.requests, "get", fake_get)
+    monkeypatch.setattr(
+        polymarket_markets,
+        "_next_gamma_events_request_sequence",
+        controlled_sequence,
+    )
+
+    trading_thread = threading.Thread(
+        target=read_for_trading,
+        name="gamma-waiting-trading-reader",
+    )
+    trading_thread.start()
+    assert trading_request_started.wait(timeout=2)
+
+    monitor_snapshot = polymarket_markets.find_ufc_events()
+    continue_trading_request.set()
+    trading_thread.join(timeout=2)
+
+    assert not trading_thread.is_alive()
+    assert len(calls) == 1
+    assert monitor_snapshot == results["trading"] == [
+        {"id": "event-1", "snapshot": "shared"}
+    ]
+
+
+def test_get_ufc_fight_markets_forwards_fresh_requirement(monkeypatch):
+    calls = []
+
+    def fake_find(*, require_fresh=False):
+        calls.append(require_fresh)
+        return []
+
+    monkeypatch.setattr(polymarket_markets, "find_ufc_events", fake_find)
+
+    markets = polymarket_markets.get_ufc_fight_markets(require_fresh=True)
+
+    assert markets.empty
+    assert calls == [True]
 
 
 def test_parse_fight_market_prefers_actual_game_start_to_listing_timestamp():

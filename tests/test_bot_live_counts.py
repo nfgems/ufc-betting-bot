@@ -829,6 +829,31 @@ def test_resolve_live_event_context_matches_gigi_canuto_official_card_name():
     assert event_context["card_date"] == "2026-08-08"
 
 
+def test_resolve_live_event_context_matches_sergey_spivak_odds_alias_on_utc_rollover():
+    event_context = bot._resolve_live_event_context(
+        {
+            "event_id": "97b2100edfd0274e695646adcdbaeb21",
+            # The Sacramento card is August 22 locally and rolls into August 23 UTC.
+            "commence_time": "2026-08-23T00:00:00Z",
+            "fighter_a": "Sergey Spivak",
+            "fighter_b": "Vitor Petrino",
+        },
+        [{
+            "event_date": "August 22, 2026",
+            "fighter_a": "Serghei Spivac",
+            "fighter_b": "Vitor Petrino",
+            "weight_class": "Heavyweight Bout",
+            "num_rounds": None,
+            "is_title_bout": None,
+        }],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is not None
+    assert event_context["weight_class"] == "Heavyweight Bout"
+    assert event_context["card_date"] == "2026-08-22"
+
+
 def test_resolve_live_event_context_rejects_duplicate_pair_on_different_card_date():
     event_context = bot._resolve_live_event_context(
         {
@@ -2799,6 +2824,112 @@ def test_real_cmd_duo_live_retires_legacy_g_before_no_market_idle(monkeypatch):
             "legacy_g_order_retirement": completed,
         }
         assert calls == [{"clob": fake_clob, "dry_run": False}]
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_real_cmd_duo_live_degrades_and_cancels_limits_when_gamma_is_unavailable(
+    monkeypatch,
+):
+    from src.polymarket.markets import GammaEventsUnavailableError
+    from src.strategy import duo_trader
+
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        logs_dir = temp_root / "logs"
+        model_dir = temp_root / "models"
+        logs_dir.mkdir()
+        model_dir.mkdir()
+        artifact_path = model_dir / "xgboost_model.pkl"
+        artifact_path.write_text("primary", encoding="utf-8")
+        model_result = _fake_model_result(artifact_path)
+        fake_clob = object()
+        maintenance_calls = []
+        market_fetch_calls = []
+        cancellation_summary = {
+            "status": "ok",
+            "cancelled": 2,
+            "kept": 0,
+            "reconciled": 0,
+        }
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame()
+
+        def unavailable_gamma(**kwargs):
+            market_fetch_calls.append(kwargs)
+            raise GammaEventsUnavailableError("Gamma timed out")
+
+        monkeypatch.setattr(bot, "assert_real_trading_allowed", lambda **kwargs: None)
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "initialize_prediction_history", lambda *a, **k: None)
+        monkeypatch.setattr(bot, "archive_prediction_payload", lambda *a, **k: None)
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *a, **k: None)
+        monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *a, **k: None)
+        monkeypatch.setattr(
+            bot,
+            "_resolve_runtime_bundle_summary",
+            lambda **kwargs: {"processed_dir": str(temp_root / "processed")},
+        )
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr("src.model.train.load_model", lambda _name: model_result)
+        monkeypatch.setattr(
+            "src.polymarket.markets.get_ufc_fight_markets",
+            unavailable_gamma,
+        )
+        monkeypatch.setattr(
+            duo_trader,
+            "ensure_legacy_g_orders_retired",
+            lambda **kwargs: {"maintenance_incomplete": False},
+        )
+        monkeypatch.setattr(
+            duo_trader,
+            "cancel_duo_open_limit_orders",
+            lambda **kwargs: maintenance_calls.append(kwargs)
+            or dict(cancellation_summary),
+        )
+        monkeypatch.setattr(
+            duo_trader,
+            "run_duo_traders",
+            lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("traders must not run without current Gamma data")
+            ),
+        )
+
+        result = bot.cmd_duo_live(
+            type(
+                "Args",
+                (),
+                {
+                    "model": "xgboost",
+                    "dry_run": False,
+                    "min_edge": 0.02,
+                    "clob_client": fake_clob,
+                },
+            )()
+        )
+
+        assert result == {
+            "status": "degraded",
+            "reason": "polymarket_gamma_events_unavailable: Gamma timed out",
+            "total_orders": 0,
+            "resting_order_maintenance": cancellation_summary,
+        }
+        assert maintenance_calls == [
+            {
+                "clob": fake_clob,
+                "dry_run": False,
+                "reason": "polymarket_market_data_unavailable",
+            }
+        ]
+        assert market_fetch_calls == [{"bout_contexts": [], "require_fresh": True}]
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 

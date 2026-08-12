@@ -7,7 +7,7 @@ from collections.abc import Iterable
 
 import pandas as pd
 
-from src.polymarket.markets import get_ufc_fight_markets
+from src.polymarket.markets import GammaEventsUnavailableError, get_ufc_fight_markets
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,8 @@ def load_supported_market_token_lookup() -> dict[str, dict]:
         ufc_markets = get_ufc_fight_markets()
         if not ufc_markets.empty:
             frames.append(ufc_markets)
+    except GammaEventsUnavailableError as exc:
+        logger.info("UFC Polymarket reconciliation lookup unavailable: %s", exc)
     except Exception as exc:
         logger.warning("Failed to load UFC Polymarket markets for reconciliation lookup: %s", exc)
 

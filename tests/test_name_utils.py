@@ -19,6 +19,12 @@ def test_same_person_name_matches_ian_garry_canonical_name():
     assert same_person_name("Ian Garry", "Ian Machado Garry")
 
 
+def test_sergey_spivak_matches_official_serghei_spivac_identity():
+    assert same_person_name("Sergey Spivak", "Serghei Spivac")
+    assert normalize_cross_source_name("Sergey Spivak") == "serghei spivac"
+    assert canonical_fighter_display_name("Sergey Spivak") == "Serghei Spivac"
+
+
 def test_name_appears_in_text_matches_cross_source_aliases():
     assert name_appears_in_text(
         "Joseph Pyfer",

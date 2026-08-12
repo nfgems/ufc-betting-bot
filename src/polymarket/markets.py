@@ -3,9 +3,11 @@ UFC market discovery on Polymarket — finds active UFC fight markets
 and maps them to fighters.
 """
 
+import copy
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
@@ -19,6 +21,36 @@ from src.config import POLYMARKET_GAMMA_URL
 logger = logging.getLogger(__name__)
 _LIVE_MARKET_START_BUFFER = timedelta(hours=1)
 _CURRENT_CARD_MARKET_GRACE = timedelta(hours=12)
+_GAMMA_EVENTS_SUCCESS_TTL_SECONDS = 30.0
+_GAMMA_EVENTS_FAILURE_COOLDOWN_SECONDS = 60.0
+_GAMMA_EVENTS_INCIDENT_KEY = "polymarket_gamma_ufc_events_unavailable"
+_GAMMA_EVENTS_FETCH_LOCK = threading.Lock()
+_GAMMA_EVENTS_REQUEST_LOCK = threading.Lock()
+_GAMMA_EVENTS_REQUEST_SEQUENCE = 0
+_GAMMA_EVENTS_SUCCESS_CACHE: tuple[float, int, int, list[dict]] | None = None
+_GAMMA_EVENTS_FAILURE_CACHE: tuple[float, str] | None = None
+
+
+class GammaEventsUnavailableError(RuntimeError):
+    """Raised when active UFC event discovery is unavailable from Gamma."""
+
+
+def _next_gamma_events_request_sequence() -> int:
+    global _GAMMA_EVENTS_REQUEST_SEQUENCE
+    with _GAMMA_EVENTS_REQUEST_LOCK:
+        _GAMMA_EVENTS_REQUEST_SEQUENCE += 1
+        return _GAMMA_EVENTS_REQUEST_SEQUENCE
+
+
+def _reset_ufc_events_fetch_state() -> None:
+    """Clear process-local discovery state (primarily for deterministic tests)."""
+    global _GAMMA_EVENTS_REQUEST_SEQUENCE
+    global _GAMMA_EVENTS_SUCCESS_CACHE, _GAMMA_EVENTS_FAILURE_CACHE
+    with _GAMMA_EVENTS_REQUEST_LOCK:
+        _GAMMA_EVENTS_REQUEST_SEQUENCE = 0
+    with _GAMMA_EVENTS_FETCH_LOCK:
+        _GAMMA_EVENTS_SUCCESS_CACHE = None
+        _GAMMA_EVENTS_FAILURE_CACHE = None
 
 
 def _parse_market_start_time(*values) -> Optional[datetime]:
@@ -131,13 +163,7 @@ def _resolve_market_start_time(market: dict, event: Optional[dict] = None) -> st
     )
 
 
-def find_ufc_events(limit: int = 200) -> list[dict]:
-    """
-    Find all active UFC fight events on Polymarket.
-
-    Uses tag_slug=ufc to query the Gamma API directly, which is more
-    reliable than the generic tag search.
-    """
+def _fetch_ufc_events_uncached(limit: int) -> list[dict]:
     all_events = []
     seen_ids = set()
     offset = 0
@@ -159,15 +185,24 @@ def find_ufc_events(limit: int = 200) -> list[dict]:
                 )
                 resp.raise_for_status()
                 events = resp.json()
+                if not isinstance(events, list) or any(
+                    not isinstance(event, dict) for event in events
+                ):
+                    raise ValueError("Gamma UFC events response was not a list of objects")
                 break
             except Exception as e:
                 if attempt == 3:
+                    message = (
+                        "Polymarket Gamma UFC event discovery unavailable after "
+                        f"3 attempts (offset={offset}): {e}"
+                    )
                     logger.warning(
                         "Failed to fetch UFC events after 3 attempts (offset=%s): %s",
                         offset,
                         e,
+                        extra={"alert_incident_key": _GAMMA_EVENTS_INCIDENT_KEY},
                     )
-                    break
+                    raise GammaEventsUnavailableError(message) from e
 
                 retry_delay = min(2 ** (attempt - 1), 4)
                 logger.info(
@@ -180,8 +215,6 @@ def find_ufc_events(limit: int = 200) -> list[dict]:
                 )
                 time.sleep(retry_delay)
 
-        if events is None:
-            break
         if not events:
             break
 
@@ -195,8 +228,71 @@ def find_ufc_events(limit: int = 200) -> list[dict]:
             break
         offset += limit
 
-    logger.info(f"Found {len(all_events)} UFC events on Polymarket")
     return all_events
+
+
+def find_ufc_events(
+    limit: int = 200,
+    *,
+    require_fresh: bool = False,
+) -> list[dict]:
+    """Find active UFC events without conflating an outage with no events."""
+    global _GAMMA_EVENTS_SUCCESS_CACHE, _GAMMA_EVENTS_FAILURE_CACHE
+
+    request_sequence = _next_gamma_events_request_sequence()
+    with _GAMMA_EVENTS_FETCH_LOCK:
+        now = time.monotonic()
+        cached = _GAMMA_EVENTS_SUCCESS_CACHE
+        if cached is not None:
+            fetch_started_at, cached_limit, fetch_request_sequence, cached_events = cached
+            age_seconds = now - fetch_started_at
+            fresh_for_request = fetch_request_sequence > request_sequence
+            if (
+                cached_limit == limit
+                and age_seconds <= _GAMMA_EVENTS_SUCCESS_TTL_SECONDS
+                and (not require_fresh or fresh_for_request)
+            ):
+                return copy.deepcopy(cached_events)
+
+        recent_failure = _GAMMA_EVENTS_FAILURE_CACHE
+        if recent_failure is not None:
+            failed_at, failure_message = recent_failure
+            failure_age = now - failed_at
+            if failure_age < _GAMMA_EVENTS_FAILURE_COOLDOWN_SECONDS:
+                retry_after = _GAMMA_EVENTS_FAILURE_COOLDOWN_SECONDS - failure_age
+                raise GammaEventsUnavailableError(
+                    "Polymarket Gamma UFC event discovery remains unavailable; "
+                    f"retry suppressed for {retry_after:.0f}s after recent failure: "
+                    f"{failure_message}"
+                )
+
+        had_failure = recent_failure is not None
+        fetch_started_at = time.monotonic()
+        try:
+            events = _fetch_ufc_events_uncached(limit)
+        except GammaEventsUnavailableError as exc:
+            _GAMMA_EVENTS_SUCCESS_CACHE = None
+            _GAMMA_EVENTS_FAILURE_CACHE = (time.monotonic(), str(exc))
+            raise
+
+        _GAMMA_EVENTS_SUCCESS_CACHE = (
+            fetch_started_at,
+            limit,
+            request_sequence,
+            copy.deepcopy(events),
+        )
+        _GAMMA_EVENTS_FAILURE_CACHE = None
+
+    logger.info(
+        "Found %s UFC events on Polymarket",
+        len(events),
+        extra=(
+            {"alert_recovered_incident_keys": (_GAMMA_EVENTS_INCIDENT_KEY,)}
+            if had_failure
+            else None
+        ),
+    )
+    return events
 
 
 def _parse_json_field(value) -> list:
@@ -360,6 +456,7 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
 def get_ufc_fight_markets(
     *,
     bout_contexts: Optional[Iterable[dict]] = None,
+    require_fresh: bool = False,
 ) -> pd.DataFrame:
     """
     Get all active UFC fight winner markets as a DataFrame.
@@ -372,7 +469,11 @@ def get_ufc_fight_markets(
     Returns DataFrame with one row per fight market including:
         fighter names, token IDs, current prices, volume, liquidity.
     """
-    events = find_ufc_events()
+    events = (
+        find_ufc_events(require_fresh=True)
+        if require_fresh
+        else find_ufc_events()
+    )
     bout_context_by_pair = _index_bout_contexts(bout_contexts)
 
     markets = []

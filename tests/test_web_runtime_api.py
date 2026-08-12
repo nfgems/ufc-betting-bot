@@ -4,9 +4,255 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.polymarket.tracker import ReadOnlyBetLedgerView
+from src.polymarket.monitor import PositionDataPartialError
+from src.polymarket.tracker import BetLedger, ReadOnlyBetLedgerView
 from src.web import app as web_app
 from src.web import serve as web_serve
+
+
+def _open_filled_test_bet(ledger_path):
+    ledger = BetLedger(path=ledger_path)
+    return ledger.add_bet(
+        fighter="Alpha",
+        opponent="Beta",
+        side="a",
+        amount=10.0,
+        price=0.5,
+        shares=20.0,
+        token_id="token-live",
+        market_id="market-live",
+        model_prob=0.6,
+        market_prob=0.5,
+        edge=0.1,
+        decimal_odds=2.0,
+        dry_run=False,
+        placement_state="filled",
+    )
+
+
+def test_sold_position_reconciliation_fails_closed_on_position_api_outage(
+    monkeypatch,
+    tmp_path,
+):
+    from src.polymarket import monitor as monitor_module
+    from src.polymarket import tracker as tracker_module
+    from src.strategy import duo_trader
+
+    ledger_path = tmp_path / "single.json"
+    bet = _open_filled_test_bet(ledger_path)
+
+    class _UnavailableMonitor:
+        def __init__(self, *, clob_client, wallet_address):
+            assert wallet_address == "0x" + ("a" * 40)
+
+        def get_positions(self, **kwargs):
+            assert kwargs == {"strict": True}
+            raise PositionDataPartialError("first positions page unavailable")
+
+    class _AutoDiscoveringClob:
+        proxy_address = ""
+
+        def _discover_proxy_address(self):
+            return "0x" + ("a" * 40)
+
+    reconcile_calls = []
+    monkeypatch.setattr(monitor_module, "PositionMonitor", _UnavailableMonitor)
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: _AutoDiscoveringClob())
+    monkeypatch.setattr(
+        duo_trader,
+        "get_all_trader_ledgers",
+        lambda: [("S", ledger_path)],
+    )
+    monkeypatch.setattr(
+        tracker_module,
+        "auto_reconcile_sold_positions",
+        lambda *args, **kwargs: reconcile_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(PositionDataPartialError, match="first positions page"):
+        web_serve._reconcile_sold_positions_from_live_wallet()
+
+    assert reconcile_calls == []
+    stored = next(
+        row
+        for row in BetLedger(path=ledger_path).get_bets()
+        if row["id"] == bet["id"]
+    )
+    assert stored["status"] == "open"
+
+
+def test_sold_position_reconciliation_rejects_missing_proxy(monkeypatch, tmp_path):
+    from src.polymarket import monitor as monitor_module
+    from src.strategy import duo_trader
+
+    ledger_path = tmp_path / "single.json"
+    ledger_path.write_text("[]", encoding="utf-8")
+
+    class _ClobWithoutProxy:
+        proxy_address = ""
+
+        def _discover_proxy_address(self):
+            return ""
+
+    monitor_calls = []
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: _ClobWithoutProxy())
+    monkeypatch.setattr(
+        duo_trader,
+        "get_all_trader_ledgers",
+        lambda: [("S", ledger_path)],
+    )
+    monkeypatch.setattr(
+        monitor_module,
+        "PositionMonitor",
+        lambda *args, **kwargs: monitor_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(
+        web_serve.SoldPositionReconciliationConfigurationError,
+        match="trusted Polymarket proxy/funder",
+    ):
+        web_serve._reconcile_sold_positions_from_live_wallet()
+
+    assert monitor_calls == []
+
+
+def test_sold_position_reconciliation_preserves_ledger_on_malformed_active_row(
+    monkeypatch,
+    tmp_path,
+):
+    from src.polymarket import monitor as monitor_module
+    from src.strategy import duo_trader
+
+    ledger_path = tmp_path / "single.json"
+    bet = _open_filled_test_bet(ledger_path)
+
+    class _TrustedClob:
+        proxy_address = "0x" + ("b" * 40)
+
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: _TrustedClob())
+    monkeypatch.setattr(
+        duo_trader,
+        "get_all_trader_ledgers",
+        lambda: [("S", ledger_path)],
+    )
+    monkeypatch.setattr(
+        monitor_module,
+        "request_data_api_json",
+        lambda *args, **kwargs: [{"asset": "", "size": 1}],
+    )
+
+    with pytest.raises(PositionDataPartialError, match="positions page at offset=0"):
+        web_serve._reconcile_sold_positions_from_live_wallet()
+
+    stored = next(
+        row
+        for row in BetLedger(path=ledger_path).get_bets()
+        if row["id"] == bet["id"]
+    )
+    assert stored["status"] == "open"
+
+
+def test_sold_position_outage_is_info_but_local_reconciliation_error_is_warning(
+    caplog,
+):
+    with caplog.at_level("INFO"):
+        web_serve._log_sold_position_reconciliation_error(
+            PositionDataPartialError("positions fetch already warned")
+        )
+        web_serve._log_sold_position_reconciliation_error(
+            web_serve.SoldPositionReconciliationConfigurationError(
+                "missing trusted proxy"
+            )
+        )
+
+    matching = [
+        record
+        for record in caplog.records
+        if "Sold-position reconciliation" in record.getMessage()
+    ]
+    assert [record.levelname for record in matching] == ["INFO", "WARNING"]
+    assert "incomplete positions snapshot" in matching[0].getMessage()
+    assert "missing trusted proxy" in matching[1].getMessage()
+
+
+def test_freshness_pause_cancels_resting_orders_before_refresh_starts(
+    monkeypatch,
+    tmp_path,
+):
+    from src import bot
+    from src.data import line_tracker
+    from src.polymarket import executor
+    from src.strategy import duo_trader
+
+    class _LoopExit(Exception):
+        pass
+
+    cycles = {"count": 0}
+    request_event = threading.Event()
+    shared_clob = object()
+    maintenance_calls = []
+
+    def fake_cmd_duo_live(args):
+        cycles["count"] += 1
+        assert args.completed_event_refresh_callback(
+            missing_event_dates=("2026-08-08",),
+            reference_date="2026-08-12",
+        ) is True
+        web_serve._claim_completed_event_refresh_request()
+        raise RuntimeError(
+            "Runtime bundle freshness guard blocked live trading: processed snapshot "
+            "max event date=2026-08-01 is missing completed UFC event date(s) "
+            "2026-08-08 before active UFC card date=2026-08-12"
+        )
+
+    def fake_sleep(_seconds):
+        if cycles["count"]:
+            raise _LoopExit()
+
+    monkeypatch.setenv("UFC_REFRESH_ENABLED", "1")
+    monkeypatch.setattr(
+        web_serve,
+        "_UFC_COMPLETED_EVENT_REFRESH_REQUEST",
+        request_event,
+    )
+    web_serve._mark_ufc_refresh_cycle_finished()
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *a, **k: None)
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: shared_clob)
+    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda **kwargs: 0)
+    monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
+    monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
+    monkeypatch.setattr(bot, "cmd_duo_live", fake_cmd_duo_live)
+    monkeypatch.setattr(
+        duo_trader,
+        "get_all_trader_ledgers",
+        lambda: [
+            ("S", tmp_path / "missing-s.json"),
+            ("C", tmp_path / "missing-c.json"),
+        ],
+    )
+    monkeypatch.setattr(
+        duo_trader,
+        "cancel_duo_open_limit_orders",
+        lambda **kwargs: maintenance_calls.append(kwargs)
+        or {"status": "ok", "cancelled": 2},
+    )
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_live_betting_loop(
+            interval_minutes=0.01,
+            trading_mode="real",
+            model_name="xgboost",
+        )
+
+    assert maintenance_calls == [
+        {
+            "clob": shared_clob,
+            "dry_run": False,
+            "reason": "runtime_bundle_refresh_blocked",
+        }
+    ]
+    web_serve._mark_ufc_refresh_cycle_finished()
 
 
 def _runtime_status(**overrides):
@@ -1024,7 +1270,7 @@ def test_live_betting_loop_treats_refresh_hash_mismatch_as_pause(monkeypatch, tm
         "update_runtime_component",
         lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
     )
-    monkeypatch.setattr(web_serve, "_ufc_refresh_cycle_in_progress", lambda: True)
+    monkeypatch.setattr(web_serve, "_ufc_refresh_requested_or_in_progress", lambda: True)
     monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda **_kwargs: 0)
     monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
     monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)

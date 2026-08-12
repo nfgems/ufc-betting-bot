@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import requests
 
 import pytest
@@ -5,6 +7,58 @@ import pytest
 from src.polymarket import monitor as monitor_module
 from src.polymarket import data_api as data_api_module
 from src.polymarket.monitor import PositionDataPartialError, PositionMonitor
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected_seconds"),
+    [
+        ("12.5", 12.5),
+        ("Wed, 12 Aug 2026 12:00:15 GMT", 15.0),
+    ],
+)
+def test_data_api_retry_after_accepts_seconds_and_http_date(
+    retry_after,
+    expected_seconds,
+):
+    class _FakeResponse:
+        headers = {"Retry-After": retry_after}
+
+    wait = data_api_module._retry_after_seconds(
+        _FakeResponse(),
+        now=datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc),
+    )
+    assert wait == pytest.approx(expected_seconds)
+
+
+def test_data_api_429_uses_exponential_floor_and_bounded_jitter(monkeypatch):
+    sleeps: list[float] = []
+
+    class _FakeResponse:
+        headers = {"Retry-After": "1"}
+
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error", response=self)
+
+        def json(self):
+            return [{"asset": "token-a", "size": 1}]
+
+    responses = [_FakeResponse(429), _FakeResponse(429), _FakeResponse(200)]
+    monkeypatch.setattr(
+        data_api_module.requests,
+        "get",
+        lambda *args, **kwargs: responses.pop(0),
+    )
+    monkeypatch.setattr(data_api_module.time, "sleep", sleeps.append)
+    monkeypatch.setattr(data_api_module.random, "uniform", lambda _low, _high: 0.25)
+
+    rows = data_api_module.request_json("https://data-api.polymarket.com/positions")
+
+    assert rows == [{"asset": "token-a", "size": 1}]
+    assert sleeps == pytest.approx([10.25, 20.25])
 
 
 @pytest.mark.parametrize("status_code", [408, 530])
@@ -63,6 +117,71 @@ def test_get_positions_strict_raises_on_later_page_failure(monkeypatch):
 
     with pytest.raises(PositionDataPartialError, match="positions page"):
         monitor.get_positions(page_size=2, strict=True)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, {}, [{"asset": "token-a", "size": 1}, None]],
+)
+def test_get_positions_strict_rejects_malformed_success_payload(monkeypatch, payload):
+    monkeypatch.setattr(
+        monitor_module,
+        "request_data_api_json",
+        lambda *args, **kwargs: payload,
+    )
+    monitor = PositionMonitor(wallet_address="0xwallet")
+
+    with pytest.raises(PositionDataPartialError, match="positions page at offset=0"):
+        monitor.get_positions(strict=True)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"size": 1},
+        {"asset": "", "size": 1},
+        {"asset": 123, "size": 1},
+        {"asset": "token-a", "size": None},
+        {"asset": "token-a", "size": "not-a-number"},
+        {"asset": "token-a", "size": float("nan")},
+        {"asset": "token-a", "size": float("inf")},
+        {"asset": "token-a", "size": -0.01},
+        {"asset": "token-a", "size": True},
+    ],
+)
+def test_get_positions_strict_rejects_semantically_invalid_rows(monkeypatch, row):
+    monkeypatch.setattr(
+        monitor_module,
+        "request_data_api_json",
+        lambda *args, **kwargs: [row],
+    )
+    monitor = PositionMonitor(wallet_address="0xwallet")
+
+    with pytest.raises(PositionDataPartialError, match="positions page at offset=0"):
+        monitor.get_positions(strict=True)
+
+
+def test_get_positions_allows_zero_size_rows_without_assets_and_normalizes_active_ids(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        monitor_module,
+        "request_data_api_json",
+        lambda *args, **kwargs: [
+            {"size": 0},
+            {"asset": None, "size": "0"},
+            {"asset": " token-a ", "size": "1.25"},
+            {"token_id": " token-b ", "size": 2},
+        ],
+    )
+    monitor = PositionMonitor(wallet_address="0xwallet")
+
+    rows = monitor.get_positions(strict=True)
+
+    assert rows == [
+        {"asset": "token-a", "size": "1.25"},
+        {"token_id": "token-b", "size": 2},
+    ]
 
 
 def test_get_closed_positions_strict_raises_on_later_page_failure(monkeypatch):

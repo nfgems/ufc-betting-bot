@@ -33,7 +33,10 @@ from src.data.line_movement import (
 from src.data.io_utils import write_json_atomically
 from src.data.name_utils import normalize_person_name
 from src.data.odds_client import OddsClient
-from src.polymarket.markets import get_ufc_fight_markets
+from src.polymarket.markets import (
+    GammaEventsUnavailableError,
+    get_ufc_fight_markets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +418,9 @@ def snapshot_polymarket_prices() -> pd.DataFrame:
     """
     try:
         markets = get_ufc_fight_markets()
+    except GammaEventsUnavailableError as exc:
+        logger.info("Polymarket price snapshot unavailable: %s", exc)
+        return pd.DataFrame()
     except Exception as exc:
         logger.error("Failed to fetch Polymarket prices: %s", exc)
         return pd.DataFrame()

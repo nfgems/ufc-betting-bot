@@ -5390,7 +5390,10 @@ def _kickoff_limit_order_reconcile(
 
 def _build_token_to_fighter_map():
     """Build token_id -> {fighter, opponent, event_date} from live Polymarket markets."""
-    from src.polymarket.markets import get_ufc_fight_markets
+    from src.polymarket.markets import (
+        GammaEventsUnavailableError,
+        get_ufc_fight_markets,
+    )
     try:
         markets = get_ufc_fight_markets()
         token_map = {}
@@ -5416,6 +5419,9 @@ def _build_token_to_fighter_map():
                     "condition_id": cid,
                 }
         return token_map
+    except GammaEventsUnavailableError as e:
+        logger.info("Token-to-fighter map unavailable while Gamma is down: %s", e)
+        return {}
     except Exception as e:
         logger.warning(f"Failed to build token-to-fighter map: {e}")
         return {}

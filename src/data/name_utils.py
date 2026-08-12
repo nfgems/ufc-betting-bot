@@ -222,6 +222,9 @@ _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
     # this project-wide so UFCStats lookup, method-odds matching, rankings, and
     # cache identities all resolve the same fighter.
     "ian garry": "ian machado garry",
+    # The Odds API uses the common Sergey transliteration while UFC.com and
+    # UFCStats use Serghei for the same heavyweight.
+    "sergey spivak": "serghei spivac",
     # "Bobby" is expanded by _NICKNAME_MAP before this alias table is applied.
     "robert green": "king green",
 }
@@ -232,6 +235,7 @@ _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
     "luis felipe dias": "Luis Felipe Dias",
     "nursulton ruziboev": "Nursulton Ruziboev",
     "ian machado garry": "Ian Machado Garry",
+    "serghei spivac": "Serghei Spivac",
     "ezra elliott": "Ezra Elliott",
     "seok hyun ko": "Seok Hyun Ko",
     "dennis buzukja": "Dennis Buzukja",

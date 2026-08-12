@@ -36,6 +36,7 @@ from src.live_control import (
     evaluate_polymarket_live_startup,
     resolve_live_model_name,
 )
+from src.polymarket.monitor import PositionDataPartialError
 from src.storage_retention import compact_file_tail
 
 compact_file_tail(LOGS_DIR / "bot.log", RUNTIME_LOG_MAX_BYTES)
@@ -70,6 +71,11 @@ UFC_REFRESH_MIN_INTERVAL_HOURS = 1.0
 _UFC_REFRESH_CYCLE_LOCK = threading.Lock()
 _UFC_REFRESH_CYCLE_IN_PROGRESS = False
 _UFC_COMPLETED_EVENT_REFRESH_REQUEST = threading.Event()
+_UFC_COMPLETED_EVENT_REFRESH_CLAIMED = False
+
+
+class SoldPositionReconciliationConfigurationError(RuntimeError):
+    """Raised when destructive wallet reconciliation lacks a trusted proxy."""
 
 
 def _resolve_hosted_bundle_startup_summary() -> dict | None:
@@ -113,9 +119,10 @@ def _ufc_refresh_enabled() -> bool:
 
 
 def _mark_ufc_refresh_cycle_started() -> None:
-    global _UFC_REFRESH_CYCLE_IN_PROGRESS
+    global _UFC_COMPLETED_EVENT_REFRESH_CLAIMED, _UFC_REFRESH_CYCLE_IN_PROGRESS
     with _UFC_REFRESH_CYCLE_LOCK:
         _UFC_REFRESH_CYCLE_IN_PROGRESS = True
+        _UFC_COMPLETED_EVENT_REFRESH_CLAIMED = False
         # A request that arrived immediately before this cycle is satisfied by
         # this cycle. Clearing under the same lock prevents it from scheduling
         # a duplicate cycle after the one already starting.
@@ -123,14 +130,32 @@ def _mark_ufc_refresh_cycle_started() -> None:
 
 
 def _mark_ufc_refresh_cycle_finished() -> None:
-    global _UFC_REFRESH_CYCLE_IN_PROGRESS
+    global _UFC_COMPLETED_EVENT_REFRESH_CLAIMED, _UFC_REFRESH_CYCLE_IN_PROGRESS
     with _UFC_REFRESH_CYCLE_LOCK:
         _UFC_REFRESH_CYCLE_IN_PROGRESS = False
+        _UFC_COMPLETED_EVENT_REFRESH_CLAIMED = False
 
 
 def _ufc_refresh_cycle_in_progress() -> bool:
     with _UFC_REFRESH_CYCLE_LOCK:
         return _UFC_REFRESH_CYCLE_IN_PROGRESS
+
+
+def _ufc_refresh_requested_or_in_progress() -> bool:
+    with _UFC_REFRESH_CYCLE_LOCK:
+        return (
+            _UFC_REFRESH_CYCLE_IN_PROGRESS
+            or _UFC_COMPLETED_EVENT_REFRESH_CLAIMED
+            or _UFC_COMPLETED_EVENT_REFRESH_REQUEST.is_set()
+        )
+
+
+def _claim_completed_event_refresh_request() -> None:
+    global _UFC_COMPLETED_EVENT_REFRESH_CLAIMED
+    with _UFC_REFRESH_CYCLE_LOCK:
+        _UFC_COMPLETED_EVENT_REFRESH_REQUEST.clear()
+        if not _UFC_REFRESH_CYCLE_IN_PROGRESS:
+            _UFC_COMPLETED_EVENT_REFRESH_CLAIMED = True
 
 
 def _request_completed_event_refresh(
@@ -143,7 +168,7 @@ def _request_completed_event_refresh(
         return False
 
     with _UFC_REFRESH_CYCLE_LOCK:
-        if _UFC_REFRESH_CYCLE_IN_PROGRESS:
+        if _UFC_REFRESH_CYCLE_IN_PROGRESS or _UFC_COMPLETED_EVENT_REFRESH_CLAIMED:
             return False
         if _UFC_COMPLETED_EVENT_REFRESH_REQUEST.is_set():
             return False
@@ -192,7 +217,7 @@ def _wait_for_next_ufc_refresh(
         if _UFC_COMPLETED_EVENT_REFRESH_REQUEST.wait(
             timeout=max(0.0, wait_deadline - now)
         ):
-            _UFC_COMPLETED_EVENT_REFRESH_REQUEST.clear()
+            _claim_completed_event_refresh_request()
             completed_event_request_seen = True
 
 
@@ -1007,6 +1032,73 @@ def _log_auto_redeem_summary(summary: dict, *, wait: bool) -> None:
         )
 
 
+def _reconcile_sold_positions_from_live_wallet() -> int:
+    """Reconcile only from a complete snapshot for the trusted proxy wallet."""
+    from src.polymarket.client import ClobClientWrapper
+    from src.polymarket.monitor import PositionMonitor
+    from src.polymarket.tracker import BetLedger, auto_reconcile_sold_positions
+    from src.strategy.duo_trader import get_all_trader_ledgers
+    from src.web.app import get_clob_client
+
+    ledgers = [
+        (label, Path(path))
+        for label, path in get_all_trader_ledgers()
+        if Path(path).exists()
+    ]
+    if not ledgers:
+        return 0
+
+    clob_client = get_clob_client() or ClobClientWrapper()
+    proxy_wallet = str(getattr(clob_client, "proxy_address", "") or "").strip()
+    if not proxy_wallet:
+        discover_proxy = getattr(clob_client, "_discover_proxy_address", None)
+        if callable(discover_proxy):
+            proxy_wallet = str(discover_proxy() or "").strip()
+
+    normalized_proxy = proxy_wallet.lower()
+    if (
+        len(normalized_proxy) != 42
+        or not normalized_proxy.startswith("0x")
+        or any(char not in "0123456789abcdef" for char in normalized_proxy[2:])
+    ):
+        raise SoldPositionReconciliationConfigurationError(
+            "Cannot reconcile sold positions without a trusted Polymarket proxy/funder wallet"
+        )
+
+    monitor = PositionMonitor(
+        clob_client=clob_client,
+        wallet_address=normalized_proxy,
+    )
+    live_positions = monitor.get_positions(strict=True)
+    live_tids = {
+        p.get("asset", p.get("token_id", ""))
+        for p in live_positions
+        if float(p["size"]) > 0
+    }
+
+    total_reconciled = 0
+    for label, path in ledgers:
+        reconciled = auto_reconcile_sold_positions(BetLedger(path=path), live_tids)
+        if reconciled:
+            logger.info(
+                "Reconciled %s sold positions for Trader %s",
+                reconciled,
+                label,
+            )
+            total_reconciled += reconciled
+    return total_reconciled
+
+
+def _log_sold_position_reconciliation_error(exc: Exception) -> None:
+    if isinstance(exc, PositionDataPartialError):
+        logger.info(
+            "Sold-position reconciliation skipped after incomplete positions snapshot: %s",
+            exc,
+        )
+        return
+    logger.warning("Sold-position reconciliation error: %s", exc)
+
+
 def run_live_betting_loop(
     interval_minutes: float = 10.0,
     min_edge: float = MIN_EDGE_THRESHOLD,
@@ -1053,6 +1145,7 @@ def run_live_betting_loop(
         cycle_started_at = datetime.now(timezone.utc).isoformat()
         cycle_succeeded = True
         cycle_deferred_reason: str | None = None
+        cycle_deferred_maintenance_degraded = False
         shared_clob = get_clob_client()
 
         def _heartbeat(message: str, **metadata) -> None:
@@ -1124,14 +1217,53 @@ def run_live_betting_loop(
         except Exception as e:
             cycle_succeeded = False
             failed_at = datetime.now(timezone.utc).isoformat()
-            if _runtime_bundle_refresh_blocked(e) and _ufc_refresh_cycle_in_progress():
+            if (
+                _runtime_bundle_refresh_blocked(e)
+                and _ufc_refresh_requested_or_in_progress()
+            ):
                 cycle_deferred_reason = str(e)
+                maintenance_detail = ""
+                try:
+                    from src.strategy.duo_trader import cancel_duo_open_limit_orders
+
+                    cancellation_summary = cancel_duo_open_limit_orders(
+                        clob=shared_clob,
+                        dry_run=trading_mode != LIVE_MODE_REAL,
+                        reason="runtime_bundle_refresh_blocked",
+                    )
+                    if cancellation_summary.get("status") not in {"ok", "dry_run"}:
+                        cycle_deferred_maintenance_degraded = True
+                        maintenance_detail = (
+                            " Resting-order cancellation maintenance is degraded."
+                        )
+                        logger.warning(
+                            "Resting-order maintenance degraded while live betting is "
+                            "paused for UFC refresh: %s",
+                            cancellation_summary,
+                        )
+                    else:
+                        logger.info(
+                            "Resting-order maintenance completed while live betting is "
+                            "paused for UFC refresh: %s",
+                            cancellation_summary,
+                        )
+                except Exception as maintenance_error:
+                    cycle_deferred_maintenance_degraded = True
+                    maintenance_detail = (
+                        " Resting-order cancellation maintenance is degraded."
+                    )
+                    logger.warning(
+                        "Resting-order maintenance failed while live betting is paused "
+                        "for UFC refresh: %s",
+                        maintenance_error,
+                        exc_info=True,
+                    )
                 update_runtime_component(
                     "betting_loop",
-                    "running",
+                    "degraded" if cycle_deferred_maintenance_degraded else "running",
                     (
                         "Live trading paused while scheduled UFC refresh rebuilds the "
-                        f"processed snapshot: {e}"
+                        f"processed snapshot: {e}{maintenance_detail}"
                     ),
                     consecutive_failures=consecutive_failures,
                     last_cycle_started_at=cycle_started_at,
@@ -1158,7 +1290,6 @@ def run_live_betting_loop(
             _heartbeat("Cycle active: reconciling settled markets")
             from src.polymarket.tracker import (
                 BetLedger,
-                auto_reconcile_sold_positions,
                 auto_settle_from_polymarket,
             )
             from src.strategy.duo_trader import get_all_trader_ledgers
@@ -1176,22 +1307,9 @@ def run_live_betting_loop(
 
             # Reconcile positions sold on Polymarket but still "open" in ledger
             try:
-                from src.polymarket.monitor import PositionMonitor
-                monitor = PositionMonitor()
-                live_positions = monitor.get_positions()
-                live_tids = {
-                    p.get("asset", p.get("token_id", ""))
-                    for p in live_positions
-                    if float(p.get("size", 0)) > 0
-                }
-                for label, path in get_all_trader_ledgers():
-                    if Path(path).exists():
-                        ledger = BetLedger(path=path)
-                        reconciled = auto_reconcile_sold_positions(ledger, live_tids)
-                        if reconciled:
-                            logger.info(f"Reconciled {reconciled} sold positions for Trader {label}")
+                _reconcile_sold_positions_from_live_wallet()
             except Exception as e:
-                logger.warning(f"Sold-position reconciliation error: {e}")
+                _log_sold_position_reconciliation_error(e)
         except Exception as e:
             logger.error(f"Auto-settle error: {e}")
 
@@ -1211,10 +1329,15 @@ def run_live_betting_loop(
         elif cycle_deferred_reason is not None:
             update_runtime_component(
                 "betting_loop",
-                "running",
+                "degraded" if cycle_deferred_maintenance_degraded else "running",
                 (
                     f"Last cycle paused for scheduled UFC refresh before {cycle_completed_at}; "
                     f"next retry in {interval_minutes} minutes"
+                    + (
+                        "; resting-order cancellation maintenance is degraded"
+                        if cycle_deferred_maintenance_degraded
+                        else ""
+                    )
                 ),
                 consecutive_failures=consecutive_failures,
                 last_cycle_started_at=cycle_started_at,
@@ -1672,7 +1795,6 @@ def run_background_monitor(interval_hours: float = 6.0):
             _heartbeat("Monitor cycle active: reconciling settled markets")
             from src.polymarket.tracker import (
                 BetLedger,
-                auto_reconcile_sold_positions,
                 auto_redeem_positions_from_polymarket,
                 auto_settle_from_polymarket,
             )
@@ -1691,26 +1813,11 @@ def run_background_monitor(interval_hours: float = 6.0):
 
             # Reconcile positions sold on Polymarket but still "open" in ledger
             try:
-                from src.polymarket.monitor import PositionMonitor
-                monitor = PositionMonitor()
-                live_positions = monitor.get_positions()
-                live_tids = {
-                    p.get("asset", p.get("token_id", ""))
-                    for p in live_positions
-                    if float(p.get("size", 0)) > 0
-                }
-                total_reconciled = 0
-                for label, path in get_all_trader_ledgers():
-                    if Path(path).exists():
-                        ledger = BetLedger(path=path)
-                        reconciled = auto_reconcile_sold_positions(ledger, live_tids)
-                        if reconciled:
-                            logger.info(f"Reconciled {reconciled} sold positions for Trader {label}")
-                            total_reconciled += reconciled
+                total_reconciled = _reconcile_sold_positions_from_live_wallet()
                 if total_reconciled:
                     logger.info(f"Reconciled {total_reconciled} sold positions total")
             except Exception as e:
-                logger.warning(f"Sold-position reconciliation error: {e}")
+                _log_sold_position_reconciliation_error(e)
 
             if _auto_redeem_enabled():
                 redeem_summary = auto_redeem_positions_from_polymarket(

@@ -48,6 +48,41 @@ def test_completed_event_refresh_request_coalesces_and_skips_active_cycle(monkey
     web_serve._mark_ufc_refresh_cycle_finished()
 
 
+def test_completed_event_refresh_claim_survives_waiter_consumption_until_cycle_start(
+    monkeypatch,
+):
+    request_event = web_serve.threading.Event()
+    monkeypatch.setenv("UFC_REFRESH_ENABLED", "1")
+    monkeypatch.setattr(
+        web_serve,
+        "_UFC_COMPLETED_EVENT_REFRESH_REQUEST",
+        request_event,
+    )
+    web_serve._mark_ufc_refresh_cycle_finished()
+    request = {
+        "missing_event_dates": ("2026-08-08",),
+        "reference_date": "2026-08-15",
+    }
+
+    assert web_serve._request_completed_event_refresh(**request) is True
+    trigger = web_serve._wait_for_next_ufc_refresh(
+        interval_seconds=24.0 * 3600.0,
+        last_cycle_completed_monotonic=0.0,
+        minimum_retry_seconds=0.0,
+    )
+
+    assert trigger == "completed_event_freshness_gap"
+    assert request_event.is_set() is False
+    assert web_serve._ufc_refresh_cycle_in_progress() is False
+    assert web_serve._ufc_refresh_requested_or_in_progress() is True
+    assert web_serve._request_completed_event_refresh(**request) is False
+
+    web_serve._mark_ufc_refresh_cycle_started()
+    assert web_serve._ufc_refresh_requested_or_in_progress() is True
+    web_serve._mark_ufc_refresh_cycle_finished()
+    assert web_serve._ufc_refresh_requested_or_in_progress() is False
+
+
 def test_completed_event_refresh_wait_observes_hour_cooldown_and_coalesces(monkeypatch):
     clock = [0.0]
 

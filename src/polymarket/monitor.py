@@ -5,6 +5,7 @@ on Polymarket using the Data API and CLOB API.
 
 import json
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,42 @@ CLOSED_POSITIONS_MAX_PAGE_SIZE = 50
 
 class PositionDataPartialError(RuntimeError):
     """Raised when a paginated Polymarket read stops before all pages arrive."""
+
+
+def _validate_positions_page(page: list[dict]) -> list[dict]:
+    """Validate and normalize rows before position absence can be trusted."""
+    validated: list[dict] = []
+    for row_index, row in enumerate(page):
+        raw_size = row.get("size")
+        if isinstance(raw_size, bool):
+            raise TypeError(
+                f"Polymarket positions row {row_index} has a boolean size"
+            )
+        try:
+            size = float(raw_size)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"Polymarket positions row {row_index} has an invalid size"
+            ) from exc
+        if not math.isfinite(size) or size < 0:
+            raise ValueError(
+                f"Polymarket positions row {row_index} has a non-finite or negative size"
+            )
+
+        normalized = row
+        if size > 0:
+            token_field = "asset" if "asset" in row else "token_id"
+            raw_token = row.get(token_field)
+            if not isinstance(raw_token, str) or not raw_token.strip():
+                raise TypeError(
+                    f"Polymarket positions row {row_index} has an invalid active token id"
+                )
+            token_id = raw_token.strip()
+            if token_id != raw_token:
+                normalized = dict(row)
+                normalized[token_field] = token_id
+        validated.append(normalized)
+    return validated
 
 
 def _activity_row_timestamp(row: dict) -> int | None:
@@ -159,11 +196,21 @@ class PositionMonitor:
                     params["redeemable"] = True
                 if mergeable_only:
                     params["mergeable"] = True
-                page = request_data_api_json(
+                payload = request_data_api_json(
                     f"{DATA_API_URL}/positions",
                     params=params,
                     timeout=30,
-                ) or []
+                )
+                if not isinstance(payload, list):
+                    raise TypeError(
+                        "Polymarket positions response must be a list, got "
+                        f"{type(payload).__name__}"
+                    )
+                if any(not isinstance(row, dict) for row in payload):
+                    raise TypeError(
+                        "Polymarket positions response contains a non-object row"
+                    )
+                page = _validate_positions_page(payload)
             except Exception as e:
                 logger.warning(
                     "Failed to fetch positions (offset=%s) after retries: %s",
@@ -200,7 +247,7 @@ class PositionMonitor:
         if limit is not None:
             collected = collected[:limit]
 
-        active = [p for p in collected if float(p.get("size", 0)) > 0]
+        active = [p for p in collected if float(p["size"]) > 0]
         logger.info(f"Found {len(active)} active positions")
         return active
 
