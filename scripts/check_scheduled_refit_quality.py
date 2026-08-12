@@ -27,6 +27,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts import check_production_refit_contract as contract_gate
+from src.data.name_utils import fighter_identity_key
 from src.strategy.lab_stats import compute_max_drawdown
 
 
@@ -84,6 +85,20 @@ _REQUIRED_BET_COLUMNS = {
     "execution_mode",
     "bankroll_after",
 }
+_DATA_QUALITY_PROVENANCE_COLUMNS = {
+    "fighter_a_id", "fighter_b_id",
+    "fighter_a_identity_key", "fighter_b_identity_key",
+    "a_num_fights", "b_num_fights",
+    "entry_source_kind", "entry_source_file", "entry_observed_at", "entry_commence_time",
+    "entry_hours_to_start", "entry_verified_prefight",
+    "model_odds_source_kind", "model_odds_source_file", "model_odds_observed_at",
+    "model_odds_commence_time",
+    "model_odds_hours_to_start", "model_odds_verified_prefight",
+    "market_source_kind", "market_source_file", "market_observed_at", "market_commence_time",
+    "market_hours_to_start", "market_verified_prefight",
+    "bet_eligible", "method_odds_complete",
+}
+_VERIFIED_SOURCE_KINDS = {"odds_api", "line_history"}
 
 
 def _finite_float(value: Any, label: str) -> float:
@@ -112,6 +127,88 @@ def _strict_bool(value: Any, label: str) -> bool:
     if normalized in {"false", "0"}:
         return False
     raise QualityInputError(f"{label} must be a strict boolean")
+
+
+def _nonblank(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    return str(value).strip().casefold() not in {"", "nan", "none", "nat", "<na>"}
+
+
+def _validate_v2_baseline_evidence(
+    policy: dict[str, Any],
+    *,
+    repo_root: Path | None = None,
+) -> list[str]:
+    """Bind v2 reference thresholds to the frozen clean Track-C row."""
+    if policy.get("schema_version") != 2:
+        return []
+    baseline = policy["baseline"]
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    path = root / str(baseline["evidence_path"])
+    if not path.is_file():
+        return [f"clean baseline evidence is missing: {path}"]
+    if contract_gate.file_sha256(path) != str(baseline["evidence_sha256"]):
+        return ["clean baseline evidence SHA-256 does not match the policy"]
+    try:
+        evidence = pd.read_csv(path)
+    except (OSError, pd.errors.ParserError) as exc:
+        return [f"cannot read clean baseline evidence: {exc}"]
+    if len(evidence) != 1:
+        return ["clean baseline evidence must contain exactly one Track-C row"]
+
+    row = evidence.iloc[0]
+    exact_fields = {
+        "spec": baseline["evaluation_spec_name"],
+        "features_sha256": baseline["features_sha256"],
+        "protocol_sha256": baseline["evidence_protocol_sha256"],
+        "evaluation_sample_sha256": baseline["evaluation_sample_sha256"],
+        "execution_mode": baseline["execution_mode"],
+        "evaluation_start_date": baseline["evaluation_start_date"],
+        "evaluation_end_date": baseline["evaluation_end_date"],
+    }
+    errors: list[str] = []
+    for field, expected in exact_fields.items():
+        actual = row.get(field)
+        if str(actual).strip() != str(expected).strip():
+            errors.append(f"clean baseline evidence mismatch: {field}")
+
+    bool_fields = {
+        "entry_offset_for_features": baseline["entry_offset_for_features"],
+    }
+    for field, expected in bool_fields.items():
+        try:
+            actual = _strict_bool(row.get(field), f"baseline_evidence.{field}")
+        except QualityInputError:
+            errors.append(f"clean baseline evidence mismatch: {field}")
+            continue
+        if actual is not bool(expected):
+            errors.append(f"clean baseline evidence mismatch: {field}")
+
+    numeric_fields = {
+        "model_seed": baseline["model_seed"],
+        "odds_noise_seed": baseline["odds_noise_seed"],
+        "entry_offset_days": baseline["entry_offset_days"],
+        "evaluation_n_fights": baseline["evaluation_n_fights"],
+        "evaluation_n_folds": baseline["evaluation_n_folds"],
+        "model_brier_score": baseline["model_brier_score"],
+        "model_ece": baseline["model_ece"],
+        "strategy_total_bets": baseline["strategy_total_bets"],
+        "strategy_roi": baseline["strategy_roi"],
+        "strategy_total_profit": baseline["strategy_total_profit"],
+        "strategy_avg_clv": baseline["strategy_avg_clv"],
+        "strategy_max_drawdown_pct": baseline["strategy_max_drawdown_pct"],
+    }
+    for field, expected in numeric_fields.items():
+        try:
+            actual_value = _finite_float(row.get(field), f"baseline_evidence.{field}")
+            expected_value = _finite_float(expected, f"policy.baseline.{field}")
+        except QualityInputError:
+            errors.append(f"clean baseline evidence mismatch: {field}")
+            continue
+        if not math.isclose(actual_value, expected_value, rel_tol=1e-12, abs_tol=1e-12):
+            errors.append(f"clean baseline evidence mismatch: {field}")
+    return errors
 
 
 def canonical_evaluation_index(frame: pd.DataFrame) -> pd.DataFrame:
@@ -219,6 +316,311 @@ def _read_evaluation_index(path: Path, *, expected_sha256: str) -> pd.DataFrame:
     return canonical
 
 
+def _read_data_quality(
+    path: Path,
+    *,
+    expected_sha256: str,
+    evaluation_index: pd.DataFrame,
+) -> pd.DataFrame:
+    if not path.is_file():
+        raise QualityInputError(f"data-quality artifact is missing: {path}")
+    actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise QualityInputError(
+            f"data-quality SHA-256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+        )
+    try:
+        quality = pd.read_csv(path)
+    except (OSError, pd.errors.ParserError) as exc:
+        raise QualityInputError(f"cannot read data-quality artifact {path}: {exc}") from exc
+    required = set(_EVALUATION_INDEX_COLUMNS) | _DATA_QUALITY_PROVENANCE_COLUMNS
+    missing = sorted(required - set(quality.columns))
+    if missing:
+        raise QualityInputError(f"data-quality artifact is missing columns: {missing}")
+    quality_index = canonical_evaluation_index(quality[_EVALUATION_INDEX_COLUMNS])
+    if not quality_index.equals(evaluation_index):
+        raise QualityInputError("data-quality rows do not bind one-to-one to the evaluation index")
+
+    quality = quality.copy()
+    for column in (
+        "entry_verified_prefight", "model_odds_verified_prefight",
+        "market_verified_prefight", "bet_eligible", "method_odds_complete",
+    ):
+        quality[column] = pd.Series(
+            [_strict_bool(value, f"data_quality.{column}") for value in quality[column]],
+            index=quality.index,
+            dtype=bool,
+        )
+    for column in (
+        "entry_hours_to_start", "model_odds_hours_to_start", "market_hours_to_start",
+        "a_num_fights", "b_num_fights",
+    ):
+        quality[column] = pd.to_numeric(quality[column], errors="coerce")
+    quality["event_date"] = pd.to_datetime(quality["event_date"], errors="raise")
+
+    evidence_mask = quality["bet_eligible"].copy()
+    for prefix in ("entry", "model_odds", "market"):
+        evidence_mask |= quality[f"{prefix}_verified_prefight"]
+    for side in ("a", "b"):
+        identity_column = f"fighter_{side}_identity_key"
+        id_column = f"fighter_{side}_id"
+        expected = pd.Series(
+            [
+                fighter_identity_key(name, fighter_id) or ""
+                for name, fighter_id in zip(
+                    quality[f"fighter_{side}"], quality[id_column], strict=True
+                )
+            ],
+            index=quality.index,
+            dtype=object,
+        )
+        supplied = quality[identity_column].fillna("").astype(str).str.strip()
+        missing_identity = evidence_mask & supplied.eq("")
+        if missing_identity.any():
+            raise QualityInputError(
+                f"data-quality evidence has {int(missing_identity.sum())} rows with "
+                f"a missing {identity_column}"
+            )
+        mismatched_identity = evidence_mask & supplied.ne(expected)
+        if mismatched_identity.any():
+            raise QualityInputError(
+                f"data-quality evidence has {int(mismatched_identity.sum())} rows with "
+                f"a non-derived {identity_column}"
+            )
+        quality[identity_column] = supplied
+
+    event_start = pd.to_datetime(
+        quality["event_date"], errors="coerce", utc=True, format="mixed"
+    )
+    for prefix in ("entry", "model_odds", "market"):
+        required_evidence = quality["bet_eligible"] | quality[f"{prefix}_verified_prefight"]
+        source_kind = quality[f"{prefix}_source_kind"].fillna("").astype(str).str.strip()
+        source_file = quality[f"{prefix}_source_file"]
+        missing_source_file = required_evidence & ~source_file.map(_nonblank)
+        if missing_source_file.any():
+            raise QualityInputError(
+                f"data-quality evidence has {int(missing_source_file.sum())} rows with "
+                f"a missing {prefix}_source_file"
+            )
+
+        observed = pd.to_datetime(
+            quality[f"{prefix}_observed_at"],
+            errors="coerce",
+            utc=True,
+            format="mixed",
+        )
+        invalid_observed = required_evidence & observed.isna()
+        if invalid_observed.any():
+            raise QualityInputError(
+                f"data-quality evidence has {int(invalid_observed.sum())} rows with "
+                f"an invalid {prefix}_observed_at"
+            )
+
+        commence = pd.to_datetime(
+            quality[f"{prefix}_commence_time"],
+            errors="coerce",
+            utc=True,
+            format="mixed",
+        )
+        # The Odds API archive records whole-day query offsets, so its fixed
+        # event-date boundary is the independent timing reference. Runtime
+        # line-history rows carry the exact scheduled commence timestamp.
+        timing_start = commence.where(commence.notna())
+        odds_api = source_kind.eq("odds_api")
+        timing_start = timing_start.where(~(timing_start.isna() & odds_api), event_start)
+        invalid_start = required_evidence & timing_start.isna()
+        if invalid_start.any():
+            raise QualityInputError(
+                f"data-quality evidence has {int(invalid_start.sum())} rows with "
+                f"an invalid {prefix}_commence_time"
+            )
+
+        recomputed_hours = (timing_start - observed).dt.total_seconds() / 3600.0
+        non_prefight = required_evidence & recomputed_hours.le(0.0)
+        if non_prefight.any():
+            raise QualityInputError(
+                f"data-quality evidence has {int(non_prefight.sum())} non-prefight "
+                f"{prefix} timestamps"
+            )
+        reported_hours = quality[f"{prefix}_hours_to_start"]
+        mismatch = (
+            required_evidence
+            & reported_hours.notna()
+            & recomputed_hours.notna()
+            & (reported_hours.sub(recomputed_hours).abs() > 1e-6)
+        )
+        if mismatch.any():
+            raise QualityInputError(
+                f"data-quality evidence has {int(mismatch.sum())} rows whose reported "
+                f"{prefix}_hours_to_start does not match source timestamps"
+            )
+        quality[f"{prefix}_source_kind"] = source_kind
+        quality[f"{prefix}_observed_at"] = observed
+        quality[f"{prefix}_commence_time"] = commence
+        quality[f"{prefix}_hours_to_start"] = recomputed_hours
+    return quality
+
+
+def _evaluate_provenance_quality(
+    quality: pd.DataFrame,
+    bets: pd.DataFrame,
+    *,
+    evaluation_end: pd.Timestamp,
+    policy: dict[str, Any],
+) -> tuple[list[str], dict[str, Any]]:
+    evaluation = policy["evaluation"]
+    window_days = int(evaluation.get("quality_recent_window_days", 60))
+    minimum_rows = int(evaluation.get("quality_minimum_recent_rows", 50))
+    minimum_coverage = float(evaluation.get("quality_minimum_entry_coverage", 0.70))
+    maximum_lag_days = float(evaluation.get("quality_maximum_entry_lag_days", 35.0))
+    allowed_sources = set(
+        evaluation.get("quality_allowed_prefight_sources", sorted(_VERIFIED_SOURCE_KINDS))
+    )
+    evaluation_end_date = pd.Timestamp(evaluation_end)
+    if evaluation_end_date.tzinfo is not None:
+        evaluation_end_date = evaluation_end_date.tz_localize(None)
+    evaluation_end_date = evaluation_end_date.normalize()
+    cutoff = evaluation_end_date - pd.Timedelta(days=window_days - 1)
+    minimum_fights = int(evaluation.get("minimum_fighter_fights", 2))
+    recent = quality[
+        (quality["event_date"].dt.normalize() >= cutoff)
+        & quality["a_num_fights"].ge(minimum_fights)
+        & quality["b_num_fights"].ge(minimum_fights)
+    ].copy()
+    verified_entry = (
+        recent["entry_verified_prefight"]
+        & recent["entry_source_kind"].isin(allowed_sources)
+        & recent["entry_hours_to_start"].ge(24.0)
+    )
+    coverage = float(verified_entry.mean()) if len(recent) else 0.0
+    errors: list[str] = []
+    if len(recent) < minimum_rows:
+        errors.append(f"recent provenance rows {len(recent)} below minimum {minimum_rows}")
+    if coverage < minimum_coverage:
+        errors.append(
+            f"verified T-1 entry coverage {coverage:.1%} below minimum {minimum_coverage:.1%}"
+        )
+
+    latest_entry_event_date: pd.Timestamp | None = None
+    latest_entry_lag_days: int | None = None
+    if verified_entry.any():
+        latest_entry_event_date = pd.Timestamp(
+            recent.loc[verified_entry, "event_date"].max()
+        ).normalize()
+        if latest_entry_event_date.tzinfo is not None:
+            latest_entry_event_date = latest_entry_event_date.tz_localize(None)
+        latest_entry_lag_days = max(
+            0, int((evaluation_end_date - latest_entry_event_date).days)
+        )
+        if latest_entry_lag_days > maximum_lag_days:
+            errors.append(
+                "latest verified T-1 entry event is "
+                f"{latest_entry_lag_days} days behind evaluation end; "
+                f"maximum is {maximum_lag_days:g} days"
+            )
+    else:
+        errors.append("latest verified T-1 entry event is unavailable")
+
+    eligible = quality["bet_eligible"].astype(bool)
+    eligible_valid = pd.Series(True, index=quality.index, dtype=bool)
+    for side in ("a", "b"):
+        identity_column = f"fighter_{side}_identity_key"
+        identities = quality.get(
+            identity_column, pd.Series("", index=quality.index, dtype=object)
+        )
+        eligible_valid &= identities.map(_nonblank)
+    for prefix in ("entry", "model_odds", "market"):
+        source_kind = quality.get(
+            f"{prefix}_source_kind", pd.Series("", index=quality.index, dtype=object)
+        ).fillna("").astype(str).str.strip()
+        source_file = quality.get(
+            f"{prefix}_source_file", pd.Series("", index=quality.index, dtype=object)
+        )
+        observed = pd.to_datetime(
+            quality.get(
+                f"{prefix}_observed_at", pd.Series(pd.NaT, index=quality.index)
+            ),
+            errors="coerce",
+            utc=True,
+            format="mixed",
+        )
+        verified = quality.get(
+            f"{prefix}_verified_prefight",
+            pd.Series(False, index=quality.index, dtype=bool),
+        ).fillna(False).astype(bool)
+        hours_to_start = pd.to_numeric(
+            quality.get(
+                f"{prefix}_hours_to_start", pd.Series(float("nan"), index=quality.index)
+            ),
+            errors="coerce",
+        )
+        eligible_valid &= (
+            verified
+            & source_kind.isin(allowed_sources)
+            & source_file.map(_nonblank)
+            & observed.notna()
+            & hours_to_start.ge(24.0)
+        )
+
+    invalid_eligible = eligible & ~eligible_valid
+    if invalid_eligible.any():
+        errors.append(
+            f"{int(invalid_eligible.sum())} bet-eligible rows lack verified T-1 "
+            "entry/model/fill evidence"
+        )
+
+    quality_by_key = {
+        _fight_key(row.event_date, row.fighter_a, row.fighter_b): (
+            row,
+            bool(row_is_valid),
+        )
+        for row, row_is_valid in zip(
+            quality.itertuples(index=False),
+            eligible_valid.to_numpy(dtype=bool),
+            strict=True,
+        )
+    }
+    unverified_bets: list[tuple[str, str, str]] = []
+    for bet in bets.itertuples(index=False):
+        key = _fight_key(bet.event_date, bet.fighter_a, bet.fighter_b)
+        evidence_and_validity = quality_by_key.get(key)
+        if evidence_and_validity is None:
+            unverified_bets.append(key)
+            continue
+        evidence, eligible_row_valid = evidence_and_validity
+        valid = bool(evidence.bet_eligible and eligible_row_valid)
+        if not valid:
+            unverified_bets.append(key)
+    if unverified_bets:
+        errors.append(f"{len(unverified_bets)} strategy bets lack verified T-1 model/fill evidence")
+
+    if int(policy.get("contract", {}).get("feature_count", 0)) == 211:
+        method_coverage = float(recent["method_odds_complete"].mean()) if len(recent) else 0.0
+        if len(recent) >= minimum_rows and method_coverage < minimum_coverage:
+            errors.append(
+                f"recent six-feature method-odds coverage {method_coverage:.1%} "
+                f"below minimum {minimum_coverage:.1%} for the 211-feature contract"
+            )
+    else:
+        method_coverage = float(recent["method_odds_complete"].mean()) if len(recent) else 0.0
+
+    return errors, {
+        "recent_window_days": window_days,
+        "recent_rows": int(len(recent)),
+        "verified_entry_rows": int(verified_entry.sum()),
+        "verified_entry_coverage": coverage,
+        "latest_entry_event_date": (
+            latest_entry_event_date.strftime("%Y-%m-%d")
+            if latest_entry_event_date is not None
+            else None
+        ),
+        "latest_entry_lag_days": latest_entry_lag_days,
+        "method_odds_coverage": method_coverage,
+        "unverified_bet_eligible_rows": int(invalid_eligible.sum()),
+        "unverified_strategy_bets": len(unverified_bets),
+    }
+
+
 def _parse_won(series: pd.Series) -> pd.Series:
     values: list[bool] = []
     for index, value in series.items():
@@ -293,8 +695,19 @@ def _read_and_reconcile_bets(
     avg_clv = float(bets["clv"].mean())
     win_rate = float(bets["won"].mean())
     initial_bankroll = float(policy["evaluation"]["initial_bankroll"])
+    bankroll_steps = bets["bankroll_after"].astype(float)
+    if isinstance(policy.get("performance_confirmation"), dict):
+        # Confirmed Track C intentionally measures drawdown once per card: the
+        # historical rows do not carry a trustworthy bout-order key, so an
+        # intra-card path would depend on the evaluator's S-then-C phase order.
+        # The last settled row for each event is the event-end equity written
+        # by _evaluate_config.  Keep the legacy parent contract per-bet.
+        event_days = pd.to_datetime(bets["event_date"], errors="raise").dt.strftime(
+            "%Y-%m-%d"
+        )
+        bankroll_steps = bankroll_steps.groupby(event_days, sort=False).last()
     drawdown = float(
-        compute_max_drawdown([initial_bankroll, *bets["bankroll_after"].astype(float).tolist()])[
+        compute_max_drawdown([initial_bankroll, *bankroll_steps.tolist()])[
             "max_drawdown_pct"
         ]
     )
@@ -356,6 +769,24 @@ def evaluate_quality(
     )
     summary_sample_sha = str(row["evaluation_sample_sha256"]).strip()
     evaluation_index = _read_evaluation_index(index_path, expected_sha256=summary_sample_sha)
+    require_provenance = bool(policy["evaluation"].get("require_entry_odds", False))
+    quality: pd.DataFrame | None = None
+    quality_path = artifacts_dir / f"{spec_name}_data_quality.csv"
+    quality_sha256 = ""
+    if require_provenance:
+        for field in ("data_quality_sha256", "data_quality_rows"):
+            if field not in row.index:
+                raise QualityInputError(f"scheduled summary is missing {field}")
+        quality_sha256 = str(row["data_quality_sha256"]).strip()
+        if len(quality_sha256) != 64:
+            raise QualityInputError("summary data_quality_sha256 is malformed")
+        quality = _read_data_quality(
+            quality_path,
+            expected_sha256=quality_sha256,
+            evaluation_index=evaluation_index,
+        )
+        if _integer(row["data_quality_rows"], "summary.data_quality_rows") != len(quality):
+            raise QualityInputError("summary data-quality row count does not match artifact")
 
     evaluation_start = pd.to_datetime(row["evaluation_start_date"], errors="coerce")
     evaluation_end = pd.to_datetime(row["evaluation_end_date"], errors="coerce")
@@ -375,14 +806,27 @@ def evaluate_quality(
     if n_folds != int(evaluation_index["fold"].nunique()):
         raise QualityInputError("summary fold count does not match evaluation index")
 
-    _bets, reconciled = _read_and_reconcile_bets(
+    bets, reconciled = _read_and_reconcile_bets(
         bets_path,
         row=row,
         evaluation_index=evaluation_index,
         policy=policy,
     )
 
-    health_errors = [*registry_errors, *feature_errors]
+    health_errors = [
+        *registry_errors,
+        *feature_errors,
+        *_validate_v2_baseline_evidence(policy),
+    ]
+    provenance_metrics: dict[str, Any] = {}
+    if quality is not None:
+        provenance_errors, provenance_metrics = _evaluate_provenance_quality(
+            quality,
+            bets,
+            evaluation_end=evaluation_end,
+            policy=policy,
+        )
+        health_errors.extend(provenance_errors)
     baseline = policy["baseline"]
     limits = policy["health_limits"]
     baseline_start = pd.Timestamp(baseline["evaluation_start_date"])
@@ -447,6 +891,8 @@ def evaluate_quality(
             "summary": str(summary_path.resolve(strict=False)),
             "evaluation_index": str(index_path.resolve(strict=False)),
             "bets": str(bets_path.resolve(strict=False)),
+            "data_quality": str(quality_path.resolve(strict=False)) if quality is not None else None,
+            "data_quality_sha256": quality_sha256 or None,
             "evaluation_sample_sha256": summary_sample_sha,
             "protocol_sha256": str(row["protocol_sha256"]),
         },
@@ -456,6 +902,7 @@ def evaluate_quality(
             "model_brier_score": brier,
             "model_ece": ece,
             **reconciled,
+            **provenance_metrics,
         },
         "derived_limits": {
             "maximum_model_brier_score": max_brier,
@@ -498,12 +945,210 @@ def _write_report(path: Path, payload: dict[str, Any]) -> None:
             Path(temporary_name).unlink()
 
 
+def _durable_repo_path(path: Path, *, label: str) -> tuple[Path, str]:
+    """Resolve one existing durable evidence artifact to a canonical locator."""
+
+    resolved = Path(path).resolve(strict=True)
+    root = REPO_ROOT.resolve(strict=True)
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise QualityInputError(f"{label} is outside the repository: {resolved}") from exc
+    if not relative.parts or relative.parts[0] != "evidence":
+        raise QualityInputError(f"{label} must be preserved below evidence/")
+    return resolved, relative.as_posix()
+
+
+def build_final_track_c_pass_receipt(
+    *,
+    policy_path: Path,
+    features_path: Path,
+    artifacts_dir: Path,
+    quality_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the external, non-circular PASS receipt for a final child policy."""
+
+    if quality_result.get("errors") != []:
+        raise QualityInputError("cannot issue a final Track-C PASS receipt for an unhealthy run")
+    policy_path = Path(policy_path).resolve(strict=True)
+    policy = contract_gate.load_policy(policy_path)
+    confirmation = policy.get("performance_confirmation")
+    if (
+        not isinstance(confirmation, dict)
+        or confirmation.get("state") != "final_track_c_bound"
+    ):
+        raise QualityInputError(
+            "final Track-C PASS receipt requires final_track_c_bound policy state"
+        )
+    performance_errors, performance_binding = (
+        contract_gate.validate_performance_confirmation(policy)
+    )
+    if performance_errors or not isinstance(performance_binding, dict):
+        raise QualityInputError(
+            "performance confirmation is invalid: " + "; ".join(performance_errors)
+        )
+
+    try:
+        policy_relative = policy_path.relative_to(REPO_ROOT.resolve(strict=True)).as_posix()
+    except ValueError as exc:
+        raise QualityInputError("final policy must be repository-relative") from exc
+    features_path = Path(features_path).resolve(strict=True)
+    try:
+        features_relative = features_path.relative_to(
+            REPO_ROOT.resolve(strict=True)
+        ).as_posix()
+    except ValueError as exc:
+        raise QualityInputError("final features artifact must be repository-relative") from exc
+
+    spec_name = policy["contract"]["evaluation_spec_name"]
+    artifact_sources = {
+        "summary": Path(artifacts_dir) / "track_c_summary.csv",
+        "evaluation_index": Path(artifacts_dir)
+        / f"{spec_name}_evaluation_index.csv",
+        "data_quality": Path(artifacts_dir) / f"{spec_name}_data_quality.csv",
+        "predictive": Path(artifacts_dir) / f"{spec_name}_predictive.json",
+        "production_bets": Path(artifacts_dir)
+        / f"{spec_name}_production_gated_bets.csv",
+    }
+    artifacts: dict[str, dict[str, str]] = {}
+    artifact_parents: set[Path] = set()
+    for name, source in artifact_sources.items():
+        resolved, relative = _durable_repo_path(
+            source,
+            label=f"final Track-C {name}",
+        )
+        artifact_parents.add(resolved.parent)
+        artifacts[name] = {
+            "path": relative,
+            "sha256": contract_gate.file_sha256(resolved),
+        }
+    if len(artifact_parents) != 1:
+        raise QualityInputError("final Track-C artifacts must share one durable directory")
+
+    dataset_path = REPO_ROOT / str(performance_binding["dataset_fights_path"])
+    source_dataset_path = REPO_ROOT / str(
+        performance_binding["source_dataset_fights_path"]
+    )
+    for label, path in (
+        ("dataset fights", dataset_path),
+        ("source dataset fights", source_dataset_path),
+    ):
+        resolved, _relative = _durable_repo_path(path, label=label)
+        if contract_gate.file_sha256(resolved) != performance_binding[
+            "dataset_fights_sha256"
+            if label == "dataset fights"
+            else "source_dataset_fights_sha256"
+        ]:
+            raise QualityInputError(f"{label} changed after confirmation")
+
+    immutable_input_fields = (
+        ("features artifact", "features_artifact_path", "features_artifact_sha256"),
+        ("source features", "source_features_path", "source_features_sha256"),
+        (
+            "odds-source inventory",
+            "odds_source_inventory_path",
+            "odds_source_inventory_sha256",
+        ),
+        (
+            "source inventory",
+            "source_inventory_path",
+            "source_inventory_artifact_sha256",
+        ),
+        ("environment inventory", "environment_path", "environment_artifact_sha256"),
+    )
+    durable_inputs: dict[str, str] = {}
+    for label, path_field, sha_field in immutable_input_fields:
+        bound_path = REPO_ROOT / str(performance_binding[path_field])
+        resolved, relative = _durable_repo_path(bound_path, label=label)
+        if contract_gate.file_sha256(resolved) != performance_binding[sha_field]:
+            raise QualityInputError(f"{label} changed after confirmation")
+        durable_inputs[path_field] = relative
+    if features_path != (REPO_ROOT / durable_inputs["features_artifact_path"]).resolve():
+        raise QualityInputError(
+            "final Track-C features must be the exact confirmation-bound artifact"
+        )
+
+    return {
+        "schema_version": 1,
+        "status": "PASS",
+        "healthy": True,
+        "final_policy_path": policy_relative,
+        "final_policy_sha256": contract_gate.file_sha256(policy_path),
+        "confirmation_result_path": confirmation["confirmation_result_path"],
+        "confirmation_result_sha256": confirmation[
+            "confirmation_result_sha256"
+        ],
+        "model_spec_name": spec_name,
+        "model_spec_payload_sha256": policy["contract"][
+            "evaluation_spec_payload_sha256"
+        ],
+        "strategy_config_sha256": confirmation["strategy_config_sha256"],
+        "dataset_fights_path": performance_binding["dataset_fights_path"],
+        "dataset_fights_sha256": performance_binding[
+            "dataset_fights_sha256"
+        ],
+        "source_dataset_fights_path": performance_binding[
+            "source_dataset_fights_path"
+        ],
+        "source_dataset_fights_sha256": performance_binding[
+            "source_dataset_fights_sha256"
+        ],
+        "features_path": features_relative,
+        "features_sha256": contract_gate.file_sha256(features_path),
+        "features_value_sha256": performance_binding["features_value_sha256"],
+        "source_features_path": durable_inputs["source_features_path"],
+        "source_features_sha256": performance_binding["source_features_sha256"],
+        "feature_contract_count": performance_binding["feature_contract_count"],
+        "feature_contract_sha256": performance_binding["feature_contract_sha256"],
+        "confirmation_evaluation_input_value_sha256": performance_binding[
+            "confirmation_evaluation_input_value_sha256"
+        ],
+        "odds_source_inventory_path": durable_inputs[
+            "odds_source_inventory_path"
+        ],
+        "odds_source_inventory_sha256": performance_binding[
+            "odds_source_inventory_sha256"
+        ],
+        "source_fingerprint": performance_binding["source_fingerprint"],
+        "source_inventory_path": durable_inputs["source_inventory_path"],
+        "source_inventory_sha256": performance_binding["source_inventory_sha256"],
+        "source_inventory_artifact_sha256": performance_binding[
+            "source_inventory_artifact_sha256"
+        ],
+        "environment_path": durable_inputs["environment_path"],
+        "environment_artifact_sha256": performance_binding[
+            "environment_artifact_sha256"
+        ],
+        "environment_payload_sha256": performance_binding[
+            "environment_payload_sha256"
+        ],
+        "protocol_sha256": policy["baseline"]["scheduled_protocol_sha256"],
+        "evaluation_protocol_sha256": performance_binding[
+            "evaluation_protocol_sha256"
+        ],
+        "evaluation_sample_sha256": policy["baseline"][
+            "evaluation_sample_sha256"
+        ],
+        "artifacts": artifacts,
+        "health_metrics": quality_result["metrics"],
+        "derived_limits": quality_result["derived_limits"],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--features", type=Path, required=True)
     parser.add_argument("--artifacts-dir", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument(
+        "--pass-receipt",
+        type=Path,
+        help=(
+            "Durable evidence path for the final-policy Track-C PASS receipt. "
+            "Only final_track_c_bound healthy runs can produce a PASS."
+        ),
+    )
     args = parser.parse_args(argv)
     try:
         result = evaluate_quality(
@@ -516,10 +1161,29 @@ def main(argv: list[str] | None = None) -> int:
         payload = {"status": status, "healthy": not errors, "errors": errors, **result}
         _write_report(args.report, payload)
         if errors:
+            if args.pass_receipt is not None:
+                _write_report(
+                    args.pass_receipt,
+                    {
+                        "schema_version": 1,
+                        "status": "FAIL",
+                        "healthy": False,
+                        "errors": errors,
+                    },
+                )
             print("Scheduled refit health is UNHEALTHY:", file=sys.stderr)
             for error in errors:
                 print(f" - {error}", file=sys.stderr)
             return 1
+        if args.pass_receipt is not None:
+            receipt = build_final_track_c_pass_receipt(
+                policy_path=args.policy,
+                features_path=args.features,
+                artifacts_dir=args.artifacts_dir,
+                quality_result={"errors": [], **result},
+            )
+            _write_report(args.pass_receipt, receipt)
+            contract_gate.validate_final_track_c_pass_receipt(args.pass_receipt)
         print("Scheduled refit health is HEALTHY.")
         return 0
     except Exception as exc:
@@ -528,6 +1192,14 @@ def main(argv: list[str] | None = None) -> int:
             _write_report(args.report, payload)
         except Exception as report_exc:
             print(f"Could not write required quality report: {report_exc}", file=sys.stderr)
+        if args.pass_receipt is not None:
+            try:
+                _write_report(args.pass_receipt, payload)
+            except Exception as receipt_exc:
+                print(
+                    f"Could not invalidate final Track-C PASS receipt: {receipt_exc}",
+                    file=sys.stderr,
+                )
         print(f"Scheduled refit health ERROR: {exc}", file=sys.stderr)
         return 2
 

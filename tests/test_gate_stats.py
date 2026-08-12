@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.strategy.gate_stats import clv_fair_stats, paired_event_bootstrap
 from src.strategy.promotion_gate import PromotionGate
@@ -89,9 +90,9 @@ def test_trading_bar_statistical_blocks_noise_point_wins():
     }
 
     statistical = PromotionGate.check_trading_bar(candidate, baseline)
-    legacy = PromotionGate.check_trading_bar(candidate, baseline, statistical=False)
     assert not statistical["passes"]
-    assert legacy["passes"]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'statistical'"):
+        PromotionGate.check_trading_bar(candidate, baseline, statistical=False)
 
 
 def test_trading_bar_statistical_passes_consistent_winner():
@@ -108,10 +109,12 @@ def test_trading_bar_statistical_passes_consistent_winner():
     cand_log = _log(cand_rows)
     base_log = _log(base_rows)
     candidate = {
-        "roi": 0.06, "total_profit": 180.0, "max_drawdown_pct": 0.08, "bet_log": cand_log,
+        "roi": 0.06, "total_profit": 180.0, "max_drawdown_pct": 0.08,
+        "avg_clv": 0.02, "bet_log": cand_log,
     }
     baseline = {
-        "roi": 0.01, "total_profit": 30.0, "max_drawdown_pct": 0.08, "bet_log": base_log,
+        "roi": 0.01, "total_profit": 30.0, "max_drawdown_pct": 0.08,
+        "avg_clv": 0.01, "bet_log": base_log,
     }
     result = PromotionGate.check_trading_bar(candidate, baseline)
     assert result["passes"], result["reasons"]

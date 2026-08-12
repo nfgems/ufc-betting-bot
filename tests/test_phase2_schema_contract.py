@@ -411,7 +411,7 @@ def test_build_fight_features_strict_v3_uses_candidate_history_and_skips_exclude
         training_spec=spec,
     )
 
-    assert set(features) == set(spec.feature_cols)
+    assert set(features) == set(spec.feature_cols) | {"fighter_a_id", "fighter_b_id"}
     assert features["a_roll_slpm"] == pytest.approx(4.2)
     assert "a_implied_prob" not in features
     assert "is_empty_arena" not in features
@@ -2728,8 +2728,10 @@ def test_live_wc_move_matches_training_semantics_for_historical_cutoff(tmp_path,
     ].iloc[0]
 
     assert live_features["a_wc_move"] == pytest.approx(training_row["a_wc_move"])
-    assert live_features["b_wc_move"] == pytest.approx(training_row["b_wc_move"])
-    assert live_features["diff_wc_move"] == pytest.approx(training_row["diff_wc_move"])
+    assert np.isnan(live_features["b_wc_move"])
+    assert np.isnan(training_row["b_wc_move"])
+    assert np.isnan(live_features["diff_wc_move"])
+    assert np.isnan(training_row["diff_wc_move"])
 
     fighter_lookup.clear_cache()
 
@@ -2940,10 +2942,17 @@ def test_live_rematch_detection_requires_exact_fighter_identity(monkeypatch):
     })
     monkeypatch.setattr(method_odds, "get_method_odds", lambda *_args, **_kwargs: _nan_method_odds())
 
-    features = fighter_lookup.build_fight_features("Alpha", "Bruno Silva", odds_features={"a_implied_prob": 0.5, "b_implied_prob": 0.5})
+    features = fighter_lookup.build_fight_features(
+        "Alpha",
+        "Bruno Silva",
+        odds_features={"a_implied_prob": 0.5, "b_implied_prob": 0.5},
+        fighter_b_id="12ebd7d157e91701",
+    )
 
-    assert features["is_rematch"] == 0
-    assert features["h2h_record_diff"] == 0
+    # The opponent name collides after suffix normalization but carries no
+    # stable ID, so exact H2H availability is unknown rather than a false zero.
+    assert np.isnan(features["is_rematch"])
+    assert np.isnan(features["h2h_record_diff"])
 
 
 def test_live_same_stance_preserves_unknown_as_nan(monkeypatch):

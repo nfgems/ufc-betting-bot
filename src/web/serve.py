@@ -38,6 +38,11 @@ from src.live_control import (
 )
 from src.polymarket.monitor import PositionDataPartialError
 from src.storage_retention import compact_file_tail
+from src.web.startup_parity import (
+    hosted_real_money_parity_required,
+    load_startup_parity_receipt,
+    startup_parity_validation_record,
+)
 
 compact_file_tail(LOGS_DIR / "bot.log", RUNTIME_LOG_MAX_BYTES)
 logging.basicConfig(
@@ -106,6 +111,23 @@ def _resolve_hosted_bundle_startup_summary() -> dict | None:
         summary["git_sha"],
     )
     return summary
+
+
+def _load_startup_parity_receipt(
+    bundle_summary: dict | None,
+    *,
+    require_exact_binding: bool | None = None,
+) -> dict | None:
+    """Load the root-owned receipt produced before the web process starts."""
+    required = (
+        hosted_real_money_parity_required()
+        if require_exact_binding is None
+        else require_exact_binding
+    )
+    return load_startup_parity_receipt(
+        bundle_summary,
+        require_exact_binding=required,
+    )
 
 
 def _auto_redeem_enabled() -> bool:
@@ -1901,10 +1923,15 @@ def main():
 
     logger.info(f"Starting on {host}:{port}")
 
+    startup_parity_required = hosted_real_money_parity_required()
     try:
         bundle_summary = _resolve_hosted_bundle_startup_summary()
+        startup_parity = _load_startup_parity_receipt(
+            bundle_summary,
+            require_exact_binding=startup_parity_required,
+        )
     except Exception as exc:
-        logger.error("Hosted production bundle validation failed: %s", exc)
+        logger.error("Hosted production bundle/startup parity validation failed: %s", exc)
         raise SystemExit(1) from exc
 
     from src.web.app import (
@@ -2033,6 +2060,13 @@ def main():
     runtime_status["btc5m_emergency_stop"] = btc5m_stop_status
     if bundle_summary is not None:
         runtime_status["production_bundle"] = bundle_summary
+    if startup_parity is not None:
+        runtime_status["startup_parity"] = startup_parity
+    runtime_status["startup_parity_required"] = startup_parity_required
+    if startup_parity_required and startup_parity is not None:
+        runtime_status["startup_parity_validation"] = (
+            startup_parity_validation_record(startup_parity)
+        )
     set_runtime_status(runtime_status)
 
     if runtime_status["errors"]:

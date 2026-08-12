@@ -13,7 +13,7 @@ Symmetry: each training fight is duplicated with the mirrored orientation
 stack A/B-symmetric by construction.
 
 Usage:
-    python scripts/e9_logit_stack.py --preds-cache logs/fold_predictions_baseline.pkl
+    python scripts/e9_logit_stack.py --preds-cache logs/fold_predictions_selection_v1.pkl
 """
 
 import argparse
@@ -30,6 +30,10 @@ from sklearn.metrics import brier_score_loss, log_loss
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import BLEND_WEIGHT
+from src.strategy.duo_trader_sweep import (
+    _preflight_cached_selection_predictions,
+    _selection_predictions_from_cache_payload,
+)
 from src.strategy.value import compute_independent_blend_probs
 
 logger = logging.getLogger("e9_logit_stack")
@@ -55,7 +59,7 @@ def _ece(y_true: np.ndarray, y_prob: np.ndarray, n_bins: int = 10) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--preds-cache", default="logs/fold_predictions_baseline.pkl")
+    parser.add_argument("--preds-cache", default="logs/fold_predictions_selection_v1.pkl")
     parser.add_argument("--min-train-folds", type=int, default=3)
     parser.add_argument("--out", default="logs/e9_logit_stack.csv")
     args = parser.parse_args()
@@ -63,7 +67,10 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     with Path(args.preds_cache).open("rb") as fh:
-        fold_predictions = pickle.load(fh)
+        fold_predictions = _selection_predictions_from_cache_payload(
+            pickle.load(fh)
+        )
+    _preflight_cached_selection_predictions(fold_predictions)
 
     frames = []
     for fold_num, frame in fold_predictions:

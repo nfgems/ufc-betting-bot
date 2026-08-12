@@ -1,4 +1,6 @@
+import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import joblib
@@ -2083,3 +2085,431 @@ def test_explicit_release_activation_preserves_newer_lookup_for_same_generation(
     assert summary["bootstrap_action"] == "reused_existing_runtime_bundle"
     assert "runtime_only" in preserved.columns
     assert "release_only" not in preserved.columns
+
+
+def _portable_performance_manifest(tmp_path: Path, monkeypatch) -> tuple[Path, dict, Path]:
+    """Build a minimal self-contained runtime PASS package for tamper tests."""
+
+    from src.strategy import run_evaluation
+    from src.strategy.runtime_strategy import (
+        build_confirmed_strategy_payload,
+        canonical_json_sha256,
+    )
+
+    release = tmp_path / "release"
+    release.mkdir()
+    source_inventory = {"schema_version": 2, "sources": []}
+    environment = {"schema_version": 1, "runtime": "unit"}
+    source_fingerprint = production_bundle._canonical_json_sha256(source_inventory)
+    environment_sha = production_bundle._canonical_json_sha256(environment)
+    protocol = {"execution_mode": "realistic"}
+    strategy_config = {
+        "name": "cross-bound-fixture",
+        "s_min_edge": 0.031,
+        "s_blend_weight": 0.75,
+        "s_model_agreement_min_edge": 0.0,
+        "c_min_model_prob": 0.60,
+        "c_min_no_odds_prob": 0.55,
+        "c_share": 0.50,
+        "c_bet_fraction": 0.05,
+        "c_max_bet_fraction": 0.08,
+        "c_min_edge": 0.0,
+        "c_max_decimal_odds": 2.5,
+        "m_enabled": False,
+        "m_min_model_prob": 0.65,
+        "m_min_no_odds_prob": 0.50,
+        "m_bet_fraction": 0.03,
+        "m_share": 0.30,
+    }
+    strategy_sha256 = canonical_json_sha256(strategy_config)
+    source_contents: dict[str, bytes] = {
+        "config/final_policy.json": b'{"schema_version":2}',
+        "evidence/claim/fights.csv": b"event_date\n2026-01-01\n",
+        "evidence/claim/features.csv": b"event_date,x\n2026-01-01,1\n",
+        "evidence/claim/source_inventory.json": json.dumps(
+            source_inventory, sort_keys=True
+        ).encode(),
+        "evidence/claim/environment.json": json.dumps(
+            environment, sort_keys=True
+        ).encode(),
+        "evidence/claim/odds_000.csv": b"event_date,a,b\n2026-01-01,2,3\n",
+        "evidence/track/summary.csv": b"strategy_config_sha256\nvalue\n",
+        "evidence/track/index.csv": b"fold\n1\n",
+        "evidence/track/quality.csv": b"ok\n1\n",
+        "evidence/track/predictive.json": b"{}",
+        "evidence/track/bets.csv": b"profit\n1\n",
+    }
+    odds_sha = hashlib.sha256(
+        source_contents["evidence/claim/odds_000.csv"]
+    ).hexdigest()
+    odds_inventory = {
+        "schema_version": 1,
+        "evaluation_protocol": protocol,
+        "entries": [
+            {
+                "source_file": "odds_000.csv",
+                "resolved_path": "/original/odds_000.csv",
+                "sha256": odds_sha,
+            }
+        ],
+    }
+    source_contents["evidence/claim/odds_inventory.json"] = json.dumps(
+        odds_inventory, sort_keys=True
+    ).encode()
+    evidence_inventory = {
+        "schema_version": 1,
+        "entries": [
+            {
+                "logical_name": "inputs/odds/0000_odds_000.csv",
+                "path": "evidence/claim/odds_000.csv",
+                "sha256": odds_sha,
+            }
+        ],
+    }
+    source_contents["evidence/claim/evidence_inventory.json"] = json.dumps(
+        evidence_inventory, sort_keys=True
+    ).encode()
+    result = {
+        "evaluation_protocol": protocol,
+        "evidence_inventory_path": "evidence/claim/evidence_inventory.json",
+    }
+    source_contents["evidence/claim/result.json"] = json.dumps(
+        result, sort_keys=True
+    ).encode()
+
+    hashes = {
+        path: hashlib.sha256(content).hexdigest()
+        for path, content in source_contents.items()
+    }
+    receipt = {
+        "status": "PASS",
+        "healthy": True,
+        "final_policy_path": "config/final_policy.json",
+        "final_policy_sha256": hashes["config/final_policy.json"],
+        "confirmation_result_path": "evidence/claim/result.json",
+        "confirmation_result_sha256": hashes["evidence/claim/result.json"],
+        "dataset_fights_path": "evidence/claim/fights.csv",
+        "dataset_fights_sha256": hashes["evidence/claim/fights.csv"],
+        "source_dataset_fights_path": "evidence/claim/fights.csv",
+        "source_dataset_fights_sha256": hashes["evidence/claim/fights.csv"],
+        "features_path": "evidence/claim/features.csv",
+        "features_sha256": hashes["evidence/claim/features.csv"],
+        "features_value_sha256": "1" * 64,
+        "source_features_path": "evidence/claim/features.csv",
+        "source_features_sha256": hashes["evidence/claim/features.csv"],
+        "feature_contract_sha256": "2" * 64,
+        "confirmation_evaluation_input_value_sha256": "3" * 64,
+        "odds_source_inventory_path": "evidence/claim/odds_inventory.json",
+        "odds_source_inventory_sha256": hashes[
+            "evidence/claim/odds_inventory.json"
+        ],
+        "source_fingerprint": source_fingerprint,
+        "source_inventory_path": "evidence/claim/source_inventory.json",
+        "source_inventory_sha256": source_fingerprint,
+        "source_inventory_artifact_sha256": hashes[
+            "evidence/claim/source_inventory.json"
+        ],
+        "environment_path": "evidence/claim/environment.json",
+        "environment_artifact_sha256": hashes["evidence/claim/environment.json"],
+        "environment_payload_sha256": environment_sha,
+        "evaluation_protocol_sha256": "4" * 64,
+        "strategy_config_sha256": strategy_sha256,
+        "artifacts": {
+            name: {"path": path, "sha256": hashes[path]}
+            for name, path in {
+                "summary": "evidence/track/summary.csv",
+                "evaluation_index": "evidence/track/index.csv",
+                "data_quality": "evidence/track/quality.csv",
+                "predictive": "evidence/track/predictive.json",
+                "production_bets": "evidence/track/bets.csv",
+            }.items()
+        },
+    }
+    source_contents["evidence/final_receipt.json"] = json.dumps(
+        receipt, sort_keys=True
+    ).encode()
+    hashes["evidence/final_receipt.json"] = hashlib.sha256(
+        source_contents["evidence/final_receipt.json"]
+    ).hexdigest()
+    role_by_source = {
+        "evidence/final_receipt.json": ["final_track_c_pass_receipt"],
+        "config/final_policy.json": ["final_child_policy"],
+        "evidence/claim/result.json": ["confirmation_result"],
+        "evidence/track/summary.csv": ["final_track_c_artifact:summary"],
+        "evidence/track/index.csv": ["final_track_c_artifact:evaluation_index"],
+        "evidence/track/quality.csv": ["final_track_c_artifact:data_quality"],
+        "evidence/track/predictive.json": ["final_track_c_artifact:predictive"],
+        "evidence/track/bets.csv": ["final_track_c_artifact:production_bets"],
+    }
+    records = []
+    tamper_path = None
+    for index, source_path in enumerate(sorted(source_contents)):
+        staged_path = (
+            "evidence/performance_confirmation/repository/" + source_path
+        )
+        destination = release / staged_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source_contents[source_path])
+        if source_path == "evidence/claim/odds_000.csv":
+            tamper_path = destination
+        records.append(
+            {
+                "roles": role_by_source.get(
+                    source_path, [f"confirmation_dependency:{index:04d}"]
+                ),
+                "source_path": source_path,
+                "staged_path": staged_path,
+                "sha256": hashes[source_path],
+                "bytes": len(source_contents[source_path]),
+            }
+        )
+    performance = {
+        "schema_version": 1,
+        "policy_sha256": receipt["final_policy_sha256"],
+        "confirmation_result_sha256": receipt["confirmation_result_sha256"],
+        "final_track_c_pass_receipt_sha256": hashes[
+            "evidence/final_receipt.json"
+        ],
+        "evaluation_spec_name": "eval",
+        "evaluation_spec_payload_sha256": "6" * 64,
+        "fullfit_spec_name": "fullfit",
+        "fullfit_spec_payload_sha256": "7" * 64,
+        "strategy_config_sha256": receipt["strategy_config_sha256"],
+        "dataset_fights_sha256": receipt["dataset_fights_sha256"],
+        "features_sha256": receipt["features_sha256"],
+        "features_value_sha256": receipt["features_value_sha256"],
+        "feature_contract_sha256": receipt["feature_contract_sha256"],
+        "confirmation_evaluation_input_value_sha256": receipt[
+            "confirmation_evaluation_input_value_sha256"
+        ],
+        "evaluation_protocol_sha256": receipt["evaluation_protocol_sha256"],
+        "odds_source_inventory_sha256": receipt["odds_source_inventory_sha256"],
+        "source_fingerprint": receipt["source_fingerprint"],
+        "source_inventory_sha256": receipt["source_inventory_sha256"],
+        "source_inventory_artifact_sha256": receipt[
+            "source_inventory_artifact_sha256"
+        ],
+        "environment_artifact_sha256": receipt[
+            "environment_artifact_sha256"
+        ],
+        "environment_payload_sha256": receipt["environment_payload_sha256"],
+        "performance_evidence_aggregate_sha256": production_bundle._canonical_json_sha256(
+            records
+        ),
+    }
+    payload = {
+        "confirmed_strategy": build_confirmed_strategy_payload(
+            strategy_config,
+            expected_sha256=strategy_sha256,
+        ),
+        "performance_confirmation": performance,
+        "performance_evidence": {
+            "schema_version": 1,
+            "aggregate_sha256": performance[
+                "performance_evidence_aggregate_sha256"
+            ],
+            "file_count": len(records),
+            "total_bytes": sum(record["bytes"] for record in records),
+            "files": records,
+        },
+        "scheduled_refit_policy": {
+            "sha256": performance["policy_sha256"],
+        },
+        "registered_training_specs": {
+            "selected_evaluation": {
+                "sha256": performance["evaluation_spec_payload_sha256"],
+                "payload": {"name": performance["evaluation_spec_name"]},
+            },
+            "selected_fullfit": {
+                "sha256": performance["fullfit_spec_payload_sha256"],
+                "payload": {"name": performance["fullfit_spec_name"]},
+            },
+        },
+        "training_input_evidence": {
+            "final_track_c_pass_receipt_sha256": performance[
+                "final_track_c_pass_receipt_sha256"
+            ],
+            "performance_confirmation_result_sha256": performance[
+                "confirmation_result_sha256"
+            ],
+            "confirmed_strategy_config_sha256": performance[
+                "strategy_config_sha256"
+            ],
+            "source_fights_sha256": performance["dataset_fights_sha256"],
+            "confirmation_evaluation_input_value_sha256": performance[
+                "confirmation_evaluation_input_value_sha256"
+            ],
+            "feature_contract_sha256": performance["feature_contract_sha256"],
+            "confirmation_features_value_sha256": performance[
+                "features_value_sha256"
+            ],
+            "confirmation_odds_source_inventory_sha256": performance[
+                "odds_source_inventory_sha256"
+            ],
+            "confirmation_source_fingerprint": performance["source_fingerprint"],
+            "confirmation_source_inventory_sha256": performance[
+                "source_inventory_sha256"
+            ],
+            "confirmation_source_inventory_artifact_sha256": performance[
+                "source_inventory_artifact_sha256"
+            ],
+            "confirmation_environment_artifact_sha256": performance[
+                "environment_artifact_sha256"
+            ],
+            "confirmation_environment_payload_sha256": performance[
+                "environment_payload_sha256"
+            ],
+            "confirmation_evaluation_protocol_sha256": performance[
+                "evaluation_protocol_sha256"
+            ],
+        },
+    }
+    manifest_path = release / "manifest.json"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(
+        run_evaluation,
+        "_collect_runtime_code_metadata",
+        lambda: {
+            "source_fingerprint": source_fingerprint,
+            "source_inventory_sha256": source_fingerprint,
+            "source_inventory": source_inventory,
+            "environment_payload_sha256": environment_sha,
+            "environment": environment,
+        },
+    )
+    assert tamper_path is not None
+    return manifest_path, payload, tamper_path
+
+
+def test_runtime_rehashes_portable_performance_evidence(tmp_path, monkeypatch):
+    manifest_path, payload, tamper_path = _portable_performance_manifest(
+        tmp_path, monkeypatch
+    )
+
+    validated = production_bundle._validate_runtime_performance_evidence(
+        payload,
+        manifest_path=manifest_path,
+    )
+    assert validated["aggregate_sha256"] == payload["performance_confirmation"][
+        "performance_evidence_aggregate_sha256"
+    ]
+
+    tamper_path.write_text("changed", encoding="utf-8")
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="performance evidence artifact changed",
+    ):
+        production_bundle._validate_runtime_performance_evidence(
+            payload,
+            manifest_path=manifest_path,
+        )
+
+
+def test_confirmed_strategy_is_fully_cross_bound(tmp_path, monkeypatch):
+    manifest_path, payload, _tamper_path = _portable_performance_manifest(
+        tmp_path, monkeypatch
+    )
+
+    validated = production_bundle._validated_confirmed_strategy(
+        payload,
+        manifest_path=manifest_path,
+    )
+
+    assert validated == payload["confirmed_strategy"]
+
+
+@pytest.mark.parametrize(
+    "binding_path",
+    [
+        "performance_confirmation.strategy_config_sha256",
+        "scheduled_refit_policy.sha256",
+        "registered_training_specs.selected_evaluation.sha256",
+        "registered_training_specs.selected_fullfit.sha256",
+        "registered_training_specs.selected_evaluation.payload.name",
+        "registered_training_specs.selected_fullfit.payload.name",
+        "training_input_evidence.final_track_c_pass_receipt_sha256",
+        "training_input_evidence.performance_confirmation_result_sha256",
+        "training_input_evidence.confirmed_strategy_config_sha256",
+        "training_input_evidence.source_fights_sha256",
+        "training_input_evidence.confirmation_evaluation_input_value_sha256",
+        "training_input_evidence.feature_contract_sha256",
+        "training_input_evidence.confirmation_features_value_sha256",
+        "training_input_evidence.confirmation_odds_source_inventory_sha256",
+        "training_input_evidence.confirmation_source_fingerprint",
+        "training_input_evidence.confirmation_source_inventory_sha256",
+        "training_input_evidence.confirmation_source_inventory_artifact_sha256",
+        "training_input_evidence.confirmation_environment_artifact_sha256",
+        "training_input_evidence.confirmation_environment_payload_sha256",
+        "training_input_evidence.confirmation_evaluation_protocol_sha256",
+    ],
+)
+def test_confirmed_strategy_rejects_each_cross_binding_drift(
+    tmp_path,
+    monkeypatch,
+    binding_path,
+):
+    manifest_path, payload, _tamper_path = _portable_performance_manifest(
+        tmp_path, monkeypatch
+    )
+    mutated = deepcopy(payload)
+    target = mutated
+    path_parts = binding_path.split(".")
+    for part in path_parts[:-1]:
+        target = target[part]
+    original = target[path_parts[-1]]
+    target[path_parts[-1]] = (
+        "mutated-spec-name" if not production_bundle._is_sha256(original) else "0" * 64
+    )
+
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="performance confirmation is not cross-bound",
+    ):
+        production_bundle._validated_confirmed_strategy(
+            mutated,
+            manifest_path=manifest_path,
+        )
+
+
+def test_final_policy_v2_rich_manifest_requires_all_performance_sections():
+    payload = {
+        "manifest_version": 3,
+        "staging_schema_version": 1,
+        "scheduled_refit_policy": {"policy_schema_version": 2},
+        **{key: {} for key in production_bundle._RICH_MANIFEST_SECTIONS},
+        "model_sha256": "1" * 64,
+        "no_odds_model_sha256": "2" * 64,
+        "logistic_model_sha256": "3" * 64,
+        "processed_fights_sha256": "4" * 64,
+        "processed_features_sha256": "5" * 64,
+        "processed_fights_bytes": 1,
+        "processed_features_bytes": 1,
+    }
+
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="missing required sections",
+    ):
+        production_bundle._validate_rich_manifest_shape(payload, label="test")
+
+
+def test_integrity_fullfit_rich_manifest_cannot_strip_final_v2_markers():
+    payload = {
+        "manifest_version": 3,
+        "staging_schema_version": 1,
+        "model_spec_name": "full_live_contract_v6_integrity_205_fullfit",
+        **{key: {} for key in production_bundle._RICH_MANIFEST_SECTIONS},
+        "model_sha256": "1" * 64,
+        "no_odds_model_sha256": "2" * 64,
+        "logistic_model_sha256": "3" * 64,
+        "processed_fights_sha256": "4" * 64,
+        "processed_features_sha256": "5" * 64,
+        "processed_fights_bytes": 1,
+        "processed_features_bytes": 1,
+    }
+
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="missing required sections",
+    ):
+        production_bundle._validate_rich_manifest_shape(payload, label="test")

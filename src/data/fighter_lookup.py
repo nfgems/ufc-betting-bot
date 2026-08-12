@@ -26,16 +26,23 @@ from src.config import (
     EWM_HALFLIFE,
     ELO_INITIAL,
     PROCESSED_DATA_DIR,
+    RAW_DATA_DIR,
 )
 from src.data.name_utils import (
+    KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS,
     REVIEWED_FIGHTER_IDENTITIES,
     _tokens_match,
+    derive_ambiguous_fighter_name_keys,
+    fighter_identity_is_ambiguous,
+    fighter_identity_key,
     normalize_cross_source_name,
     normalize_person_name,
+    normalize_ufcstats_id,
     person_name_tokens,
     reviewed_fighter_identity_id,
     same_person_name,
 )
+from src.data.event_context import coerce_nullable_bool, coerce_scheduled_rounds
 from src.data.ufcstats_http import (
     DEFAULT_UFCSTATS_HEADERS,
     normalize_ufcstats_url,
@@ -61,9 +68,11 @@ _processed_feature_history_mtime: dict[str, float] = {}
 _processed_fights_cleaned_cache: dict[str, pd.DataFrame] = {}
 _processed_fights_cleaned_mtime: dict[str, float] = {}
 _pre_ufc_long_rows_cache: Optional[pd.DataFrame] = None
+_legacy_pre_ufc_long_rows_cache: Optional[pd.DataFrame] = None
 _elo_state_cache: dict[str, dict[str, Any]] = {}
 _elo_state_cache_mtime: dict[str, float] = {}
 _amateur_summary_cache: dict[str, dict] | None = None
+_ambiguous_name_keys_cache: tuple[float, frozenset[str]] | None = None
 _REVIEWED_CROSS_SOURCE_NAME_KEYS = frozenset(
     normalize_cross_source_name(tracked_name)
     for identity in REVIEWED_FIGHTER_IDENTITIES.values()
@@ -80,8 +89,40 @@ def _same_fighter_identity(query: object, candidate: object) -> bool:
     return same_person_name(query, candidate)
 
 
-def _fighter_url_identity_cache_key(value: object) -> str:
-    """Keep reviewed identities and suffix-colliding negative controls separate."""
+class AmbiguousFighterIdentityError(ValueError):
+    """A name-only lookup can select more than one UFCStats fighter."""
+
+
+def _ambiguous_fighter_name_keys() -> frozenset[str]:
+    """Derive collision keys from the local fighter inventory, with a safe fallback."""
+    global _ambiguous_name_keys_cache
+    inventory_path = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+    try:
+        mtime = inventory_path.stat().st_mtime
+    except OSError:
+        return KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
+    if _ambiguous_name_keys_cache is not None and _ambiguous_name_keys_cache[0] == mtime:
+        return _ambiguous_name_keys_cache[1]
+    try:
+        inventory = pd.read_csv(inventory_path, usecols=["name", "fighter_url"])
+        rows = (
+            {"name": row.name, "fighter_id": row.fighter_url}
+            for row in inventory.itertuples(index=False)
+        )
+        derived = derive_ambiguous_fighter_name_keys(rows)
+    except Exception as exc:
+        logger.warning("Failed to derive fighter identity collisions from %s: %s", inventory_path, exc)
+        derived = frozenset()
+    resolved = frozenset(set(KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS) | set(derived))
+    _ambiguous_name_keys_cache = (mtime, resolved)
+    return resolved
+
+
+def _fighter_url_identity_cache_key(value: object, fighter_id: object = None) -> str:
+    """Share safe aliases while keeping reviewed/collision identities scoped."""
+    normalized_id = normalize_ufcstats_id(fighter_id)
+    if normalized_id:
+        return f"ufcstats:{normalized_id}"
     reviewed_id = reviewed_fighter_identity_id(value)
     if reviewed_id is not None:
         return f"reviewed:{reviewed_id}"
@@ -348,6 +389,16 @@ def _build_lookup_provenance(
             if isinstance(fighter_b_result, dict)
             else None
         ),
+        "fighter_a_id": (
+            fighter_a_result.get("fighter_id")
+            if isinstance(fighter_a_result, dict)
+            else None
+        ),
+        "fighter_b_id": (
+            fighter_b_result.get("fighter_id")
+            if isinstance(fighter_b_result, dict)
+            else None
+        ),
         "processed_dir": str(Path(processed_data_dir)),
     }
 
@@ -433,6 +484,7 @@ def _fighter_cache_key(
     fighter_name: str,
     as_of_date: Optional[str] = None,
     *,
+    fighter_id: object = None,
     reference_date: Any = None,
     prefer_live_refresh: bool = False,
     processed_data_dir: Optional[Path] = None,
@@ -443,8 +495,13 @@ def _fighter_cache_key(
         reference_token = _reference_date_cache_token(reference_date)
     features_token = f"{_path_mtime(_features_path(resolved_dir)):.6f}"
     refresh_token = "live" if prefer_live_refresh else "processed"
+    identity_token = fighter_identity_key(
+        fighter_name,
+        fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    ) or f"unresolved:{normalize_person_name(fighter_name)}"
     return (
-        f"{normalize_person_name(fighter_name)}::"
+        f"{identity_token}::"
         f"{str(as_of_date or '')}::"
         f"{reference_token}::"
         f"{refresh_token}::"
@@ -553,6 +610,23 @@ def _load_pre_ufc_long_rows() -> pd.DataFrame:
         include_reviewed=True,
     )
     return _pre_ufc_long_rows_cache
+
+
+def _load_legacy_pre_ufc_long_rows() -> pd.DataFrame:
+    """Load the unbounded seed rows used by schema-v1 processed artifacts."""
+    global _legacy_pre_ufc_long_rows_cache
+    if _legacy_pre_ufc_long_rows_cache is not None:
+        return _legacy_pre_ufc_long_rows_cache
+
+    from src.features.build_features import (
+        _load_supplement_raw,
+        _resolve_pre_ufc_supplement_path,
+        _supplement_rows_to_long_format,
+    )
+
+    raw = _load_supplement_raw(_resolve_pre_ufc_supplement_path())
+    _legacy_pre_ufc_long_rows_cache = _supplement_rows_to_long_format(raw)
+    return _legacy_pre_ufc_long_rows_cache
 
 
 def _point_in_time_pre_ufc_summary(
@@ -678,6 +752,7 @@ def _pre_ufc_won_seed(
 def _compute_processed_opp_strength(
     fighter_name: str,
     *,
+    fighter_id: object = None,
     cutoff: Optional[pd.Timestamp] = None,
     processed_data_dir: Optional[Path] = None,
     window: int = 5,
@@ -695,20 +770,26 @@ def _compute_processed_opp_strength(
     if history.empty or "event_date" not in history.columns:
         return float("nan")
 
+    requested_identity = fighter_identity_key(
+        fighter_name,
+        fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+    if requested_identity is None:
+        return float("nan")
+
     # Chronological list of the fighter's fights with the exact dataset
     # spelling on each row. Training groups history by exact spelling, so
     # suffix collisions ("Lance Gibson" vs "Lance Gibson Jr.") must not merge:
     # when the requested name IS a dataset spelling, that spelling owns the
     # group (even if it has no prior fights yet); otherwise fall back to the
     # latest same-person spelling (caller-supplied name variants).
-    matched_rows: list[tuple[str, bool, float]] = []  # (spelling, before_cutoff, opp_roll_won)
+    matched_rows: list[tuple[bool, float]] = []  # (before_cutoff, opp_roll_won)
     for row in history.itertuples(index=False):
-        if _same_fighter_identity(fighter_name, getattr(row, "fighter_a", "")):
-            spelling = str(getattr(row, "fighter_a", ""))
+        if _history_side_identity_key(row, "a") == requested_identity:
             opponent = getattr(row, "fighter_b", "")
             opp_roll_won = getattr(row, "b_roll_won", np.nan)
-        elif _same_fighter_identity(fighter_name, getattr(row, "fighter_b", "")):
-            spelling = str(getattr(row, "fighter_b", ""))
+        elif _history_side_identity_key(row, "b") == requested_identity:
             opponent = getattr(row, "fighter_a", "")
             opp_roll_won = getattr(row, "a_roll_won", np.nan)
         else:
@@ -719,7 +800,6 @@ def _compute_processed_opp_strength(
         before_cutoff = cutoff is None or pd.isna(event_date) or event_date < cutoff
         matched_rows.append(
             (
-                spelling,
                 before_cutoff,
                 pd.to_numeric(pd.Series([opp_roll_won]), errors="coerce").iloc[0],
             )
@@ -728,13 +808,8 @@ def _compute_processed_opp_strength(
     if not matched_rows:
         return float("nan")
 
-    if any(spelling == fighter_name for spelling, _, _ in matched_rows):
-        group = fighter_name
-    else:
-        group = matched_rows[-1][0]
     past_opp_roll_won = [
-        wr for spelling, before_cutoff, wr in matched_rows
-        if spelling == group and before_cutoff
+        wr for before_cutoff, wr in matched_rows if before_cutoff
     ]
     if not past_opp_roll_won:
         return float("nan")
@@ -755,6 +830,7 @@ def _compute_processed_opp_strength(
 def _roll_forward_processed_features(
     fighter_name: str,
     *,
+    fighter_id: object = None,
     cutoff_ts: pd.Timestamp,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
@@ -790,12 +866,33 @@ def _roll_forward_processed_features(
     # keeping the full frame preserves the exact sort/tie behavior training
     # had (interleaved all-NaN supplement rows shift EWM positions, so tie
     # order is value-relevant).
+    requested_identity = fighter_identity_key(
+        fighter_name,
+        fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+    if requested_identity is None:
+        return None
+    scoped_artifact = {"fighter_a_id", "fighter_b_id"}.issubset(fights_df.columns)
+    if not scoped_artifact and fighter_identity_is_ambiguous(
+        fighter_name,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    ):
+        # A legacy name-only artifact cannot safely select one member of a
+        # collision group, even when the live caller supplies an ID.
+        return None
     mask = pd.Series(False, index=fights_df.index)
-    for col in ("fighter_a", "fighter_b"):
-        if col in fights_df.columns:
-            mask |= fights_df[col].fillna("").map(
-                lambda value: _same_fighter_identity(fighter_name, value)
-            )
+    for side in ("a", "b"):
+        if f"fighter_{side}" in fights_df.columns:
+            if scoped_artifact:
+                mask |= fights_df.apply(
+                    lambda row: _history_side_identity_key(row, side) == requested_identity,
+                    axis=1,
+                )
+            else:
+                mask |= fights_df[f"fighter_{side}"].fillna("").map(
+                    lambda value: _same_fighter_identity(fighter_name, value)
+                )
     matched = fights_df[mask]
     if matched.empty:
         return None
@@ -803,44 +900,56 @@ def _roll_forward_processed_features(
     long_rows = _compute_per_fight_stats(matched.sort_values("event_date"))
     if long_rows.empty:
         return None
-    long_rows = long_rows[
-        long_rows["fighter"].fillna("").map(
-            lambda value: _same_fighter_identity(fighter_name, value)
-        )
-    ]
+    if scoped_artifact and "fighter_key" in long_rows.columns:
+        long_rows = long_rows[long_rows["fighter_key"] == requested_identity]
+    else:
+        long_rows = long_rows[
+            long_rows["fighter"].fillna("").map(
+                lambda value: _same_fighter_identity(fighter_name, value)
+            )
+        ]
     if long_rows.empty:
         return None
 
-    # Training groups fight history by the exact dataset spelling — pin to the
-    # spelling of the latest fight at/before the cutoff to replicate the group.
     long_rows = long_rows.copy()
     long_rows["event_date"] = pd.to_datetime(long_rows["event_date"], errors="coerce")
     long_rows = long_rows.dropna(subset=["event_date"]).sort_values("event_date", kind="stable")
     if long_rows.empty:
         return None
     cutoff_norm = pd.Timestamp(cutoff_ts).normalize()
-    # Exact-spelling group discipline (see _lookup_processed_fighter): the
-    # requested name owns the group when it is a dataset spelling.
-    if (long_rows["fighter"] == fighter_name).any():
-        canonical = fighter_name
-    else:
+    if scoped_artifact:
         prior_rows = long_rows[long_rows["event_date"] <= cutoff_norm]
         if prior_rows.empty:
             return None
         canonical = str(prior_rows["fighter"].iloc[-1])
-    long_rows = long_rows[long_rows["fighter"] == canonical]
+    else:
+        # Old processed artifacts were built by exact display-name groups.
+        # Replay that contract exactly for non-ambiguous fighters.
+        if (long_rows["fighter"] == fighter_name).any():
+            canonical = fighter_name
+        else:
+            prior_rows = long_rows[long_rows["event_date"] <= cutoff_norm]
+            if prior_rows.empty:
+                return None
+            canonical = str(prior_rows["fighter"].iloc[-1])
+        long_rows = long_rows[long_rows["fighter"] == canonical]
     if long_rows[long_rows["event_date"] <= cutoff_norm].empty:
         return None
     marker = "__roll_forward_ufc_row"
     long_rows[marker] = True
 
-    pre_rows = _load_pre_ufc_long_rows()
+    pre_rows = (
+        _load_pre_ufc_long_rows()
+        if scoped_artifact
+        else _load_legacy_pre_ufc_long_rows()
+    )
     if not pre_rows.empty and "fighter" in pre_rows.columns:
         pre_rows = pre_rows[pre_rows["fighter"] == canonical].copy()
-        pre_rows = _filter_pre_ufc_rows_before_tracked_debut(
-            pre_rows,
-            long_rows,
-        )
+        if scoped_artifact:
+            pre_rows = _filter_pre_ufc_rows_before_tracked_debut(
+                pre_rows,
+                long_rows,
+            )
 
     future_ufc = long_rows[long_rows["event_date"] > cutoff_norm]
     refreshed: dict[str, Any] = {}
@@ -870,6 +979,7 @@ def _roll_forward_processed_features(
         virtual = {col: np.nan for col in long_rows.columns}
         virtual.update({
             "fighter": canonical,
+            "fighter_key": requested_identity,
             "opponent": "",
             "event_date": cutoff_norm,
             "result_label": "draw",  # placeholder; the virtual row is never counted
@@ -919,7 +1029,7 @@ def _roll_forward_processed_features(
         # all real rows is exposed at the trailing position.
         virtual_career = {col: np.nan for col in ufc_sorted.columns}
         virtual_career.update({
-            "fighter": canonical, "event_date": cutoff_norm,
+            "fighter": canonical, "fighter_key": requested_identity, "event_date": cutoff_norm,
             "result_label": "draw", "method": "",
         })
         career_frame = pd.concat([ufc_sorted, pd.DataFrame([virtual_career])], ignore_index=True)
@@ -1333,9 +1443,24 @@ def _extract_prefixed_features(row: pd.Series, prefix: str) -> dict:
     return features
 
 
+def _row_value(row: object, field: str, default: object = None) -> object:
+    if isinstance(row, (pd.Series, dict)):
+        return row.get(field, default)
+    return getattr(row, field, default)
+
+
+def _history_side_identity_key(row: object, side: str) -> str | None:
+    return fighter_identity_key(
+        _row_value(row, f"fighter_{side}", ""),
+        _row_value(row, f"fighter_{side}_id"),
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+
+
 def _lookup_processed_fighter(
     fighter_name: str,
     *,
+    fighter_id: object = None,
     as_of_date: Optional[str] = None,
     reference_date: Any = None,
     processed_data_dir: Optional[Path] = None,
@@ -1345,6 +1470,14 @@ def _lookup_processed_fighter(
     if history.empty:
         return None
 
+    requested_identity = fighter_identity_key(
+        fighter_name,
+        fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+    if requested_identity is None:
+        return None
+
     cutoff = pd.to_datetime(as_of_date, errors="coerce") if as_of_date is not None else None
     latest_features = None
     latest_fighter_name = fighter_name
@@ -1352,29 +1485,17 @@ def _lookup_processed_fighter(
     snapshot_exact = False
     prior_fights = []
 
-    # Pass 1: collect matched rows with their exact dataset spelling. Training
-    # groups fight history by exact spelling, so suffix collisions ("Lance
-    # Gibson" vs "Lance Gibson Jr.") must not merge histories: when the
-    # requested name IS a dataset spelling, that spelling owns the group;
-    # otherwise use the latest same-person spelling (caller name variants).
     matched_rows: list[tuple[Any, str, str]] = []  # (row, prefix, spelling)
     for row in history.itertuples(index=False):
-        if _same_fighter_identity(fighter_name, getattr(row, "fighter_a", "")):
+        if _history_side_identity_key(row, "a") == requested_identity:
             matched_rows.append((row, "a_", str(getattr(row, "fighter_a", fighter_name))))
-        elif _same_fighter_identity(fighter_name, getattr(row, "fighter_b", "")):
+        elif _history_side_identity_key(row, "b") == requested_identity:
             matched_rows.append((row, "b_", str(getattr(row, "fighter_b", fighter_name))))
 
     if not matched_rows:
         return None
 
-    if any(spelling == fighter_name for _, _, spelling in matched_rows):
-        group_spelling = fighter_name
-    else:
-        group_spelling = matched_rows[-1][2]
-
     for row, prefix, spelling in matched_rows:
-        if spelling != group_spelling:
-            continue
         event_date = pd.to_datetime(getattr(row, "event_date", None), errors="coerce")
         fighter_value = spelling
         opponent = getattr(row, "fighter_b" if prefix == "a_" else "fighter_a", "")
@@ -1388,6 +1509,9 @@ def _lookup_processed_fighter(
             prior_fights.append(
                 {
                     "opponent": opponent,
+                    "opponent_id": normalize_ufcstats_id(
+                        getattr(row, "fighter_b_id" if prefix == "a_" else "fighter_a_id", None)
+                    ),
                     "won": 1 if result == "win" else 0,
                     "result": result,
                     "winner": getattr(row, "winner", ""),
@@ -1436,6 +1560,7 @@ def _lookup_processed_fighter(
         try:
             refreshed = _roll_forward_processed_features(
                 latest_fighter_name,
+                fighter_id=fighter_id,
                 cutoff_ts=effective_date,
                 processed_data_dir=processed_data_dir,
             )
@@ -1474,12 +1599,14 @@ def _lookup_processed_fighter(
         "source": "processed",
         "snapshot_event_date": latest_event_date,
         "snapshot_exact": snapshot_exact,
+        "fighter_id": normalize_ufcstats_id(fighter_id),
     }
 
 
 def _call_lookup_fighter(
     fighter_name: str,
     *,
+    fighter_id: object = None,
     as_of_date: Optional[str] = None,
     reference_date: Any = None,
     prefer_live_refresh: bool = False,
@@ -1488,6 +1615,8 @@ def _call_lookup_fighter(
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
     kwargs = {}
+    if fighter_id is not None:
+        kwargs["fighter_id"] = fighter_id
     if as_of_date is not None:
         kwargs["as_of_date"] = as_of_date
     if reference_date is not None:
@@ -1673,11 +1802,21 @@ _SEARCH_NAME_ALIASES: dict[str, str] = {
 }
 
 
-def search_fighter_url(fighter_name: str) -> Optional[str]:
+def search_fighter_url(fighter_name: str, fighter_id: object = None) -> Optional[str]:
     """
     Search UFCStats.com for a fighter by name. Returns their profile URL.
     Uses the alphabetical fighter listing with last name initial.
     """
+    normalized_id = normalize_ufcstats_id(fighter_id)
+    if normalized_id:
+        return normalize_ufcstats_url(f"{UFCSTATS_FIGHTER_URL}{normalized_id}")
+    if fighter_identity_is_ambiguous(
+        fighter_name,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    ):
+        logger.warning("Refusing ambiguous UFCStats name-only search for %s", fighter_name)
+        return None
+
     # Resolve known aliases (e.g. full legal name → ring name), while retaining
     # the requested spelling for UFCStats index selection. Cross-source
     # canonicalization can intentionally replace a surname (for example,
@@ -1686,7 +1825,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     _alias_key = normalize_person_name(fighter_name)
     if _alias_key in _SEARCH_NAME_ALIASES:
         fighter_name = _SEARCH_NAME_ALIASES[_alias_key]
-    cache_key = _fighter_url_identity_cache_key(fighter_name)
+    cache_key = _fighter_url_identity_cache_key(fighter_name, fighter_id)
     if cache_key in _fighter_url_cache:
         if _cache_is_fresh(_fighter_url_cache_cached_at, cache_key):
             return _fighter_url_cache[cache_key]
@@ -1793,7 +1932,7 @@ def scrape_fighter_profile(fighter_url: str, *, reference_date: Any = None) -> d
     record_str = _clean_text(record_el.text.replace("Record:", "")) if record_el else ""
 
     # Parse win/loss/draw from record
-    wins, losses, draws = 0, 0, 0
+    wins = losses = draws = np.nan
     rec_match = re.match(r"(\d+)-(\d+)-(\d+)", record_str)
     if rec_match:
         wins = int(rec_match.group(1))
@@ -1892,7 +2031,7 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         "ctrl_seconds": np.nan,
         "opp_rev": np.nan,
         "opp_ctrl_seconds": np.nan,
-        "is_title_bout": False,
+        "is_title_bout": np.nan,
         "weight_class": "",
         # Totals from the detail page (sig str / TD in "X of Y" format)
         "sig_str_landed": np.nan,
@@ -2168,6 +2307,10 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             unparsed_data_row_count += 1
             continue
         opponent = _clean_text(fighter_ps[1].text)
+        opponent_link = fighter_ps[1].select_one("a[href*='fighter-details']")
+        opponent_id = normalize_ufcstats_id(
+            opponent_link.get("href") if opponent_link is not None else None
+        )
 
         # Method and round
         method = _clean_text(cols[7].text) if len(cols) > 7 else ""
@@ -2190,38 +2333,38 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
 
         # Per-fight stats from the table (sig str, td, sub, etc.)
         # The profile fight table has: Result, Fighter, KD, Str, TD, Sub, Weight Class, Method, Round, Time
-        kd = _safe_float(_clean_text(cols[2].select("p")[0].text)) if len(cols) > 2 and cols[2].select("p") else 0
-        opp_kd = _safe_float(_clean_text(cols[2].select("p")[1].text)) if len(cols) > 2 and len(cols[2].select("p")) > 1 else 0
+        kd = _safe_float(_clean_text(cols[2].select("p")[0].text), np.nan) if len(cols) > 2 and cols[2].select("p") else np.nan
+        opp_kd = _safe_float(_clean_text(cols[2].select("p")[1].text), np.nan) if len(cols) > 2 and len(cols[2].select("p")) > 1 else np.nan
 
         # Sig str — profile table shows only landed counts (no "of"),
         # so attempted stays NaN when the cell is a bare number.
         sig_str_text = cols[3].select("p")
-        sig_str_landed, sig_str_attempted = 0, np.nan
-        opp_sig_str_landed, opp_sig_str_attempted = 0, np.nan
+        sig_str_landed, sig_str_attempted = np.nan, np.nan
+        opp_sig_str_landed, opp_sig_str_attempted = np.nan, np.nan
         if sig_str_text and len(sig_str_text) >= 2:
             l, a = _parse_stat_cell(sig_str_text[0].text)
-            sig_str_landed = _safe_float(l, 0)
+            sig_str_landed = _safe_float(l, np.nan)
             sig_str_attempted = _safe_float(a) if a is not None else np.nan
             l2, a2 = _parse_stat_cell(sig_str_text[1].text)
-            opp_sig_str_landed = _safe_float(l2, 0)
+            opp_sig_str_landed = _safe_float(l2, np.nan)
             opp_sig_str_attempted = _safe_float(a2) if a2 is not None else np.nan
 
         # TD — same as sig str: profile table has only landed counts.
         td_text = cols[4].select("p") if len(cols) > 4 else []
-        td_landed, td_attempted = 0, np.nan
-        opp_td_landed, opp_td_attempted = 0, np.nan
+        td_landed, td_attempted = np.nan, np.nan
+        opp_td_landed, opp_td_attempted = np.nan, np.nan
         if td_text and len(td_text) >= 2:
             l, a = _parse_stat_cell(td_text[0].text)
-            td_landed = _safe_float(l, 0)
+            td_landed = _safe_float(l, np.nan)
             td_attempted = _safe_float(a) if a is not None else np.nan
             l2, a2 = _parse_stat_cell(td_text[1].text)
-            opp_td_landed = _safe_float(l2, 0)
+            opp_td_landed = _safe_float(l2, np.nan)
             opp_td_attempted = _safe_float(a2) if a2 is not None else np.nan
 
         # Sub attempts
         sub_text = cols[5].select("p") if len(cols) > 5 else []
-        sub_att = _safe_float(_clean_text(sub_text[0].text)) if sub_text else 0
-        opp_sub_att = _safe_float(_clean_text(sub_text[1].text)) if len(sub_text) > 1 else 0
+        sub_att = _safe_float(_clean_text(sub_text[0].text), np.nan) if sub_text else np.nan
+        opp_sub_att = _safe_float(_clean_text(sub_text[1].text), np.nan) if len(sub_text) > 1 else np.nan
 
         slpm = _rate_per_minute(sig_str_landed, fight_minutes)
         sapm = _rate_per_minute(opp_sig_str_landed, fight_minutes)
@@ -2236,6 +2379,7 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             "event_date": event_date,
             "detail_url": detail_url,
             "opponent": opponent,
+            "opponent_id": opponent_id,
             "won": won,
             "result": result,
             "winner": fighter_name if result == "win" else opponent if result == "loss" else "",
@@ -2257,7 +2401,7 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             "sub_avg": sub_avg,
             "rev": np.nan,  # Will be filled from detail page
             "ctrl_seconds": np.nan,  # Will be filled from detail page
-            "is_title_bout": False,  # Will be filled from detail page
+            "is_title_bout": np.nan,  # Will be filled from detail page
             "weight_class": "",
             "finish_time": finish_time,
             "total_fight_time_secs": total_fight_time_secs,
@@ -2303,8 +2447,9 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
                 "opp_td_landed", "opp_td_attempted",
             ]:
                 detail_val = detail.get(totals_stat)
-                if detail_val is not None and not np.isnan(detail_val):
-                    fight[totals_stat] = detail_val
+                numeric = pd.to_numeric(pd.Series([detail_val]), errors="coerce").iloc[0]
+                if pd.notna(numeric) and np.isfinite(float(numeric)):
+                    fight[totals_stat] = float(numeric)
             # Recompute rate stats from detail-page totals
             fight_minutes = fight.get("total_fight_time_secs", np.nan)
             if not pd.isna(fight_minutes) and fight_minutes > 0:
@@ -2724,9 +2869,14 @@ def _compute_rolling_for_fighter(
     round_vals = [f.get("round_finished") for f in fights if f.get("round_finished") is not None]
     features["total_rounds"] = sum(round_vals) if round_vals else np.nan
 
-    # Title bouts — count from fight detail page scrape
-    title_count = sum(1 for f in fights if f.get("is_title_bout", False))
-    features["title_bouts"] = title_count
+    # Title bouts — a career total is knowable only when every past bout has
+    # observed metadata. Missing detail cells cannot be treated as non-title.
+    title_flags = [coerce_nullable_bool(f.get("is_title_bout")) for f in fights]
+    features["title_bouts"] = (
+        float(sum(flag is True for flag in title_flags))
+        if all(flag is not None for flag in title_flags)
+        else np.nan
+    )
 
     # Strike differential mirrors the training feature, but fight pace follows
     # experimental_features.add_fight_pace() and defaults missing inputs to 0.
@@ -2923,7 +3073,7 @@ def _compute_wc_move_from_history(
     """Compute weight-class movement using the training prior-mode semantics."""
     current_wc_weight = _weight_class_to_weight(current_weight_class)
     if current_wc_weight is None:
-        return 0.0
+        return np.nan
     if not fighter_data:
         return np.nan
 
@@ -2936,8 +3086,6 @@ def _compute_wc_move_from_history(
         if weight is not None
     ]
     if not prior_weights:
-        if fighter_data.get("source") == "processed":
-            return 0.0
         return np.nan
 
     home_weight = Counter(prior_weights).most_common(1)[0][0]
@@ -2949,32 +3097,60 @@ def _h2h_summary(
     fighter_b: str,
     a_data: Optional[dict],
     b_data: Optional[dict],
-) -> tuple[int, int]:
+    *,
+    fighter_a_id: object = None,
+    fighter_b_id: object = None,
+) -> tuple[float, float]:
     """Compute rematch and H2H record diff using a symmetric source of truth."""
+    if not a_data or not b_data:
+        return np.nan, np.nan
+    if any(
+        data.get("fight_history_status") not in {None, "complete"}
+        for data in (a_data, b_data)
+    ):
+        return np.nan, np.nan
     records: list[tuple[pd.Timestamp, str]] = []
     seen_keys: set[tuple[str, str, str]] = set()
+    identity_unavailable = False
+    ambiguous_name_keys = _ambiguous_fighter_name_keys()
 
-    for owner_name, data in ((fighter_a, a_data), (fighter_b, b_data)):
+    for owner_name, owner_id, owner_side, opponent_name, opponent_id, data in (
+        (fighter_a, fighter_a_id, "a", fighter_b, fighter_b_id, a_data),
+        (fighter_b, fighter_b_id, "b", fighter_a, fighter_a_id, b_data),
+    ):
         if not data:
             continue
+        owner_key = fighter_identity_key(
+            owner_name, owner_id, ambiguous_name_keys=ambiguous_name_keys
+        )
+        target_opponent_key = fighter_identity_key(
+            opponent_name, opponent_id, ambiguous_name_keys=ambiguous_name_keys
+        )
         for fight in data.get("fights", []):
             opponent = fight.get("opponent", "")
-            if not _same_fighter_identity(
+            observed_opponent_key = fighter_identity_key(
                 opponent,
-                fighter_b if _same_fighter_identity(owner_name, fighter_a) else fighter_a,
+                fight.get("opponent_id"),
+                ambiguous_name_keys=ambiguous_name_keys,
+            )
+            if observed_opponent_key is None and _same_fighter_identity(
+                opponent, opponent_name
             ):
+                identity_unavailable = True
+                continue
+            if not target_opponent_key or observed_opponent_key != target_opponent_key:
                 continue
 
             event_date = pd.to_datetime(fight.get("event_date"), errors="coerce")
             event_key = event_date.isoformat() if pd.notna(event_date) else ""
             dedupe_key = (
-                normalize_person_name(owner_name),
-                normalize_person_name(opponent),
+                str(owner_key or ""),
+                str(observed_opponent_key),
                 event_key,
             )
             mirror_key = (
-                normalize_person_name(opponent),
-                normalize_person_name(owner_name),
+                str(observed_opponent_key),
+                str(owner_key or ""),
                 event_key,
             )
             if dedupe_key in seen_keys or mirror_key in seen_keys:
@@ -2987,24 +3163,24 @@ def _h2h_summary(
 
             winner = fight.get("winner", "")
             if result not in {"win", "loss"}:
-                if _same_fighter_identity(winner, owner_name):
+                if normalize_person_name(winner) == normalize_person_name(owner_name):
                     result = "win"
-                elif _same_fighter_identity(winner, opponent):
+                elif normalize_person_name(winner) == normalize_person_name(opponent):
                     result = "loss"
                 else:
                     continue
 
-            records.append((event_date, "a" if result == "win" and _same_fighter_identity(owner_name, fighter_a) else
-                            "b" if result == "loss" and _same_fighter_identity(owner_name, fighter_a) else
-                            "b" if result == "win" and _same_fighter_identity(owner_name, fighter_b) else
-                            "a"))
+            winner_side = owner_side if result == "win" else ("b" if owner_side == "a" else "a")
+            records.append((event_date, winner_side))
 
     if not records:
-        return 0, 0
+        if identity_unavailable:
+            return np.nan, np.nan
+        return 0.0, 0.0
 
     a_wins = sum(1 for _event_date, winner in records if winner == "a")
     b_wins = sum(1 for _event_date, winner in records if winner == "b")
-    return 1, a_wins - b_wins
+    return 1.0, float(a_wins - b_wins)
 
 
 # ---------------------------------------------------------------------------
@@ -3015,6 +3191,7 @@ def lookup_fighter(
     fighter_name: str,
     as_of_date: Optional[str] = None,
     *,
+    fighter_id: object = None,
     reference_date: Any = None,
     prefer_live_refresh: bool = False,
     force_refresh: bool = False,
@@ -3031,6 +3208,16 @@ def lookup_fighter(
     Returns dict with profile info, fight history, and computed rolling stats.
     Caches results for the session to avoid redundant scraping.
     """
+    normalized_fighter_id = normalize_ufcstats_id(fighter_id)
+    identity_key = fighter_identity_key(
+        fighter_name,
+        normalized_fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+    if identity_key is None:
+        logger.warning("Refusing ambiguous name-only fighter lookup for %s", fighter_name)
+        return None
+
     resolved_spec = _coerce_training_spec(training_spec)
     resolved_processed_data_dir = _resolve_processed_data_dir(
         training_spec=resolved_spec,
@@ -3041,6 +3228,7 @@ def lookup_fighter(
     cache_key = _fighter_cache_key(
         fighter_name,
         as_of_date,
+        fighter_id=normalized_fighter_id,
         reference_date=reference_date,
         prefer_live_refresh=prefer_live_refresh,
         processed_data_dir=resolved_processed_data_dir,
@@ -3064,6 +3252,7 @@ def lookup_fighter(
 
     processed_result = _lookup_processed_fighter(
         fighter_name,
+        fighter_id=normalized_fighter_id,
         as_of_date=as_of_date,
         reference_date=reference_date,
         processed_data_dir=resolved_processed_data_dir,
@@ -3108,7 +3297,7 @@ def lookup_fighter(
     fight_history_status = "complete"
 
     # Step 1: Try UFCStats
-    fighter_url = search_fighter_url(fighter_name)
+    fighter_url = search_fighter_url(fighter_name, fighter_id=normalized_fighter_id)
     if fighter_url:
         try:
             profile = scrape_fighter_profile(fighter_url, reference_date=reference_date)
@@ -3160,7 +3349,10 @@ def lookup_fighter(
                 fight_history_status = "unavailable"
 
     # Step 2: Fallback to Sherdog/Tapology if UFCStats failed
-    if profile is None:
+    if profile is None and not fighter_identity_is_ambiguous(
+        fighter_name,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    ):
         from src.data.fallback_scrapers import fallback_lookup
 
         logger.info(f"  UFCStats miss for {fighter_name}, trying fallback sources...")
@@ -3194,6 +3386,12 @@ def lookup_fighter(
                     all_mma_fight_count,
                 )
 
+    elif profile is None:
+        logger.warning(
+            "Skipping name-only fallback sources for ambiguous fighter identity %s",
+            fighter_name,
+        )
+
     if profile is None:
         logger.warning(f"Could not find {fighter_name} on any source")
         if processed_result is not None:
@@ -3224,6 +3422,7 @@ def lookup_fighter(
         "features": rolling,
         "source": source,
         "fight_history_status": fight_history_status,
+        "fighter_id": normalized_fighter_id or normalize_ufcstats_id(profile.get("fighter_url")),
     }
     if source == "fallback":
         result["history_scope"] = "ufc_only"
@@ -3245,9 +3444,9 @@ def build_fight_features(
     fighter_b: str,
     odds_features: Optional[dict] = None,
     weight_class: Optional[str] = None,
-    is_title_bout: bool = False,
+    is_title_bout: Optional[bool] = None,
     is_empty_arena: Optional[float] = None,
-    num_rounds: int = 3,
+    num_rounds: Optional[int] = None,
     as_of_date: Optional[str] = None,
     event_id: Optional[str] = None,
     commence_time: Optional[str] = None,
@@ -3258,6 +3457,8 @@ def build_fight_features(
     fighter_a_lookup_name: Optional[str] = None,
     fighter_b_lookup_name: Optional[str] = None,
     force_fighter_refresh: bool = False,
+    fighter_a_id: object = None,
+    fighter_b_id: object = None,
 ) -> dict | tuple[dict, dict[str, Any]]:
     """
     Build a complete feature dict for a fight, compatible with the trained model.
@@ -3282,7 +3483,22 @@ def build_fight_features(
         Dict of feature_name -> value, ready for predict_fight().
         When `include_provenance=True`, returns `(features, provenance)`.
     """
-    features = {}
+    normalized_a_id = normalize_ufcstats_id(fighter_a_id)
+    normalized_b_id = normalize_ufcstats_id(fighter_b_id)
+    for name, fighter_id in ((fighter_a, normalized_a_id), (fighter_b, normalized_b_id)):
+        if fighter_identity_key(
+            name,
+            fighter_id,
+            ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+        ) is None:
+            raise AmbiguousFighterIdentityError(
+                f"UFCStats fighter ID is required for ambiguous fighter name: {name}"
+            )
+
+    features = {
+        "fighter_a_id": normalized_a_id,
+        "fighter_b_id": normalized_b_id,
+    }
     resolved_spec = _coerce_training_spec(training_spec)
     requested_feature_cols = _requested_feature_columns(resolved_spec)
     requested_feature_set = set(requested_feature_cols) if requested_feature_cols is not None else None
@@ -3309,14 +3525,24 @@ def build_fight_features(
     if force_fighter_refresh:
         lookup_kwargs["force_refresh"] = True
     if as_of_date is None:
-        a_data = _call_lookup_fighter(resolved_fighter_a_lookup, **lookup_kwargs)
-        b_data = _call_lookup_fighter(resolved_fighter_b_lookup, **lookup_kwargs)
-    else:
         a_data = _call_lookup_fighter(
-            resolved_fighter_a_lookup, as_of_date=as_of_date, **lookup_kwargs
+            resolved_fighter_a_lookup, fighter_id=normalized_a_id, **lookup_kwargs
         )
         b_data = _call_lookup_fighter(
-            resolved_fighter_b_lookup, as_of_date=as_of_date, **lookup_kwargs
+            resolved_fighter_b_lookup, fighter_id=normalized_b_id, **lookup_kwargs
+        )
+    else:
+        a_data = _call_lookup_fighter(
+            resolved_fighter_a_lookup,
+            fighter_id=normalized_a_id,
+            as_of_date=as_of_date,
+            **lookup_kwargs,
+        )
+        b_data = _call_lookup_fighter(
+            resolved_fighter_b_lookup,
+            fighter_id=normalized_b_id,
+            as_of_date=as_of_date,
+            **lookup_kwargs,
         )
 
     provenance = (
@@ -3388,10 +3614,16 @@ def build_fight_features(
             if pd.isna(sos_cutoff):
                 sos_cutoff = None
         features["a_opp_strength"] = _compute_processed_opp_strength(
-            a_canonical, cutoff=sos_cutoff, processed_data_dir=resolved_processed_data_dir,
+            a_canonical,
+            fighter_id=normalized_a_id,
+            cutoff=sos_cutoff,
+            processed_data_dir=resolved_processed_data_dir,
         )
         features["b_opp_strength"] = _compute_processed_opp_strength(
-            b_canonical, cutoff=sos_cutoff, processed_data_dir=resolved_processed_data_dir,
+            b_canonical,
+            fighter_id=normalized_b_id,
+            cutoff=sos_cutoff,
+            processed_data_dir=resolved_processed_data_dir,
         )
         a_os = features["a_opp_strength"]
         b_os = features["b_opp_strength"]
@@ -3511,11 +3743,22 @@ def build_fight_features(
 
     # Meta features
     if _wants_feature(requested_feature_set, "is_title_bout"):
-        features["is_title_bout"] = int(is_title_bout)
+        observed_title = coerce_nullable_bool(is_title_bout)
+        features["is_title_bout"] = (
+            float(observed_title) if observed_title is not None else np.nan
+        )
     if _wants_feature(requested_feature_set, "num_rounds_feat"):
-        features["num_rounds_feat"] = float(num_rounds)
+        observed_rounds = coerce_scheduled_rounds(num_rounds)
+        features["num_rounds_feat"] = (
+            float(observed_rounds) if observed_rounds is not None else np.nan
+        )
     if _wants_feature(requested_feature_set, "is_empty_arena"):
-        features["is_empty_arena"] = float(is_empty_arena) if is_empty_arena is not None else np.nan
+        observed_empty_arena = coerce_nullable_bool(is_empty_arena)
+        features["is_empty_arena"] = (
+            float(observed_empty_arena)
+            if observed_empty_arena is not None
+            else np.nan
+        )
 
     # Style matchup interactions
     if _wants_feature(
@@ -3560,6 +3803,8 @@ def build_fight_features(
             fighter_b,
             a_data,
             b_data,
+            fighter_a_id=normalized_a_id,
+            fighter_b_id=normalized_b_id,
         )
 
     # ------------------------------------------------------------------
@@ -3666,6 +3911,11 @@ def build_fight_features(
 
     if requested_feature_cols is not None:
         selected_features = {column: features.get(column, np.nan) for column in requested_feature_cols}
+        # Stable identity is inference metadata, not a model feature.  Keep it
+        # alongside contract-filtered values so snapshots/evidence do not have
+        # to recover identity from a collision-prone display name.
+        selected_features["fighter_a_id"] = normalized_a_id
+        selected_features["fighter_b_id"] = normalized_b_id
         if include_provenance:
             return selected_features, provenance
         return selected_features

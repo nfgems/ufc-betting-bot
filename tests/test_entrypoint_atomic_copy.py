@@ -160,9 +160,15 @@ def test_entrypoint_selects_only_a_verified_complete_bundle_store_release():
     assert 'PRODUCTION_BUNDLE_MANIFEST="$ACTIVE_LOOKUP_DIR/runtime_manifest.json"' in source
     assert 'export UFC_PROCESSED_DIR="$ACTIVE_LOOKUP_DIR"' in source
     assert 'ACTIVATE_SOURCE_GENERATION_ARG="--activate-source-generation"' in source
+    assert 'LIVE_TRADING_MODE_NORMALIZED="$(' in source
+    assert 'real|live) REAL_MONEY_MODE=1' in source
+    assert 'if [ "$REAL_MONEY_MODE" -eq 1 ]' in source
+    assert "real-money mode requires the verified persistent production bundle store" in source
     assert r'--source-manifest \"$SOURCE_PRODUCTION_BUNDLE_MANIFEST\"' in source
     assert r'--source-processed-dir \"$SOURCE_PROCESSED_DIR\"' in source
     assert r'--target-processed-dir \"$ACTIVE_LOOKUP_DIR\"' in source
+    assert "scripts/startup_parity_gate.py" in source
+    assert '--receipt "$STARTUP_PARITY_RECEIPT"' in source
 
 
 def test_entrypoint_does_not_repair_immutable_release_models():

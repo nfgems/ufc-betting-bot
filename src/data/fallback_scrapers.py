@@ -2898,12 +2898,14 @@ def _parse_sherdog_profile(soup: BeautifulSoup, fighter_url: str) -> dict:
     name_el = soup.find("h1")
     name = _clean_text(name_el.text) if name_el else ""
 
-    wins, losses, draws = 0, 0, 0
+    wins = losses = draws = np.nan
     for div in soup.find_all("div", class_="winloses"):
         spans = div.find_all("span")
         if len(spans) >= 2:
             label = spans[0].text.strip().lower()
-            count = _safe_float(spans[1].text.strip(), default=0)
+            count = _safe_float(spans[1].text.strip(), default=np.nan)
+            if not np.isfinite(count):
+                continue
             if label == "wins":
                 wins = int(count)
             elif label == "losses":
@@ -2946,10 +2948,16 @@ def _parse_sherdog_profile(soup: BeautifulSoup, fighter_url: str) -> dict:
             if dob_match:
                 dob = dob_match.group(1).strip()
 
+    record = (
+        f"{wins}-{losses}-{draws}"
+        if all(np.isfinite(value) for value in (wins, losses, draws))
+        else ""
+    )
+
     return {
         "name": name,
         "fighter_url": fighter_url,
-        "record": f"{wins}-{losses}-{draws}",
+        "record": record,
         "wins": wins,
         "losses": losses,
         "draws": draws,

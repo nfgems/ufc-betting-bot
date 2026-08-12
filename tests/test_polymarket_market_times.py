@@ -304,7 +304,7 @@ def test_parse_fight_market_prefers_actual_game_start_to_listing_timestamp():
     assert parsed['event_date'] == '2026-05-17 01:00:00+00'
 
 
-def test_parse_fight_market_falls_back_to_orderbook_midpoint_when_prices_missing():
+def test_parse_fight_market_rejects_orderbook_midpoint_when_prices_missing():
     parsed = parse_fight_market(
         {
             'id': 'market-1',
@@ -319,12 +319,10 @@ def test_parse_fight_market_falls_back_to_orderbook_midpoint_when_prices_missing
         event={'id': 'event-1'},
     )
 
-    assert parsed is not None
-    assert parsed['price_yes'] == pytest.approx(0.155)
-    assert parsed['price_no'] == pytest.approx(0.845)
+    assert parsed is None
 
 
-def test_parse_fight_market_keeps_prices_missing_for_one_sided_book():
+def test_parse_fight_market_rejects_one_sided_book():
     parsed = parse_fight_market(
         {
             'id': 'market-1',
@@ -338,12 +336,10 @@ def test_parse_fight_market_keeps_prices_missing_for_one_sided_book():
         event={'id': 'event-1'},
     )
 
-    assert parsed is not None
-    assert parsed['price_yes'] is None
-    assert parsed['price_no'] is None
+    assert parsed is None
 
 
-def test_parse_fight_market_completes_single_valid_outcome_price():
+def test_parse_fight_market_rejects_single_valid_outcome_price():
     parsed = parse_fight_market(
         {
             'id': 'market-1',
@@ -359,9 +355,7 @@ def test_parse_fight_market_completes_single_valid_outcome_price():
         event={'id': 'event-1'},
     )
 
-    assert parsed is not None
-    assert parsed['price_yes'] == pytest.approx(0.0)
-    assert parsed['price_no'] == pytest.approx(1.0)
+    assert parsed is None
 
 
 def test_get_ufc_fight_markets_keeps_future_fights_with_past_listing_timestamp(monkeypatch):

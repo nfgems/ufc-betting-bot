@@ -16,9 +16,15 @@ data/processed/audit_remediation_*/
 # Logs & models (runtime generated, now under data/)
 logs/
 data/logs/
+!evidence/logs/
+!evidence/logs/**
+evidence/logs/**/.env
+evidence/logs/**/*.env
+evidence/logs/**/credentials.json
 data/models/
 railway_logs_*.jsonl
 .codex_stage/
+.integrity-runtime/
 data/operator/decision_cache.json
 data/operator/gemini_pick_cache.json
 data/operator/gemini_research_cache.json

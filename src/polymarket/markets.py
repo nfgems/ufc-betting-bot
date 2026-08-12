@@ -341,14 +341,6 @@ def _parse_probability(value) -> Optional[float]:
     return None
 
 
-def _midpoint_from_book(best_bid, best_ask) -> Optional[float]:
-    bid = _parse_probability(best_bid)
-    ask = _parse_probability(best_ask)
-    if bid is None or ask is None or bid > ask:
-        return None
-    return (bid + ask) / 2.0
-
-
 def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[dict]:
     """
     Parse a Polymarket market dict into a structured fight market.
@@ -386,15 +378,8 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
     prices = _parse_json_field(market.get("outcomePrices", []))
     price_a = _parse_probability(prices[0]) if len(prices) > 0 else None
     price_b = _parse_probability(prices[1]) if len(prices) > 1 else None
-    if price_a is not None and price_b is None:
-        price_b = 1.0 - price_a
-    elif price_a is None and price_b is not None:
-        price_a = 1.0 - price_b
-    elif price_a is None and price_b is None:
-        midpoint = _midpoint_from_book(market.get("bestBid"), market.get("bestAsk"))
-        if midpoint is not None:
-            price_a = midpoint
-            price_b = 1.0 - midpoint
+    if price_a is None or price_b is None:
+        return None
     fee_schedule = _parse_mapping_field(market.get("feeSchedule"))
     fee_details = _parse_mapping_field(
         market.get("feeDetails") or market.get("fee_details")

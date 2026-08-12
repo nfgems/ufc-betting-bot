@@ -3,7 +3,7 @@ Optuna hyperparameter tuning for the V6 model with an untouched outer holdout.
 
 Selection protocol:
   - Inner tuning / selection window: 2022-01-01 through 2024-12-31
-  - Outer holdout / final validation: 2025-01-01 onward
+  - Outer holdout / final validation: 2025-01-01 up to the confirmation reserve
 
 All trials are optimized only on the inner window. After tuning, the script
 evaluates the baseline, best trial, and top-N completed trials on the untouched
@@ -35,6 +35,8 @@ from src.model.predict import predict_batch
 from src.model.train import train_xgboost
 from src.model.training_spec import full_live_contract_v6_spec
 from src.strategy.model_lab import (
+    DEFAULT_CONFIRMATION_FOLD_COUNT,
+    _walk_forward_fold_windows,
     generate_variant_fold_predictions,
 )
 from src.strategy.model_variants import VariantConfig
@@ -87,17 +89,67 @@ def _load_features() -> pd.DataFrame:
     return features_df
 
 
+def _confirmation_reserve_start(features_df: pd.DataFrame) -> pd.Timestamp:
+    """Return the first date of the canonical final-two-fold reserve."""
+    normalized = features_df.copy()
+    normalized["event_date"] = pd.to_datetime(
+        normalized["event_date"], errors="coerce"
+    )
+    normalized = normalized.dropna(subset=["event_date", "target"])
+    if {"a_num_fights", "b_num_fights"}.issubset(normalized.columns):
+        normalized = normalized[
+            (normalized["a_num_fights"] >= 2)
+            & (normalized["b_num_fights"] >= 2)
+        ]
+    normalized = normalized.sort_values("event_date")
+    fold_windows = _walk_forward_fold_windows(
+        normalized["event_date"],
+        initial_train_years=5,
+        retrain_months=6,
+        bet_start_date=INNER_SELECTION_START.strftime("%Y-%m-%d"),
+    )
+    if len(fold_windows) <= DEFAULT_CONFIRMATION_FOLD_COUNT:
+        raise ValueError(
+            "Optuna evaluation requires at least one selection fold plus "
+            f"{DEFAULT_CONFIRMATION_FOLD_COUNT} confirmation folds"
+        )
+    return fold_windows[-DEFAULT_CONFIRMATION_FOLD_COUNT][1]
+
+
+def _preflight_scored_selection_rows(frame: pd.DataFrame) -> None:
+    from src.strategy.run_evaluation import (
+        _canonical_evaluation_fight_identities,
+        _record_global_selection_exposure,
+    )
+
+    _record_global_selection_exposure(
+        _canonical_evaluation_fight_identities(frame)
+    )
+
+
 def split_selection_and_holdout_frames(
     features_df: pd.DataFrame,
+    *,
+    confirmation_start: pd.Timestamp | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Split the feature frame into pre-2025 selection data and 2025+ holdout."""
+    """Split pre-2025 selection from a holdout ending before confirmation."""
     normalized = features_df.copy()
     normalized["event_date"] = pd.to_datetime(normalized["event_date"], errors="coerce")
     normalized = normalized.sort_values("event_date").reset_index(drop=True)
     normalized = normalized.dropna(subset=["event_date", "target"])
+    reserve_start = pd.Timestamp(
+        confirmation_start
+        if confirmation_start is not None
+        else _confirmation_reserve_start(normalized)
+    )
+    if reserve_start <= OUTER_HOLDOUT_START:
+        raise ValueError("Confirmation reserve must start after the outer holdout")
 
     selection_df = normalized[normalized["event_date"] < OUTER_HOLDOUT_START].copy()
-    holdout_df = normalized[normalized["event_date"] >= OUTER_HOLDOUT_START].copy()
+    holdout_df = normalized[
+        (normalized["event_date"] >= OUTER_HOLDOUT_START)
+        & (normalized["event_date"] < reserve_start)
+    ].copy()
     return selection_df, holdout_df
 
 
@@ -211,6 +263,9 @@ def objective(trial: optuna.Trial, selection_features_df: pd.DataFrame) -> float
             initial_train_years=5,
             bet_start_date=INNER_SELECTION_START.strftime("%Y-%m-%d"),
             feature_cols=variant.feature_cols,
+            evaluation_partition="selection",
+            confirmation_fold_count=DEFAULT_CONFIRMATION_FOLD_COUNT,
+            allow_all_folds=False,
         )
     except Exception as exc:
         logger.warning("Trial %d failed during training: %s", trial.number, exc)
@@ -302,18 +357,31 @@ def _outer_holdout_fit_attempts(variant: VariantConfig) -> list[dict]:
 def _train_then_predict_outer_holdout(
     full_features_df: pd.DataFrame,
     variant: VariantConfig,
+    *,
+    confirmation_start: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """Train once on pre-2025 data and score the untouched 2025+ holdout."""
+    """Train pre-2025 and score only the pre-confirmation outer holdout."""
     features_df = full_features_df.copy()
     features_df["event_date"] = pd.to_datetime(features_df["event_date"], errors="coerce")
     features_df = features_df.dropna(subset=["event_date", "target"]).sort_values("event_date")
+    reserve_start = pd.Timestamp(
+        confirmation_start
+        if confirmation_start is not None
+        else _confirmation_reserve_start(features_df)
+    )
+    if reserve_start <= OUTER_HOLDOUT_START:
+        raise ValueError("Confirmation reserve must start after the outer holdout")
 
     train_df = features_df[features_df["event_date"] < OUTER_HOLDOUT_START].copy()
-    holdout_df = features_df[features_df["event_date"] >= OUTER_HOLDOUT_START].copy()
+    holdout_df = features_df[
+        (features_df["event_date"] >= OUTER_HOLDOUT_START)
+        & (features_df["event_date"] < reserve_start)
+    ].copy()
     if len(train_df) < 100:
         raise ValueError(f"Not enough pre-holdout training rows: {len(train_df)}")
     if holdout_df.empty:
         raise ValueError("Outer holdout is empty")
+    _preflight_scored_selection_rows(holdout_df)
 
     feature_cols = list(variant.feature_cols or [])
     last_error: Exception | None = None
@@ -361,6 +429,7 @@ def _train_then_predict_outer_holdout(
             "train_rows": int(len(train_df)),
             "holdout_rows": int(len(holdout_df)),
             "train_end_date_exclusive": OUTER_HOLDOUT_START.date().isoformat(),
+            "holdout_end_date_exclusive": reserve_start.date().isoformat(),
         }
         return predictions
 
@@ -376,6 +445,7 @@ def _evaluate_variant(
     variant: VariantConfig,
     selection_score: float | None = None,
 ) -> dict:
+    confirmation_start = _confirmation_reserve_start(full_features_df)
     inner_predictions = _flatten_fold_predictions(
         generate_variant_fold_predictions(
             selection_features_df,
@@ -384,6 +454,9 @@ def _evaluate_variant(
             initial_train_years=5,
             bet_start_date=INNER_SELECTION_START.strftime("%Y-%m-%d"),
             feature_cols=variant.feature_cols,
+            evaluation_partition="selection",
+            confirmation_fold_count=DEFAULT_CONFIRMATION_FOLD_COUNT,
+            allow_all_folds=False,
         )
     )
     inner_metrics = score_prediction_window(
@@ -395,11 +468,15 @@ def _evaluate_variant(
     if selection_score is not None:
         inner_metrics["log_loss"] = float(selection_score)
 
-    outer_predictions = _train_then_predict_outer_holdout(full_features_df, variant)
+    outer_predictions = _train_then_predict_outer_holdout(
+        full_features_df,
+        variant,
+        confirmation_start=confirmation_start,
+    )
     outer_metrics = score_prediction_window(
         outer_predictions,
         start=OUTER_HOLDOUT_START,
-        end=None,
+        end=confirmation_start,
         label="outer_holdout",
     )
     return {
@@ -515,14 +592,20 @@ def main() -> None:
 
     logger.info("Loading features...")
     full_features_df = _load_features()
-    selection_features_df, holdout_df = split_selection_and_holdout_frames(full_features_df)
+    confirmation_start = _confirmation_reserve_start(full_features_df)
+    selection_features_df, holdout_df = split_selection_and_holdout_frames(
+        full_features_df,
+        confirmation_start=confirmation_start,
+    )
     logger.info(
-        "Features loaded: total=%d rows | selection=%d rows (< %s) | outer_holdout=%d rows (>= %s)",
+        "Features loaded: total=%d rows | selection=%d rows (< %s) | "
+        "outer_holdout=%d rows (%s <= date < %s)",
         len(full_features_df),
         len(selection_features_df),
         OUTER_HOLDOUT_START.date(),
         len(holdout_df),
         OUTER_HOLDOUT_START.date(),
+        confirmation_start.date(),
     )
 
     storage = f"sqlite:///{STUDY_DB}"
@@ -611,7 +694,9 @@ def main() -> None:
         },
         "outer_holdout_window": {
             "start": OUTER_HOLDOUT_START.date().isoformat(),
-            "end": "latest_available",
+            "end_exclusive": baseline_report["outer_training"][
+                "holdout_end_date_exclusive"
+            ],
         },
         "baseline": {
             "selection_score": baseline_report["inner_selection"],

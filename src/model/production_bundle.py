@@ -49,6 +49,7 @@ class ProductionBundle:
     model_sha256: str | None = None
     no_odds_model_sha256: str | None = None
     logistic_model_sha256: str | None = None
+    confirmed_strategy: dict[str, Any] | None = None
 
 
 def is_hosted_runtime(*, project_root: Path | None = None) -> bool:
@@ -283,6 +284,35 @@ _SCHEDULED_REFIT_POLICY_KEYS = frozenset(
         "parent_processed_features_sha256",
     }
 )
+_SCHEDULED_REFIT_POLICY_V2_KEYS = _SCHEDULED_REFIT_POLICY_KEYS | {
+    "policy_schema_version"
+}
+_PERFORMANCE_CONFIRMATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "policy_sha256",
+        "confirmation_result_sha256",
+        "final_track_c_pass_receipt_sha256",
+        "evaluation_spec_name",
+        "evaluation_spec_payload_sha256",
+        "fullfit_spec_name",
+        "fullfit_spec_payload_sha256",
+        "strategy_config_sha256",
+        "dataset_fights_sha256",
+        "features_sha256",
+        "features_value_sha256",
+        "feature_contract_sha256",
+        "confirmation_evaluation_input_value_sha256",
+        "evaluation_protocol_sha256",
+        "odds_source_inventory_sha256",
+        "source_fingerprint",
+        "source_inventory_sha256",
+        "source_inventory_artifact_sha256",
+        "environment_artifact_sha256",
+        "environment_payload_sha256",
+        "performance_evidence_aggregate_sha256",
+    }
+)
 
 
 def _is_sha256(value: object) -> bool:
@@ -315,6 +345,7 @@ def _validate_rich_manifest_shape(
         _optional_int(payload, "manifest_version") == RICH_MANIFEST_VERSION
         or "staging_schema_version" in payload
         or "scheduled_refit_policy" in payload
+        or "confirmed_strategy" in payload
         or any(key in payload for key in _RICH_MANIFEST_SECTIONS)
     )
     if not rich_marked:
@@ -337,6 +368,33 @@ def _validate_rich_manifest_shape(
             f"{label} rich manifest is missing required object sections: "
             f"{missing_sections}."
         )
+    scheduled = payload.get("scheduled_refit_policy")
+    final_policy_v2 = (
+        isinstance(scheduled, dict) and scheduled.get("policy_schema_version") == 2
+    )
+    model_spec_name = str(payload.get("model_spec_name") or "").strip()
+    integrity_fullfit = (
+        "_integrity_" in model_spec_name and model_spec_name.endswith("_fullfit")
+    )
+    performance_sections = (
+        "confirmed_strategy",
+        "performance_confirmation",
+        "performance_evidence",
+    )
+    present_performance_sections = {
+        key for key in performance_sections if key in payload
+    }
+    if final_policy_v2 or integrity_fullfit or present_performance_sections:
+        missing_performance = [
+            key
+            for key in performance_sections
+            if not isinstance(payload.get(key), dict)
+        ]
+        if missing_performance:
+            raise ProductionBundleError(
+                "Final performance bundle is missing required sections: "
+                f"{missing_performance}."
+            )
     invalid_hashes = [
         key
         for key in _RICH_MODEL_FIELDS + _RICH_PROCESSED_FIELDS
@@ -362,7 +420,10 @@ def _validated_scheduled_refit_policy(
     value = payload.get("scheduled_refit_policy")
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != _SCHEDULED_REFIT_POLICY_KEYS:
+    if not isinstance(value, dict) or frozenset(value) not in {
+        _SCHEDULED_REFIT_POLICY_KEYS,
+        _SCHEDULED_REFIT_POLICY_V2_KEYS,
+    }:
         raise ProductionBundleError(
             "Production bundle scheduled_refit_policy has missing or unknown fields."
         )
@@ -376,6 +437,10 @@ def _validated_scheduled_refit_policy(
         raise ProductionBundleError(
             "Production bundle scheduled_refit_policy has an empty identity field."
         )
+    if "policy_schema_version" in value and value.get("policy_schema_version") not in {1, 2}:
+        raise ProductionBundleError(
+            "Production bundle scheduled_refit_policy schema marker is invalid."
+        )
     hash_fields = _SCHEDULED_REFIT_POLICY_KEYS - set(text_fields)
     invalid_hashes = [field for field in sorted(hash_fields) if not _is_sha256(value.get(field))]
     if invalid_hashes:
@@ -384,6 +449,397 @@ def _validated_scheduled_refit_policy(
             f"{invalid_hashes}."
         )
     return deepcopy(value)
+
+
+def _validate_runtime_performance_evidence(
+    payload: dict[str, Any],
+    *,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    """Rehash the portable PASS package and the current code/input contracts."""
+
+    evidence = payload.get("performance_evidence")
+    if not isinstance(evidence, dict) or set(evidence) != {
+        "schema_version",
+        "aggregate_sha256",
+        "file_count",
+        "total_bytes",
+        "files",
+    } or evidence.get("schema_version") != 1:
+        raise ProductionBundleError(
+            "Production bundle performance_evidence schema is invalid."
+        )
+    records = evidence.get("files")
+    if not isinstance(records, list) or not records:
+        raise ProductionBundleError("Production bundle performance evidence is empty.")
+    release_root = _rich_release_root(payload, manifest_path)
+    expected_keys = {"roles", "source_path", "staged_path", "sha256", "bytes"}
+    staged_paths: set[str] = set()
+    source_paths: set[str] = set()
+    roles: dict[str, dict[str, Any]] = {}
+    total_bytes = 0
+    for record in records:
+        if not isinstance(record, dict) or set(record) != expected_keys:
+            raise ProductionBundleError(
+                "Production bundle performance evidence record is malformed."
+            )
+        record_roles = record.get("roles")
+        source_path = str(record.get("source_path") or "")
+        staged_path = str(record.get("staged_path") or "")
+        if (
+            not isinstance(record_roles, list)
+            or not record_roles
+            or record_roles != sorted(set(record_roles))
+            or source_path in source_paths
+            or staged_path in staged_paths
+            or not staged_path.startswith(
+                "evidence/performance_confirmation/repository/"
+            )
+        ):
+            raise ProductionBundleError(
+                "Production bundle performance evidence identity is ambiguous."
+            )
+        source_raw = Path(source_path)
+        if (
+            source_raw.is_absolute()
+            or not source_raw.parts
+            or ".." in source_raw.parts
+            or source_raw.as_posix() != source_path
+        ):
+            raise ProductionBundleError(
+                "Production bundle performance evidence source path is unsafe."
+            )
+        artifact = _manifest_relative_file(
+            manifest_path,
+            staged_path,
+            label="performance evidence",
+            release_root=release_root,
+        )
+        if (
+            not _is_sha256(record.get("sha256"))
+            or _file_sha256(artifact) != record["sha256"]
+            or int(artifact.stat().st_size) != record.get("bytes")
+        ):
+            raise ProductionBundleError(
+                "Production bundle performance evidence artifact changed."
+            )
+        source_paths.add(source_path)
+        staged_paths.add(staged_path)
+        total_bytes += int(record["bytes"])
+        for role in record_roles:
+            if not isinstance(role, str) or not role or role in roles:
+                raise ProductionBundleError(
+                    "Production bundle performance evidence role is ambiguous."
+                )
+            roles[role] = {**record, "resolved_path": artifact}
+    package_root = (
+        release_root / "evidence" / "performance_confirmation" / "repository"
+    ).resolve(strict=False)
+    actual_paths = {
+        path.relative_to(release_root).as_posix()
+        for path in package_root.rglob("*")
+        if path.is_file()
+    }
+    if actual_paths != staged_paths:
+        raise ProductionBundleError(
+            "Production bundle performance evidence allowlist changed."
+        )
+    if (
+        evidence.get("file_count") != len(records)
+        or evidence.get("total_bytes") != total_bytes
+        or evidence.get("aggregate_sha256") != _canonical_json_sha256(records)
+    ):
+        raise ProductionBundleError(
+            "Production bundle performance evidence aggregate is invalid."
+        )
+    required_roles = {
+        "final_track_c_pass_receipt",
+        "final_child_policy",
+        "confirmation_result",
+        "final_track_c_artifact:summary",
+        "final_track_c_artifact:evaluation_index",
+        "final_track_c_artifact:data_quality",
+        "final_track_c_artifact:predictive",
+        "final_track_c_artifact:production_bets",
+    }
+    if not required_roles.issubset(roles):
+        raise ProductionBundleError(
+            "Production bundle performance evidence is incomplete."
+        )
+
+    receipt = _load_manifest_payload(
+        Path(roles["final_track_c_pass_receipt"]["resolved_path"])
+    )
+    confirmation_result = _load_manifest_payload(
+        Path(roles["confirmation_result"]["resolved_path"])
+    )
+    performance = payload["performance_confirmation"]
+    if (
+        receipt.get("status") != "PASS"
+        or receipt.get("healthy") is not True
+        or roles["final_track_c_pass_receipt"]["sha256"]
+        != performance.get("final_track_c_pass_receipt_sha256")
+        or roles["final_child_policy"]["sha256"]
+        != performance.get("policy_sha256")
+        or roles["confirmation_result"]["sha256"]
+        != performance.get("confirmation_result_sha256")
+    ):
+        raise ProductionBundleError(
+            "Production bundle portable PASS identity is not cross-bound."
+        )
+    receipt_hash_bindings = {
+        "strategy_config_sha256": "strategy_config_sha256",
+        "features_sha256": "features_sha256",
+        "features_value_sha256": "features_value_sha256",
+        "feature_contract_sha256": "feature_contract_sha256",
+        "confirmation_evaluation_input_value_sha256": (
+            "confirmation_evaluation_input_value_sha256"
+        ),
+        "evaluation_protocol_sha256": "evaluation_protocol_sha256",
+        "odds_source_inventory_sha256": "odds_source_inventory_sha256",
+        "source_fingerprint": "source_fingerprint",
+        "source_inventory_sha256": "source_inventory_sha256",
+        "source_inventory_artifact_sha256": (
+            "source_inventory_artifact_sha256"
+        ),
+        "environment_artifact_sha256": "environment_artifact_sha256",
+        "environment_payload_sha256": "environment_payload_sha256",
+    }
+    if any(
+        receipt.get(receipt_field) != performance.get(performance_field)
+        for receipt_field, performance_field in receipt_hash_bindings.items()
+    ):
+        raise ProductionBundleError(
+            "Production bundle portable PASS provenance differs from the manifest."
+        )
+
+    source_index = {record["source_path"]: record for record in roles.values()}
+    # `roles.values()` may repeat a multi-role record. Rebuild from the canonical
+    # file list so source lookup is complete and deterministic.
+    source_index = {record["source_path"]: record for record in records}
+    for path_field, sha_field in (
+        ("final_policy_path", "final_policy_sha256"),
+        ("confirmation_result_path", "confirmation_result_sha256"),
+        ("dataset_fights_path", "dataset_fights_sha256"),
+        ("source_dataset_fights_path", "source_dataset_fights_sha256"),
+        ("features_path", "features_sha256"),
+        ("source_features_path", "source_features_sha256"),
+        ("odds_source_inventory_path", "odds_source_inventory_sha256"),
+        ("source_inventory_path", "source_inventory_artifact_sha256"),
+        ("environment_path", "environment_artifact_sha256"),
+    ):
+        record = source_index.get(receipt.get(path_field))
+        if not isinstance(record, dict) or record.get("sha256") != receipt.get(sha_field):
+            raise ProductionBundleError(
+                f"Production bundle portable PASS is missing {path_field}."
+            )
+    for artifact in (receipt.get("artifacts") or {}).values():
+        if (
+            not isinstance(artifact, dict)
+            or not isinstance(source_index.get(artifact.get("path")), dict)
+            or source_index[artifact["path"]].get("sha256") != artifact.get("sha256")
+        ):
+            raise ProductionBundleError(
+                "Production bundle portable Track-C artifact binding is invalid."
+            )
+
+    def staged_json_for_source(source_path: str) -> dict[str, Any]:
+        record = source_index[source_path]
+        artifact = _manifest_relative_file(
+            manifest_path,
+            record["staged_path"],
+            label="portable provenance inventory",
+            release_root=release_root,
+        )
+        return _load_manifest_payload(artifact)
+
+    source_inventory = staged_json_for_source(receipt["source_inventory_path"])
+    environment = staged_json_for_source(receipt["environment_path"])
+    odds_inventory = staged_json_for_source(receipt["odds_source_inventory_path"])
+    from src.strategy.run_evaluation import _collect_runtime_code_metadata
+
+    current = _collect_runtime_code_metadata()
+    if (
+        current.get("source_fingerprint") != receipt["source_fingerprint"]
+        or current.get("source_inventory_sha256")
+        != receipt["source_inventory_sha256"]
+        or current.get("source_inventory") != source_inventory
+        or current.get("environment_payload_sha256")
+        != receipt["environment_payload_sha256"]
+        or current.get("environment") != environment
+    ):
+        raise ProductionBundleError(
+            "Current source or runtime environment differs from confirmation."
+        )
+    odds_entries = odds_inventory.get("entries")
+    if (
+        odds_inventory.get("schema_version") != 1
+        or odds_inventory.get("evaluation_protocol")
+        != confirmation_result.get("evaluation_protocol")
+        or not isinstance(odds_entries, list)
+        or not odds_entries
+        or any(
+            not isinstance(entry, dict)
+            or set(entry) != {"source_file", "resolved_path", "sha256"}
+            or not str(entry.get("source_file") or "").strip()
+            or not _is_sha256(entry.get("sha256"))
+            for entry in odds_entries
+        )
+        or len({str(entry["source_file"]) for entry in odds_entries})
+        != len(odds_entries)
+        or len({str(entry["resolved_path"]) for entry in odds_entries})
+        != len(odds_entries)
+    ):
+        raise ProductionBundleError(
+            "Portable historical odds inventory is malformed."
+        )
+    evidence_inventory_record = source_index.get(
+        confirmation_result.get("evidence_inventory_path")
+    )
+    if not isinstance(evidence_inventory_record, dict):
+        raise ProductionBundleError(
+            "Portable confirmation evidence inventory is missing."
+        )
+    evidence_inventory = staged_json_for_source(
+        confirmation_result["evidence_inventory_path"]
+    )
+    inventory_entries = evidence_inventory.get("entries")
+    if not isinstance(inventory_entries, list):
+        raise ProductionBundleError(
+            "Portable confirmation evidence inventory is malformed."
+        )
+    packaged_odds = sorted(
+        (
+            entry
+            for entry in inventory_entries
+            if isinstance(entry, dict)
+            and str(entry.get("logical_name") or "").startswith("inputs/odds/")
+        ),
+        key=lambda entry: str(entry["logical_name"]),
+    )
+    if len(packaged_odds) != len(odds_entries):
+        raise ProductionBundleError(
+            "Portable historical odds dependency count differs from confirmation."
+        )
+    for expected, packaged in zip(odds_entries, packaged_odds):
+        packaged_record = source_index.get(packaged.get("path"))
+        if (
+            not isinstance(packaged_record, dict)
+            or packaged.get("sha256") != expected.get("sha256")
+            or packaged_record.get("sha256") != expected.get("sha256")
+        ):
+            raise ProductionBundleError(
+                "Portable historical odds dependency differs from confirmation."
+            )
+    return evidence
+
+
+def _validated_confirmed_strategy(
+    payload: dict[str, Any],
+    *,
+    manifest_path: Path,
+) -> dict[str, Any] | None:
+    value = payload.get("confirmed_strategy")
+    if value is None:
+        return None
+    from src.strategy.runtime_strategy import validate_confirmed_strategy_payload
+
+    try:
+        validated = validate_confirmed_strategy_payload(value)
+    except ValueError as exc:
+        raise ProductionBundleError(
+            f"Production bundle confirmed_strategy is invalid: {exc}"
+        ) from exc
+    performance = payload.get("performance_confirmation")
+    if performance is not None:
+        if (
+            not isinstance(performance, dict)
+            or set(performance) != _PERFORMANCE_CONFIRMATION_KEYS
+            or performance.get("schema_version") != 1
+        ):
+            raise ProductionBundleError(
+                "Production bundle performance_confirmation fields are invalid."
+            )
+        text_fields = {"evaluation_spec_name", "fullfit_spec_name"}
+        if any(not str(performance.get(field) or "").strip() for field in text_fields):
+            raise ProductionBundleError(
+                "Production bundle performance_confirmation has empty spec identity."
+            )
+        if any(
+            not _is_sha256(performance.get(field))
+            for field in _PERFORMANCE_CONFIRMATION_KEYS
+            - text_fields
+            - {"schema_version"}
+        ):
+            raise ProductionBundleError(
+                "Production bundle performance_confirmation has invalid hashes."
+            )
+        scheduled = payload.get("scheduled_refit_policy")
+        registered = payload.get("registered_training_specs")
+        training = payload.get("training_input_evidence")
+        if (
+            validated["strategy_config_sha256"]
+            != performance["strategy_config_sha256"]
+            or not isinstance(scheduled, dict)
+            or scheduled.get("sha256") != performance["policy_sha256"]
+            or not isinstance(registered, dict)
+            or (registered.get("selected_evaluation") or {}).get("sha256")
+            != performance["evaluation_spec_payload_sha256"]
+            or (registered.get("selected_fullfit") or {}).get("sha256")
+            != performance["fullfit_spec_payload_sha256"]
+            or (registered.get("selected_evaluation") or {}).get("payload", {}).get(
+                "name"
+            )
+            != performance["evaluation_spec_name"]
+            or (registered.get("selected_fullfit") or {}).get("payload", {}).get(
+                "name"
+            )
+            != performance["fullfit_spec_name"]
+            or not isinstance(training, dict)
+            or training.get("final_track_c_pass_receipt_sha256")
+            != performance["final_track_c_pass_receipt_sha256"]
+            or training.get("performance_confirmation_result_sha256")
+            != performance["confirmation_result_sha256"]
+            or training.get("confirmed_strategy_config_sha256")
+            != performance["strategy_config_sha256"]
+            or training.get("source_fights_sha256")
+            != performance["dataset_fights_sha256"]
+            or training.get("confirmation_evaluation_input_value_sha256")
+            != performance["confirmation_evaluation_input_value_sha256"]
+            or training.get("feature_contract_sha256")
+            != performance["feature_contract_sha256"]
+            or training.get("confirmation_features_value_sha256")
+            != performance["features_value_sha256"]
+            or training.get("confirmation_odds_source_inventory_sha256")
+            != performance["odds_source_inventory_sha256"]
+            or training.get("confirmation_source_fingerprint")
+            != performance["source_fingerprint"]
+            or training.get("confirmation_source_inventory_sha256")
+            != performance["source_inventory_sha256"]
+            or training.get("confirmation_source_inventory_artifact_sha256")
+            != performance["source_inventory_artifact_sha256"]
+            or training.get("confirmation_environment_artifact_sha256")
+            != performance["environment_artifact_sha256"]
+            or training.get("confirmation_environment_payload_sha256")
+            != performance["environment_payload_sha256"]
+            or training.get("confirmation_evaluation_protocol_sha256")
+            != performance["evaluation_protocol_sha256"]
+        ):
+            raise ProductionBundleError(
+                "Production bundle performance confirmation is not cross-bound."
+            )
+        evidence = _validate_runtime_performance_evidence(
+            payload,
+            manifest_path=manifest_path,
+        )
+        if (
+            evidence.get("aggregate_sha256")
+            != performance["performance_evidence_aggregate_sha256"]
+        ):
+            raise ProductionBundleError(
+                "Production bundle performance evidence hash is not cross-bound."
+            )
+    return validated
 
 
 def _manifest_relative_file(
@@ -990,6 +1446,10 @@ def load_production_bundle(manifest_path: str | Path | None = None) -> Productio
         raise ProductionBundleError(f"Production bundle manifest not found: {path}")
     payload = _load_manifest_payload(path)
     _validate_rich_manifest_shape(payload, label="Production bundle")
+    confirmed_strategy = _validated_confirmed_strategy(
+        payload,
+        manifest_path=path,
+    )
 
     # Legacy manifests have only git_sha.  Historically that value meant the
     # training source in CI-authored manifests and the deployed commit after
@@ -1028,6 +1488,7 @@ def load_production_bundle(manifest_path: str | Path | None = None) -> Productio
         model_sha256=_optional_string(payload, "model_sha256"),
         no_odds_model_sha256=_optional_string(payload, "no_odds_model_sha256"),
         logistic_model_sha256=_optional_string(payload, "logistic_model_sha256"),
+        confirmed_strategy=confirmed_strategy,
     )
 
 
@@ -1263,6 +1724,16 @@ def _registered_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # contract registered in source. They must still match the saved sidecar.
     normalized.pop("git_hash", None)
     normalized.pop("trained_at", None)
+    # Legacy named contracts deferred the odds-noise seed to the booster seed,
+    # while their saved artifacts recorded the resolved value. Compare the
+    # effective contract consistently with staged-bundle validation.
+    if "odds_noise_seed" in normalized and normalized.get("odds_noise_seed") is None:
+        xgb_params = normalized.get("xgb_params")
+        if not isinstance(xgb_params, dict) or xgb_params.get("random_state") is None:
+            raise ProductionBundleError(
+                "A deferred odds_noise_seed requires an explicit XGBoost random_state."
+            )
+        normalized["odds_noise_seed"] = int(xgb_params["random_state"])
     return normalized
 
 
@@ -1802,6 +2273,10 @@ def validate_production_bundle(
         label="Production bundle",
     )
     scheduled_refit_policy = _validated_scheduled_refit_policy(manifest_payload)
+    confirmed_strategy = _validated_confirmed_strategy(
+        manifest_payload,
+        manifest_path=bundle.manifest_path,
+    )
     if rich_manifest:
         if bundle.logistic_model_path is None or actual_logistic_sha256 is None:
             raise ProductionBundleError(
@@ -1966,6 +2441,7 @@ def validate_production_bundle(
         },
         "rich_manifest_validated": rich_manifest,
         "scheduled_refit_policy": scheduled_refit_policy,
+        "confirmed_strategy": confirmed_strategy,
         "staging_schema_version": (
             _optional_int(manifest_payload, "staging_schema_version")
             if rich_manifest

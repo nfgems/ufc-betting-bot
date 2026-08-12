@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "decision_phase": "pre_model_metrics",
+  "model_metrics_consulted": false,
+  "campaign_cutoff_exclusive": "2026-03-07",
+  "reference_date": "2026-08-01",
+  "recent_window_start": "2026-06-03",
+  "recent_window_days": 60,
+  "recent_established_rows": 70,
+  "complete_method_rows": 1,
+  "complete_method_coverage": 0.014285714286,
+  "latest_complete_method_event_date": "2026-06-14",
+  "method_data_lag_days": 48,
+  "gate_thresholds": {
+    "minimum_recent_established_rows": 50,
+    "minimum_complete_method_coverage": 0.7,
+    "maximum_method_data_lag_days": 35
+  },
+  "criteria": {
+    "minimum_recent_established_rows": true,
+    "minimum_complete_method_coverage": false,
+    "maximum_method_data_lag": false
+  },
+  "data_gate_passed": false,
+  "gate_passed": false,
+  "recovery_complete": true,
+  "all_targets_terminal": true,
+  "all_targets_recovery_complete": true,
+  "passes_completed": [
+    "revalidate",
+    "direct",
+    "playwright",
+    "wayback"
+  ],
+  "targets_total": 241,
+  "targets_terminal": 241,
+  "targets_recovery_complete": 241,
+  "precondition_failures": 0,
+  "attempt_ledger_failures": 0,
+  "selected_evaluation_contract": "full_live_contract_v6_integrity_205",
+  "selected_spec_name": "full_live_contract_v6_integrity_205",
+  "selected_fullfit_contract": "full_live_contract_v6_integrity_205_fullfit",
+  "selected_feature_count": 205,
+  "selected_removed_features": [
+    "a_dec_odds_prob",
+    "a_ko_odds_prob",
+    "a_sub_odds_prob",
+    "b_dec_odds_prob",
+    "b_ko_odds_prob",
+    "b_sub_odds_prob"
+  ],
+  "fallback_exact_removed_features": [
+    "a_dec_odds_prob",
+    "a_ko_odds_prob",
+    "a_sub_odds_prob",
+    "b_dec_odds_prob",
+    "b_ko_odds_prob",
+    "b_sub_odds_prob"
+  ],
+  "odds_noise": {
+    "mode": "antithetic",
+    "std": 0.06,
+    "seed": 42
+  },
+  "decision_input_sha256": "ba52f85bd7c4f47f2e595cd907e855c84a7c82905adccd7360660842e960f0a7",
+  "terminal_report_sha256": "2303dc08f41c380013501c8764779c8ef3b14264605f1dfd7ace9e128da18621",
+  "decision_sha256": "3748908d9510b5577eab1c9f25084406aec12e3f7124c5a33221a88e403e1638",
+  "terminal_report_path": "evidence/method_odds/integrity_v2_campaign/method_odds_recovery_terminal.csv"
+}

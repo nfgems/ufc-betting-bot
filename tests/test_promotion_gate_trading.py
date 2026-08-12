@@ -60,22 +60,37 @@ def test_trader_c_audit_fails_trading_bar(gate):
 
 def test_trading_bar_passes_clean_sweep(gate):
     """Verify that a clean sweep with better ROI and acceptable drawdown passes."""
-    s_bets = [{"trader": "S", "bet_size": 10.0, "won": 1, "market_prob": 0.5, "model_prob": 0.6, "decimal_odds": 2.0}] * 50
-    
-    log = pd.DataFrame(s_bets)
+    dates = pd.date_range("2024-01-06", periods=20, freq="7D")
+    candidate_log = pd.DataFrame(
+        [
+            {
+                "event_date": event_date,
+                "trader": "S",
+                "bet_size": 10.0,
+                "profit": 0.7,
+                "edge": 0.07,
+                "won": 1,
+                "market_prob": 0.5,
+                "model_prob": 0.6,
+                "decimal_odds": 2.0,
+            }
+            for event_date in dates
+        ]
+    )
+    baseline_log = candidate_log.assign(profit=0.5, edge=0.05)
     
     baseline_sweep = {
         "roi": 0.05,
         "total_profit": 50.0,
         "max_drawdown": 0.10,
-        "bet_log": log,
+        "bet_log": baseline_log,
         "avg_clv": 0.01
     }
     candidate_sweep = {
         "roi": 0.07, # Better ROI
         "total_profit": 70.0, # Better profit
         "max_drawdown": 0.09, # Acceptable drawdown
-        "bet_log": log,
+        "bet_log": candidate_log,
         "avg_clv": 0.02 # Better CLV
     }
     

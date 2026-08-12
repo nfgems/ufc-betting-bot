@@ -142,3 +142,37 @@ def test_cmd_duo_live_returns_early_when_real_guard_blocks(monkeypatch):
 
     assert result == {"status": "error", "reason": "blocked by live guard"}
     assert messages == ["blocked by live guard"]
+
+
+def test_real_cmd_duo_live_refuses_unconfirmed_strategy_before_clob_actions(monkeypatch):
+    monkeypatch.setattr(bot, "assert_real_trading_allowed", lambda **_kwargs: None)
+    monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args: None)
+    monkeypatch.setattr(bot, "_resolve_runtime_bundle_summary", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "src.model.train.load_model",
+        lambda _name: {"feature_cols": [], "feature_importance": {}},
+    )
+    monkeypatch.setattr(
+        "src.polymarket.client.ClobClientWrapper",
+        lambda: (_ for _ in ()).throw(AssertionError("CLOB must not be initialized")),
+    )
+    monkeypatch.setattr(
+        "src.strategy.duo_trader.ensure_legacy_g_orders_retired",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("orders must not be touched")
+        ),
+    )
+
+    result = bot.cmd_duo_live(
+        types.SimpleNamespace(
+            dry_run=False,
+            real=True,
+            model="xgboost",
+            min_edge=0.02,
+        )
+    )
+
+    assert result["status"] == "error"
+    assert result["total_orders"] == 0
+    assert "final-v2 confirmed strategy" in result["reason"]

@@ -1,11 +1,15 @@
 name: Weekly Model Retrain
 
-# Schedule-only production wrapper. Keep this workflow disabled until the
-# production environment, Railway token, dedicated SSH key, read-only access
-# check, and first manual dry run are approved.
+# Fail-closed manual dry-run wrapper. A production schedule and activation must
+# be added only after the final confirmed package is explicitly authorized.
 on:
-  schedule:
-    - cron: '0 6 * * 2'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Required safety acknowledgement; production activation is disabled
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -17,7 +21,8 @@ concurrency:
 
 jobs:
   refit:
+    if: inputs.dry_run == true
     uses: ./.github/workflows/weekly-model-refit-core.yml
     with:
-      activate_production: true
+      activate_production: false
       force_refit: false

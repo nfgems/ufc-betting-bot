@@ -12,5 +12,5 @@ def test_railway_deployment_waits_for_runtime_readiness() -> None:
     deploy = config["deploy"]
 
     assert deploy["healthcheckPath"] == "/readyz"
-    assert deploy["healthcheckTimeout"] == 300
+    assert deploy["healthcheckTimeout"] == 600
     assert "healthcheck" not in deploy

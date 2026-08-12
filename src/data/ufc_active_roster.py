@@ -18,7 +18,13 @@ from bs4 import BeautifulSoup
 
 from src.config import RAW_DATA_DIR
 from src.data.io_utils import write_csv_atomically
-from src.data.name_utils import normalize_cross_source_name, same_person_name
+from src.data.name_utils import (
+    CURRENT_UFCSTATS_ID_OVERRIDES,
+    normalize_cross_source_name,
+    normalize_person_name,
+    normalize_ufcstats_id,
+    same_person_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1596,6 +1602,31 @@ def _resolve_local_ufcstats_profile(
         for candidate in candidates.get(key, []):
             match_pool[candidate["fighter_url"]] = candidate
 
+    override_id = CURRENT_UFCSTATS_ID_OVERRIDES.get(
+        normalize_person_name(row.get("official_name"))
+    )
+    if override_id:
+        override_matches = [
+            candidate
+            for candidate in match_pool.values()
+            if normalize_ufcstats_id(candidate.get("fighter_url")) == override_id
+        ]
+        if len(override_matches) == 1:
+            candidate = override_matches[0]
+            return {
+                "ufcstats_name": candidate["name"],
+                "ufcstats_url": candidate["fighter_url"],
+                "ufcstats_resolution": "reviewed_current_identity",
+            }
+        # The reviewed current-roster slug is stronger evidence than a stale
+        # name-only local candidate and is already sufficient to form the
+        # canonical UFCStats profile URL.
+        return {
+            "ufcstats_name": _clean_text(row.get("official_name")),
+            "ufcstats_url": f"http://ufcstats.com/fighter-details/{override_id}",
+            "ufcstats_resolution": "reviewed_current_identity",
+        }
+
     if len(match_pool) == 1:
         candidate = next(iter(match_pool.values()))
         return {
@@ -1649,7 +1680,12 @@ def _resolve_via_live_search(
         if not key or key in seen_queries:
             continue
         seen_queries.add(key)
-        fighter_url = search_fighter_url(query_text)
+        fighter_url = search_fighter_url(
+            query_text,
+            fighter_id=CURRENT_UFCSTATS_ID_OVERRIDES.get(
+                normalize_person_name(row.get("official_name"))
+            ),
+        )
         if not fighter_url:
             continue
         try:

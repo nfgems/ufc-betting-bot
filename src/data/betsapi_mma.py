@@ -222,6 +222,117 @@ def _merge_on_fight_key_with_previous_day_fallback(
     return left_df.merge(lookup, on="fight_key", how="left")
 
 
+_BETSAPI_SOURCE_FIGHTER_A = "_betsapi_source_fighter_a"
+_BETSAPI_SOURCE_FIGHTER_B = "_betsapi_source_fighter_b"
+_BETSAPI_SIGNED_ORIENTATION_COLUMNS = frozenset(
+    {
+        "betsapi_hist_diff_opening_implied_prob",
+        "betsapi_hist_moneyline_total_agreement",
+        "betsapi_hist_handicap_direction",
+        "betsapi_diff_implied_prob",
+        "betsapi_hist_m162_2_opening_handicap",
+        "betsapi_hist_m162_2_end_handicap",
+    }
+)
+
+
+def _betsapi_side_pairs(columns: list[str]) -> list[tuple[str, str]]:
+    """Return the small set of home/away feature pairs that need orientation."""
+    column_set = set(columns)
+    pairs: set[tuple[str, str]] = set()
+    for column in columns:
+        candidates = []
+        if "_a_" in column:
+            candidates.append(column.replace("_a_", "_b_"))
+        if column.endswith("_a"):
+            candidates.append(f"{column[:-2]}_b")
+        if "_home_" in column:
+            candidates.append(column.replace("_home_", "_away_"))
+        if column.endswith("_home"):
+            candidates.append(f"{column[:-5]}_away")
+        for other in candidates:
+            if other in column_set:
+                pairs.add((column, other))
+    return sorted(pairs)
+
+
+def _merge_betsapi_with_orientation(
+    left_df: pd.DataFrame,
+    right_df: pd.DataFrame,
+    *,
+    signal_cols: Optional[list[str]] = None,
+    retain_source_identities: bool = False,
+) -> pd.DataFrame:
+    """Merge unordered fight keys while orienting every side-specific signal.
+
+    BetsAPI stores the source matchup as home/away.  A sorted ``fight_key`` is
+    useful for finding a candidate row, but is not evidence that its sides line
+    up with the training row.  Require both source identities, swap paired
+    values (and negate signed A-minus-B values) on reversal, and clear an
+    unmatched candidate instead of silently assigning it to the wrong fighter.
+    """
+    merged = _merge_on_fight_key_with_previous_day_fallback(
+        left_df,
+        right_df,
+        signal_cols=signal_cols,
+    )
+    if _BETSAPI_SOURCE_FIGHTER_A not in merged or _BETSAPI_SOURCE_FIGHTER_B not in merged:
+        # Older/malformed experimental artifacts lack the evidence needed to
+        # orient side-specific fields.  Fail closed without blocking base data.
+        right_columns = [
+            column
+            for column in right_df.columns
+            if column not in {"fight_key", _BETSAPI_SOURCE_FIGHTER_A, _BETSAPI_SOURCE_FIGHTER_B}
+            and column in merged.columns
+        ]
+        if right_columns:
+            merged.loc[:, right_columns] = np.nan
+        return merged
+
+    left_a = merged.get("fighter_a", pd.Series("", index=merged.index)).map(normalize_mma_text)
+    left_b = merged.get("fighter_b", pd.Series("", index=merged.index)).map(normalize_mma_text)
+    source_a = merged[_BETSAPI_SOURCE_FIGHTER_A].map(normalize_mma_text)
+    source_b = merged[_BETSAPI_SOURCE_FIGHTER_B].map(normalize_mma_text)
+    identities_present = source_a.astype(bool) & source_b.astype(bool)
+    direct = identities_present & left_a.eq(source_a) & left_b.eq(source_b)
+    reversed_orientation = identities_present & left_a.eq(source_b) & left_b.eq(source_a)
+    valid = direct | reversed_orientation
+
+    oriented_columns = [
+        column
+        for column in right_df.columns
+        if column not in {"fight_key", _BETSAPI_SOURCE_FIGHTER_A, _BETSAPI_SOURCE_FIGHTER_B}
+        and column in merged.columns
+    ]
+    for left_column, right_column in _betsapi_side_pairs(oriented_columns):
+        left_values = merged.loc[reversed_orientation, left_column].copy()
+        merged.loc[reversed_orientation, left_column] = merged.loc[
+            reversed_orientation, right_column
+        ].to_numpy()
+        merged.loc[reversed_orientation, right_column] = left_values.to_numpy()
+    for column in _BETSAPI_SIGNED_ORIENTATION_COLUMNS.intersection(oriented_columns):
+        merged.loc[reversed_orientation, column] = -pd.to_numeric(
+            merged.loc[reversed_orientation, column], errors="coerce"
+        )
+
+    if oriented_columns:
+        merged.loc[~valid, oriented_columns] = np.nan
+    orientation = pd.Series(pd.NA, index=merged.index, dtype="object")
+    orientation.loc[direct] = "direct"
+    orientation.loc[reversed_orientation] = "reversed"
+    merged["_betsapi_orientation"] = orientation
+    if not retain_source_identities:
+        merged = merged.drop(
+            columns=[
+                _BETSAPI_SOURCE_FIGHTER_A,
+                _BETSAPI_SOURCE_FIGHTER_B,
+                "_betsapi_orientation",
+            ],
+            errors="ignore",
+        )
+    return merged
+
+
 def _response_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     rows = payload.get("results", [])
     return rows if isinstance(rows, list) else []
@@ -339,8 +450,9 @@ class BetsApiMMAClient:
                 response.raise_for_status()
                 payload = response.json()
                 if int(payload.get("success", 0)) != 1:
-                    error = payload.get("error_detail") or payload.get("error") or "unknown error"
-                    raise RuntimeError(f"BetsAPI request failed for {endpoint}: {error}")
+                    raise RuntimeError(
+                        f"BetsAPI request failed for {endpoint}: unsuccessful API response"
+                    )
                 return payload
             except requests.RequestException as exc:
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
@@ -358,7 +470,14 @@ class BetsApiMMAClient:
                     )
                     time.sleep(wait_seconds)
                     continue
-                raise
+                safe_reason = (
+                    f"HTTP {status_code}"
+                    if status_code is not None
+                    else type(exc).__name__
+                )
+                raise RuntimeError(
+                    f"BetsAPI request failed for {endpoint}: {safe_reason}"
+                ) from None
 
         raise RuntimeError(f"BetsAPI request failed for {endpoint}: exhausted retries")
 
@@ -1104,6 +1223,8 @@ def _historical_summary_features(event_snapshots: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "fight_key": snapshots["fight_key"],
+            _BETSAPI_SOURCE_FIGHTER_A: snapshots["fighter_a"],
+            _BETSAPI_SOURCE_FIGHTER_B: snapshots["fighter_b"],
             "betsapi_hist_opening_a_implied_prob": snapshots["opening_home_implied_prob_avg"],
             "betsapi_hist_opening_b_implied_prob": snapshots["opening_away_implied_prob_avg"],
             "betsapi_hist_diff_opening_implied_prob": (
@@ -1123,7 +1244,14 @@ def _historical_summary_market_features(
     if event_snapshots.empty or summary_rows.empty:
         return pd.DataFrame(columns=["fight_key"])
 
-    base = event_snapshots[["event_id", "fight_key"]].drop_duplicates(subset=["event_id"]).copy()
+    base = event_snapshots[
+        ["event_id", "fight_key", "fighter_a", "fighter_b"]
+    ].drop_duplicates(subset=["event_id"]).rename(
+        columns={
+            "fighter_a": _BETSAPI_SOURCE_FIGHTER_A,
+            "fighter_b": _BETSAPI_SOURCE_FIGHTER_B,
+        }
+    ).copy()
     summary_rows = summary_rows.copy()
     summary_rows["event_id"] = summary_rows["event_id"].astype(str)
     base["event_id"] = base["event_id"].astype(str)
@@ -1217,6 +1345,8 @@ def _historical_expanded_features(
     """
     EXPANDED_COLUMNS = [
         "fight_key",
+        _BETSAPI_SOURCE_FIGHTER_A,
+        _BETSAPI_SOURCE_FIGHTER_B,
         "betsapi_hist_bookmaker_count",
         "betsapi_hist_overround",
         "betsapi_hist_prob_move_open_close_a",
@@ -1437,6 +1567,15 @@ def _historical_expanded_features(
         )
 
     per_event["fight_key"] = per_event["event_id"].map(eid_to_fk)
+    identity_rows = snapshots[
+        ["event_id", "fighter_a", "fighter_b"]
+    ].drop_duplicates(subset=["event_id"]).set_index("event_id")
+    per_event[_BETSAPI_SOURCE_FIGHTER_A] = per_event["event_id"].map(
+        identity_rows["fighter_a"]
+    )
+    per_event[_BETSAPI_SOURCE_FIGHTER_B] = per_event["event_id"].map(
+        identity_rows["fighter_b"]
+    )
     per_event = per_event.dropna(subset=["fight_key"])
 
     return per_event[[c for c in EXPANDED_COLUMNS if c in per_event.columns]].copy()
@@ -2107,6 +2246,9 @@ def join_betsapi_events_to_fights(
             betsapi_event_id=pd.NA,
             betsapi_fi=pd.NA,
             betsapi_league_name=pd.NA,
+            betsapi_home_fighter=pd.NA,
+            betsapi_away_fighter=pd.NA,
+            betsapi_orientation=pd.NA,
         )
         return empty
 
@@ -2120,9 +2262,19 @@ def join_betsapi_events_to_fights(
         events.sort_values("snapshot_time_utc")
         .groupby("fight_key", dropna=False)
         .tail(1)
-        [["fight_key", "event_id", "fi", "league_name", "scheduled_start_utc"]]
+        [[
+            "fight_key",
+            "fighter_a",
+            "fighter_b",
+            "event_id",
+            "fi",
+            "league_name",
+            "scheduled_start_utc",
+        ]]
         .rename(
             columns={
+                "fighter_a": _BETSAPI_SOURCE_FIGHTER_A,
+                "fighter_b": _BETSAPI_SOURCE_FIGHTER_B,
                 "event_id": "betsapi_event_id",
                 "fi": "betsapi_fi",
                 "league_name": "betsapi_league_name",
@@ -2157,14 +2309,22 @@ def join_betsapi_events_to_fights(
             ).drop(columns=["event_id"])
             merge_signal_cols = list(rename_map.values())
 
-    joined = _merge_on_fight_key_with_previous_day_fallback(
+    joined = _merge_betsapi_with_orientation(
         fights,
         event_latest,
         signal_cols=merge_signal_cols,
+        retain_source_identities=True,
     )
     if merge_signal_cols:
         joined = joined.drop(columns=merge_signal_cols, errors="ignore")
     joined["betsapi_match_found"] = joined["betsapi_event_id"].notna()
+    joined = joined.rename(
+        columns={
+            _BETSAPI_SOURCE_FIGHTER_A: "betsapi_home_fighter",
+            _BETSAPI_SOURCE_FIGHTER_B: "betsapi_away_fighter",
+            "_betsapi_orientation": "betsapi_orientation",
+        }
+    )
 
     if save_artifacts:
         joined[joined["betsapi_match_found"]].to_csv(JOIN_AUDIT_DIR / "matched_fights.csv", index=False)
@@ -2260,6 +2420,12 @@ def _moneyline_snapshot_features(events_df: pd.DataFrame, market_rows: pd.DataFr
         return pd.DataFrame()
 
     grouped_rows: list[dict[str, object]] = []
+    identity_by_fight_key = (
+        event_lookup.sort_values("snapshot_time_utc")
+        .drop_duplicates(subset=["fight_key"], keep="last")
+        .set_index("fight_key")[["fighter_a", "fighter_b"]]
+        .to_dict(orient="index")
+    )
     for fight_key, group in snapshots.groupby("fight_key", dropna=False):
         latest = group.tail(1).iloc[0]
         first = group.head(1).iloc[0]
@@ -2275,6 +2441,12 @@ def _moneyline_snapshot_features(events_df: pd.DataFrame, market_rows: pd.DataFr
         grouped_rows.append(
             {
                 "fight_key": fight_key,
+                _BETSAPI_SOURCE_FIGHTER_A: identity_by_fight_key.get(fight_key, {}).get(
+                    "fighter_a"
+                ),
+                _BETSAPI_SOURCE_FIGHTER_B: identity_by_fight_key.get(fight_key, {}).get(
+                    "fighter_b"
+                ),
                 "betsapi_snapshot_count": int(len(group)),
                 "betsapi_a_implied_prob": a_last,
                 "betsapi_b_implied_prob": b_last,
@@ -2334,7 +2506,7 @@ def augment_features_with_betsapi_mma(
     )
 
     if not historical_features.empty:
-        augmented = _merge_on_fight_key_with_previous_day_fallback(
+        augmented = _merge_betsapi_with_orientation(
             augmented,
             historical_features,
             signal_cols=[
@@ -2355,7 +2527,7 @@ def augment_features_with_betsapi_mma(
                 augmented[column] = np.nan
 
     if not historical_market_features.empty:
-        augmented = _merge_on_fight_key_with_previous_day_fallback(
+        augmented = _merge_betsapi_with_orientation(
             augmented,
             historical_market_features,
             signal_cols=[
@@ -2365,7 +2537,7 @@ def augment_features_with_betsapi_mma(
         )
 
     if not historical_expanded_features.empty:
-        augmented = _merge_on_fight_key_with_previous_day_fallback(
+        augmented = _merge_betsapi_with_orientation(
             augmented,
             historical_expanded_features,
             signal_cols=[
@@ -2375,7 +2547,7 @@ def augment_features_with_betsapi_mma(
         )
 
     if not moneyline_features.empty:
-        augmented = _merge_on_fight_key_with_previous_day_fallback(
+        augmented = _merge_betsapi_with_orientation(
             augmented,
             moneyline_features,
             signal_cols=[
@@ -2454,6 +2626,9 @@ def augment_features_with_betsapi_mma(
         "betsapi_fi",
         "betsapi_league_name",
         "betsapi_scheduled_start_utc",
+        "betsapi_home_fighter",
+        "betsapi_away_fighter",
+        "betsapi_orientation",
     ]:
         if column in joined.columns:
             augmented[column] = joined[column].to_numpy()
@@ -2464,6 +2639,9 @@ def augment_features_with_betsapi_mma(
         "betsapi_fi",
         "betsapi_league_name",
         "betsapi_scheduled_start_utc",
+        "betsapi_home_fighter",
+        "betsapi_away_fighter",
+        "betsapi_orientation",
     }
     for column in [col for col in augmented.columns if col.startswith("betsapi_") and col not in numeric_exclusions]:
         augmented[column] = pd.to_numeric(augmented[column], errors="coerce")

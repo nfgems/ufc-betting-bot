@@ -231,6 +231,7 @@ def test_quality_gate_rejects_summary_bet_log_mismatch(tmp_path: Path) -> None:
 def test_quality_cli_exit_codes_and_reports(tmp_path: Path) -> None:
     policy, features, artifacts, summary = _quality_fixture(tmp_path)
     report = tmp_path / "unhealthy.json"
+    receipt = tmp_path / "unhealthy-receipt.json"
     summary["model_brier_score"] = 0.5
     pd.DataFrame([summary]).to_csv(artifacts / "track_c_summary.csv", index=False)
 
@@ -244,11 +245,17 @@ def test_quality_cli_exit_codes_and_reports(tmp_path: Path) -> None:
             str(artifacts),
             "--report",
             str(report),
+            "--pass-receipt",
+            str(receipt),
         ]
     ) == 1
     assert json.loads(report.read_text(encoding="utf-8"))["status"] == "UNHEALTHY"
+    unhealthy_receipt = json.loads(receipt.read_text(encoding="utf-8"))
+    assert unhealthy_receipt["status"] == "FAIL"
+    assert unhealthy_receipt["healthy"] is False
 
     error_report = tmp_path / "error.json"
+    error_receipt = tmp_path / "error-receipt.json"
     assert quality.main(
         [
             "--policy",
@@ -259,6 +266,144 @@ def test_quality_cli_exit_codes_and_reports(tmp_path: Path) -> None:
             str(artifacts),
             "--report",
             str(error_report),
+            "--pass-receipt",
+            str(error_receipt),
         ]
     ) == 2
     assert json.loads(error_report.read_text(encoding="utf-8"))["status"] == "ERROR"
+    invalidated_receipt = json.loads(error_receipt.read_text(encoding="utf-8"))
+    assert invalidated_receipt["status"] == "ERROR"
+    assert invalidated_receipt["healthy"] is False
+
+
+def test_final_track_c_receipt_builder_rejects_unhealthy_result() -> None:
+    with pytest.raises(
+        quality.QualityInputError,
+        match="cannot issue a final Track-C PASS receipt for an unhealthy run",
+    ):
+        quality.build_final_track_c_pass_receipt(
+            policy_path=POLICY_PATH,
+            features_path=Path("unused.csv"),
+            artifacts_dir=Path("unused"),
+            quality_result={"errors": ["failed health gate"]},
+        )
+
+
+def test_final_track_c_receipt_builder_rejects_non_final_policy() -> None:
+    with pytest.raises(
+        quality.QualityInputError,
+        match="requires final_track_c_bound policy state",
+    ):
+        quality.build_final_track_c_pass_receipt(
+            policy_path=POLICY_PATH,
+            features_path=Path("unused.csv"),
+            artifacts_dir=Path("unused"),
+            quality_result={"errors": []},
+        )
+
+
+def test_final_track_c_receipt_carries_exact_confirmation_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(quality, "REPO_ROOT", tmp_path)
+    policy_path = tmp_path / "config" / "scheduled_refit_policy_v2.json"
+    policy_path.parent.mkdir(parents=True)
+    policy_path.write_text("{}", encoding="utf-8")
+    evidence = tmp_path / "evidence" / "final"
+    evidence.mkdir(parents=True)
+    features = evidence / "features.csv"
+    features.write_text("event_date,x\n2026-01-01,1\n", encoding="utf-8")
+    fights = evidence / "fights.csv"
+    fights.write_text("event_date\n2026-01-01\n", encoding="utf-8")
+    provenance_files = {}
+    for name in ("source_features.csv", "odds.json", "source.json", "environment.json"):
+        path = evidence / name
+        path.write_text("{}" if path.suffix == ".json" else "x\n1\n", encoding="utf-8")
+        provenance_files[name] = path
+    spec_name = "confirmed_eval"
+    artifact_names = {
+        "summary": "track_c_summary.csv",
+        "evaluation_index": f"{spec_name}_evaluation_index.csv",
+        "data_quality": f"{spec_name}_data_quality.csv",
+        "predictive": f"{spec_name}_predictive.json",
+        "production_bets": f"{spec_name}_production_gated_bets.csv",
+    }
+    for filename in artifact_names.values():
+        (evidence / filename).write_text("proof\n", encoding="utf-8")
+    hashes = {str(index): f"{index:x}" * 64 for index in range(1, 10)}
+    confirmation = {
+        "state": "final_track_c_bound",
+        "confirmation_result_path": "evidence/final/result.json",
+        "confirmation_result_sha256": hashes["1"],
+        "strategy_config_sha256": hashes["2"],
+    }
+    policy = {
+        "contract": {
+            "evaluation_spec_name": spec_name,
+            "evaluation_spec_payload_sha256": hashes["3"],
+        },
+        "baseline": {
+            "scheduled_protocol_sha256": hashes["4"],
+            "evaluation_sample_sha256": hashes["5"],
+        },
+        "performance_confirmation": confirmation,
+    }
+    binding = {
+        "dataset_fights_path": "evidence/final/fights.csv",
+        "dataset_fights_sha256": contract_gate.file_sha256(fights),
+        "source_dataset_fights_path": "evidence/final/fights.csv",
+        "source_dataset_fights_sha256": contract_gate.file_sha256(fights),
+        "features_artifact_path": "evidence/final/features.csv",
+        "features_artifact_sha256": contract_gate.file_sha256(features),
+        "features_value_sha256": hashes["6"],
+        "source_features_path": "evidence/final/source_features.csv",
+        "source_features_sha256": contract_gate.file_sha256(
+            provenance_files["source_features.csv"]
+        ),
+        "feature_contract_count": 205,
+        "feature_contract_sha256": hashes["7"],
+        "confirmation_evaluation_input_value_sha256": hashes["8"],
+        "odds_source_inventory_path": "evidence/final/odds.json",
+        "odds_source_inventory_sha256": contract_gate.file_sha256(
+            provenance_files["odds.json"]
+        ),
+        "source_fingerprint": hashes["9"],
+        "source_inventory_path": "evidence/final/source.json",
+        "source_inventory_sha256": hashes["1"],
+        "source_inventory_artifact_sha256": contract_gate.file_sha256(
+            provenance_files["source.json"]
+        ),
+        "environment_path": "evidence/final/environment.json",
+        "environment_artifact_sha256": contract_gate.file_sha256(
+            provenance_files["environment.json"]
+        ),
+        "environment_payload_sha256": hashes["2"],
+        "evaluation_protocol_sha256": hashes["3"],
+    }
+    monkeypatch.setattr(contract_gate, "load_policy", lambda _path: policy)
+    monkeypatch.setattr(
+        contract_gate,
+        "validate_performance_confirmation",
+        lambda _policy: ([], binding),
+    )
+    quality_result = {"errors": [], "metrics": {"healthy": True}, "derived_limits": {}}
+
+    receipt = quality.build_final_track_c_pass_receipt(
+        policy_path=policy_path,
+        features_path=features,
+        artifacts_dir=evidence,
+        quality_result=quality_result,
+    )
+
+    assert receipt["features_value_sha256"] == binding["features_value_sha256"]
+    assert receipt["odds_source_inventory_sha256"] == binding[
+        "odds_source_inventory_sha256"
+    ]
+    assert receipt["source_fingerprint"] == binding["source_fingerprint"]
+    assert receipt["source_inventory_artifact_sha256"] == binding[
+        "source_inventory_artifact_sha256"
+    ]
+    assert receipt["environment_payload_sha256"] == binding[
+        "environment_payload_sha256"
+    ]

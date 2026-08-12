@@ -70,7 +70,11 @@ from src.features.build_features import (
     get_feature_columns_no_odds,
     build_features,
 )
-from src.strategy.model_lab import _predict_batch_with_model
+from src.strategy.model_lab import (
+    DEFAULT_CONFIRMATION_FOLD_COUNT,
+    _predict_batch_with_model,
+    _walk_forward_fold_windows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +86,54 @@ TRADER_B_SHARE = 0.40
 
 LAB_DIR = LOGS_DIR / "model_lab"
 LAB_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _preflight_selection_manifest(
+    fold_manifest: list[tuple[int, pd.DataFrame]],
+) -> str:
+    from src.strategy.run_evaluation import _preflight_selection_fold_manifest
+
+    return _preflight_selection_fold_manifest(
+        fold_manifest,
+        confirmation_fold_count=DEFAULT_CONFIRMATION_FOLD_COUNT,
+    )
+
+
+def _selection_fold_windows(
+    features_df: pd.DataFrame,
+    *,
+    initial_train_years: int,
+    retrain_months: int,
+    bet_start_date: str,
+) -> list[tuple[int, pd.Timestamp, pd.Timestamp, np.ndarray, np.ndarray]]:
+    dates = pd.to_datetime(features_df["event_date"])
+    fold_windows = _walk_forward_fold_windows(
+        dates,
+        initial_train_years=initial_train_years,
+        retrain_months=retrain_months,
+        bet_start_date=bet_start_date,
+    )
+    if len(fold_windows) <= DEFAULT_CONFIRMATION_FOLD_COUNT:
+        raise ValueError(
+            "triple-trader backtest requires at least one selection fold plus "
+            f"{DEFAULT_CONFIRMATION_FOLD_COUNT} confirmation folds"
+        )
+    identity_columns = ["event_date", "fighter_a", "fighter_b"]
+    missing_identity_columns = [
+        column for column in identity_columns if column not in features_df.columns
+    ]
+    if missing_identity_columns:
+        raise ValueError(
+            "triple-trader selection manifest is missing columns: "
+            f"{missing_identity_columns}"
+        )
+    fold_manifest = []
+    for fold_num, _train_end, _test_end, _train_idx, test_idx in fold_windows:
+        manifest = features_df.iloc[test_idx][identity_columns].copy()
+        manifest["fold"] = fold_num
+        fold_manifest.append((fold_num, manifest))
+    _preflight_selection_manifest(fold_manifest)
+    return fold_windows[:-DEFAULT_CONFIRMATION_FOLD_COUNT]
 
 
 # ======================================================================
@@ -148,7 +200,7 @@ def _generate_walk_forward_predictions(
     bet_start_date: str = TRAIN_CUTOFF_DATE,
 ) -> list[tuple[int, pd.DataFrame]]:
     """
-    Train models via walk-forward and generate predictions for all folds.
+    Train models via walk-forward on selection folds only.
 
     Returns a list of (fold_num, predictions_df) tuples. Each predictions_df
     contains model predictions, market odds, no-odds predictions, and metadata
@@ -181,36 +233,18 @@ def _generate_walk_forward_predictions(
             (features_df["a_num_fights"] >= 2) & (features_df["b_num_fights"] >= 2)
         ]
 
-    dates = pd.to_datetime(features_df["event_date"])
-    min_date = dates.min()
-    max_date = dates.max()
-    train_end = min_date + pd.DateOffset(years=initial_train_years)
-
     variant = ALL_VARIANTS["baseline"]()
-    bet_start = pd.Timestamp(bet_start_date)
+    selection_windows = _selection_fold_windows(
+        features_df,
+        initial_train_years=initial_train_years,
+        retrain_months=retrain_months,
+        bet_start_date=bet_start_date,
+    )
 
     fold_predictions = []
-    fold_num = 0
-
-    while train_end < max_date:
-        test_end = train_end + pd.DateOffset(months=retrain_months)
-        if test_end > max_date:
-            test_end = max_date + pd.Timedelta(days=1)
-
-        if pd.Timestamp(test_end) <= bet_start:
-            train_end = test_end
-            continue
-
-        train_mask = dates < train_end
-        test_mask = (dates >= train_end) & (dates < test_end)
-        train_df = features_df[train_mask]
-        test_df = features_df[test_mask]
-
-        if len(train_df) < 100 or len(test_df) < 5:
-            train_end = test_end
-            continue
-
-        fold_num += 1
+    for fold_num, train_end, test_end, train_idx, test_idx in selection_windows:
+        train_df = features_df.iloc[train_idx]
+        test_df = features_df.iloc[test_idx]
         logger.info(
             f"Fold {fold_num}: Train {len(train_df)}, Test {len(test_df)} "
             f"({train_end.date()} to {test_end.date()})"
@@ -234,14 +268,12 @@ def _generate_walk_forward_predictions(
                 predictions, "a_fair_prob_avg", "b_fair_prob_avg"
             )
         except ValueError:
-            train_end = test_end
             continue
 
         predictions = predictions.sort_values("event_date").reset_index(drop=True)
         fold_predictions.append((fold_num, predictions))
-        train_end = test_end
 
-    logger.info(f"Walk-forward complete: {fold_num} folds, "
+    logger.info(f"Selection walk-forward complete: {len(fold_predictions)} folds, "
                 f"{sum(len(p) for _, p in fold_predictions)} total predictions")
     return fold_predictions
 
@@ -286,10 +318,12 @@ def run_triple_trader_backtest(
             (features_df["a_num_fights"] >= 2) & (features_df["b_num_fights"] >= 2)
         ]
 
-    dates = pd.to_datetime(features_df["event_date"])
-    min_date = dates.min()
-    max_date = dates.max()
-    train_end = min_date + pd.DateOffset(years=initial_train_years)
+    selection_windows = _selection_fold_windows(
+        features_df,
+        initial_train_years=initial_train_years,
+        retrain_months=retrain_months,
+        bet_start_date=bet_start_date,
+    )
 
     # --- Create 3 bankrolls (40/40/20 split) ---
     alloc_a = round(initial_bankroll * TRADER_A_SHARE, 2)
@@ -314,8 +348,6 @@ def run_triple_trader_backtest(
 
     bet_log = []
     bankroll_history = []
-    fold_num = 0
-
     bet_start = pd.Timestamp(bet_start_date)
 
     logger.info(f"\n{'='*60}")
@@ -327,26 +359,9 @@ def run_triple_trader_backtest(
     logger.info(f"  Betting on fights from: {bet_start_date}")
     logger.info(f"{'='*60}\n")
 
-    while train_end < max_date:
-        test_end = train_end + pd.DateOffset(months=retrain_months)
-        if test_end > max_date:
-            test_end = max_date + pd.Timedelta(days=1)
-
-        # Skip folds entirely before the betting window (saves training time)
-        if pd.Timestamp(test_end) <= bet_start:
-            train_end = test_end
-            continue
-
-        train_mask = dates < train_end
-        test_mask = (dates >= train_end) & (dates < test_end)
-        train_df = features_df[train_mask]
-        test_df = features_df[test_mask]
-
-        if len(train_df) < 100 or len(test_df) < 5:
-            train_end = test_end
-            continue
-
-        fold_num += 1
+    for fold_num, train_end, test_end, train_idx, test_idx in selection_windows:
+        train_df = features_df.iloc[train_idx]
+        test_df = features_df.iloc[test_idx]
         logger.info(
             f"Fold {fold_num}: Train {len(train_df)}, Test {len(test_df)} "
             f"({train_end.date()} to {test_end.date()})"
@@ -370,7 +385,6 @@ def run_triple_trader_backtest(
                 predictions, "a_fair_prob_avg", "b_fair_prob_avg"
             )
         except ValueError:
-            train_end = test_end
             continue
 
         predictions = predictions.sort_values("event_date").reset_index(drop=True)
@@ -592,8 +606,6 @@ def run_triple_trader_backtest(
                 "trader_c": bank_c.bankroll,
             })
 
-        train_end = test_end
-
     # --- Results ---
     stats_a = bank_a.get_stats()
     stats_b = bank_b.get_stats()
@@ -713,10 +725,12 @@ def run_priority_trader_backtest(
             (features_df["a_num_fights"] >= 2) & (features_df["b_num_fights"] >= 2)
         ]
 
-    dates = pd.to_datetime(features_df["event_date"])
-    min_date = dates.min()
-    max_date = dates.max()
-    train_end = min_date + pd.DateOffset(years=initial_train_years)
+    selection_windows = _selection_fold_windows(
+        features_df,
+        initial_train_years=initial_train_years,
+        retrain_months=retrain_months,
+        bet_start_date=bet_start_date,
+    )
 
     # --- Single shared bankroll ---
     bank = BankrollManager(
@@ -728,7 +742,6 @@ def run_priority_trader_backtest(
 
     bet_log = []
     bankroll_history = []
-    fold_num = 0
     # Per-trader cumulative P&L for reporting
     pnl_s = 0.0  # single trader
     pnl_a = 0.0
@@ -747,25 +760,9 @@ def run_priority_trader_backtest(
     logger.info(f"  Betting on fights from: {bet_start_date}")
     logger.info(f"{'='*60}\n")
 
-    while train_end < max_date:
-        test_end = train_end + pd.DateOffset(months=retrain_months)
-        if test_end > max_date:
-            test_end = max_date + pd.Timedelta(days=1)
-
-        if pd.Timestamp(test_end) <= bet_start:
-            train_end = test_end
-            continue
-
-        train_mask = dates < train_end
-        test_mask = (dates >= train_end) & (dates < test_end)
-        train_df = features_df[train_mask]
-        test_df = features_df[test_mask]
-
-        if len(train_df) < 100 or len(test_df) < 5:
-            train_end = test_end
-            continue
-
-        fold_num += 1
+    for fold_num, train_end, test_end, train_idx, test_idx in selection_windows:
+        train_df = features_df.iloc[train_idx]
+        test_df = features_df.iloc[test_idx]
         logger.info(
             f"Fold {fold_num}: Train {len(train_df)}, Test {len(test_df)} "
             f"({train_end.date()} to {test_end.date()})"
@@ -789,7 +786,6 @@ def run_priority_trader_backtest(
                 predictions, "a_fair_prob_avg", "b_fair_prob_avg"
             )
         except ValueError:
-            train_end = test_end
             continue
 
         predictions = predictions.sort_values("event_date").reset_index(drop=True)
@@ -1058,8 +1054,6 @@ def run_priority_trader_backtest(
                     })
 
             bankroll_history.append({"combined": bank.bankroll})
-
-        train_end = test_end
 
     # --- Results ---
     bet_log_df = pd.DataFrame(bet_log)

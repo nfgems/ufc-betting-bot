@@ -11,12 +11,14 @@ Usage:
 """
 
 import argparse
+import hashlib
+import json
 import logging
 import sys
 from dataclasses import MISSING, fields, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -42,12 +44,19 @@ from src.strategy.value import (
     calculate_closing_line_value,
 )
 from src.strategy.bankroll import BankrollManager
-from src.strategy.backtest import _merge_historical_odds, _resolve_market_odds
+from src.strategy.backtest import (
+    _merge_historical_odds,  # compatibility seam for existing lab callers/tests
+    _prepare_evaluation_odds,
+    _resolve_market_odds,
+)
 from src.strategy.model_variants import (
     VariantConfig,
     apply_variant_feature_transforms,
     train_variant_model,
     ALL_VARIANTS,
+)
+from src.strategy.confirmation_ledger import (
+    require_remotely_anchored_git_artifacts,
 )
 from src.model.predict import _ordered_feature_frame
 from src.model.training_spec import materialize_contract_transforms
@@ -70,6 +79,97 @@ logger = logging.getLogger(__name__)
 # Output directory — never writes to models/ or data/processed/
 LAB_DIR = LOGS_DIR / "model_lab"
 LAB_DIR.mkdir(parents=True, exist_ok=True)
+
+DEFAULT_CONFIRMATION_FOLD_COUNT = 2
+
+
+def partition_walk_forward_folds(
+    fold_predictions: list[tuple[int, pd.DataFrame]],
+    *,
+    confirmation_fold_count: int = DEFAULT_CONFIRMATION_FOLD_COUNT,
+) -> tuple[list[tuple[int, pd.DataFrame]], list[tuple[int, pd.DataFrame]]]:
+    """Split a chronological walk-forward run into selection and confirmation.
+
+    The final ``confirmation_fold_count`` folds are always the confirmation
+    partition.  Callers must opt into the returned confirmation frames only
+    after a package has been locked; ordinary ranking and strategy experiments
+    consume the selection return value exclusively.
+    """
+    if (
+        isinstance(confirmation_fold_count, bool)
+        or not isinstance(confirmation_fold_count, int)
+        or confirmation_fold_count < 1
+    ):
+        raise ValueError("confirmation_fold_count must be a positive integer")
+    if len(fold_predictions) <= confirmation_fold_count:
+        raise ValueError(
+            "walk-forward run must contain at least one selection fold plus "
+            f"{confirmation_fold_count} confirmation folds"
+        )
+
+    fold_ids = [fold_id for fold_id, _frame in fold_predictions]
+    if any(isinstance(fold_id, bool) or not isinstance(fold_id, int) for fold_id in fold_ids):
+        raise ValueError("walk-forward fold identifiers must be integers")
+    if len(set(fold_ids)) != len(fold_ids) or fold_ids != sorted(fold_ids):
+        raise ValueError("walk-forward folds must have unique chronological identifiers")
+
+    for fold_id, frame in fold_predictions:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            raise ValueError(f"walk-forward fold {fold_id} is missing prediction rows")
+        if "fold" not in frame.columns:
+            raise ValueError(f"walk-forward fold {fold_id} is missing its fold column")
+        frame_fold_ids = pd.to_numeric(frame["fold"], errors="coerce")
+        if frame_fold_ids.isna().any() or not frame_fold_ids.eq(fold_id).all():
+            raise ValueError(
+                f"walk-forward fold {fold_id} contains inconsistent fold bindings"
+            )
+
+    split_at = len(fold_predictions) - confirmation_fold_count
+    return list(fold_predictions[:split_at]), list(fold_predictions[split_at:])
+
+
+def _walk_forward_fold_windows(
+    dates: pd.Series,
+    *,
+    initial_train_years: int,
+    retrain_months: int,
+    bet_start_date: str,
+) -> list[tuple[int, pd.Timestamp, pd.Timestamp, np.ndarray, np.ndarray]]:
+    """Derive the complete fold schedule without fitting or predicting."""
+    min_date = dates.min()
+    max_date = dates.max()
+    train_end = min_date + pd.DateOffset(years=initial_train_years)
+    bet_start = pd.Timestamp(bet_start_date)
+    windows: list[
+        tuple[int, pd.Timestamp, pd.Timestamp, np.ndarray, np.ndarray]
+    ] = []
+    fold_num = 0
+    while train_end < max_date:
+        test_end = train_end + pd.DateOffset(months=retrain_months)
+        if test_end > max_date:
+            test_end = max_date + pd.Timedelta(days=1)
+        if pd.Timestamp(test_end) <= bet_start:
+            train_end = test_end
+            continue
+
+        train_mask = dates < train_end
+        test_mask = (dates >= train_end) & (dates < test_end)
+        if int(train_mask.sum()) < 100 or int(test_mask.sum()) < 5:
+            train_end = test_end
+            continue
+
+        fold_num += 1
+        windows.append(
+            (
+                fold_num,
+                pd.Timestamp(train_end),
+                pd.Timestamp(test_end),
+                np.flatnonzero(train_mask.to_numpy()),
+                np.flatnonzero(test_mask.to_numpy()),
+            )
+        )
+        train_end = test_end
+    return windows
 
 
 def _variant_feature_columns(
@@ -153,6 +253,8 @@ def _production_no_odds_variant() -> VariantConfig:
         xgb_params=production.xgb_params,
         time_decay_half_life=production.time_decay_half_life,
         odds_noise_std=production.odds_noise_std,
+        odds_noise_seed=production.odds_noise_seed,
+        odds_noise_mode=production.odds_noise_mode,
     )
     if getattr(production, "_native_nan", False):
         variant._native_nan = True  # type: ignore[attr-defined]
@@ -289,7 +391,13 @@ def resolve_variant_feature_columns(
 ) -> tuple[list[str], list[str]]:
     """Resolve primary and no-odds feature columns for a variant run."""
     if feature_cols is not None:
-        resolved_feature_cols = [column for column in feature_cols if column in features_df.columns]
+        missing = [column for column in feature_cols if column not in features_df.columns]
+        if missing:
+            raise ValueError(
+                "explicit named-spec feature contract is missing columns: "
+                f"{missing}"
+            )
+        resolved_feature_cols = list(feature_cols)
     elif feature_family is not None:
         resolved_feature_cols = get_feature_family_columns(features_df, feature_family)
     elif variant.name == "betsapi_challenger":
@@ -351,6 +459,137 @@ def _select_fold_feature_columns(
     return fold_feature_cols, fold_no_odds_cols
 
 
+def _require_locked_confirmation_fit_binding(
+    *,
+    lock_payload: dict,
+    variant: VariantConfig,
+    base_feature_cols: list[str],
+    retrain_months: int,
+    fold_manifest: list[tuple[int, pd.DataFrame]],
+    confirmation_fold_count: int,
+) -> None:
+    """Bind the imminent confirmation fit to the locked package and inputs.
+
+    A valid-but-orphaned claim must not let a direct library caller fit the
+    reserve folds with a substituted spec, variant, or features frame
+    (DIR-AUD-P2-015). The fitted configuration must be exactly the locked
+    candidate or frozen-control package, and the confirmation-partition
+    identity/value hashes of the actual frame must equal the lock's selection
+    evidence before any fold is fitted.
+    """
+    from dataclasses import asdict
+
+    from src.model.training_spec import resolve_named_training_spec
+    from src.strategy.model_variants import variant_from_named_training_spec
+    from src.strategy.run_evaluation import (
+        _canonical_json_sha256,
+        _evaluation_fight_identity_sha256,
+        _evaluation_sample_sha256,
+        _manifest_input_value_sha256,
+        _partition_evaluation_folds,
+        _post_cutoff_predictions,
+    )
+
+    locked_packages = [
+        package
+        for package in (
+            lock_payload.get("candidate_package"),
+            (lock_payload.get("frozen_control") or {}).get("package"),
+        )
+        if isinstance(package, dict)
+    ]
+    if not locked_packages:
+        raise ValueError(
+            "confirmation package lock does not declare a locked package"
+        )
+    matched = False
+    for package in locked_packages:
+        try:
+            locked_spec = resolve_named_training_spec(
+                str(package.get("model_spec_name"))
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "confirmation lock package spec cannot be resolved"
+            ) from exc
+        if _canonical_json_sha256(asdict(locked_spec)) != package.get(
+            "model_spec_payload_sha256"
+        ):
+            raise ValueError(
+                "locked package named spec changed after the package lock"
+            )
+        try:
+            locked_retrain_months = int(package.get("retrain_months"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "confirmation lock package retrain_months is invalid"
+            ) from exc
+        expected_variant = _resolve_variant_against_promoted_baseline(
+            variant_from_named_training_spec(
+                locked_spec.name,
+                variant_name=str(package.get("model_variant")),
+            )
+        )
+        if (
+            variant == expected_variant
+            and getattr(variant, "_native_nan", False)
+            == getattr(expected_variant, "_native_nan", False)
+            and base_feature_cols == list(locked_spec.feature_cols)
+            and int(retrain_months) == locked_retrain_months
+        ):
+            matched = True
+    if not matched:
+        raise ValueError(
+            "confirmation fit does not match the locked candidate/control package"
+        )
+
+    selection_evidence = lock_payload.get("selection_evidence") or {}
+    locked_contract = selection_evidence.get("feature_contract_columns")
+    if not isinstance(locked_contract, list) or base_feature_cols != [
+        str(column) for column in locked_contract
+    ]:
+        raise ValueError(
+            "confirmation fit feature contract differs from the locked selection evidence"
+        )
+    _selection_manifest, confirmation_manifest = _partition_evaluation_folds(
+        fold_manifest,
+        reserved_confirmation_folds=confirmation_fold_count,
+    )
+    confirmation_index = _post_cutoff_predictions(confirmation_manifest)
+    if confirmation_index.empty:
+        raise ValueError(
+            "confirmation fit produced no reserve-fold manifest rows"
+        )
+    actual_bindings = {
+        "confirmation_fold_ids": [
+            fold_id for fold_id, _frame in confirmation_manifest
+        ],
+        "confirmation_evaluation_n_fights": int(len(confirmation_index)),
+        "confirmation_evaluation_sample_sha256": _evaluation_sample_sha256(
+            confirmation_index
+        ),
+        "confirmation_evaluation_fight_identity_sha256": (
+            _evaluation_fight_identity_sha256(confirmation_index)
+        ),
+        "confirmation_evaluation_input_value_sha256": (
+            _manifest_input_value_sha256(
+                confirmation_index,
+                feature_contract_columns=base_feature_cols,
+            )
+        ),
+    }
+    mismatched = sorted(
+        field
+        for field, actual in actual_bindings.items()
+        if selection_evidence.get(field) != actual
+    )
+    if mismatched:
+        raise ValueError(
+            "confirmation features frame differs from the locked package inputs: "
+            + ", ".join(mismatched)
+        )
+
+
 def generate_variant_fold_predictions(
     features_df: pd.DataFrame,
     variant: VariantConfig,
@@ -360,8 +599,249 @@ def generate_variant_fold_predictions(
     bet_start_date: str = TRAIN_CUTOFF_DATE,
     feature_family: str | None = None,
     feature_cols: list[str] | None = None,
-) -> list[tuple[int, pd.DataFrame]]:
-    """Generate walk-forward prediction frames for a variant without trading."""
+    entry_offset_days: float | None = None,
+    entry_offset_for_features: bool = False,
+    require_entry_odds: bool = False,
+    allow_closing_odds: bool = False,
+    evaluation_partition: str = "selection",
+    confirmation_fold_count: int = DEFAULT_CONFIRMATION_FOLD_COUNT,
+    return_fold_manifest: bool = False,
+    confirmation_claim_sha256: str | None = None,
+    confirmation_claim_path: str | Path | None = None,
+    allow_all_folds: bool = False,
+    include_mirror_diagnostics: bool = False,
+    pre_fit_manifest_callback: (
+        Callable[[list[tuple[int, pd.DataFrame]]], None] | None
+    ) = None,
+) -> (
+    list[tuple[int, pd.DataFrame]]
+    | tuple[list[tuple[int, pd.DataFrame]], list[tuple[int, pd.DataFrame]]]
+):
+    """Generate walk-forward predictions for an explicitly selected partition.
+
+    ``selection`` never fits or predicts the final confirmation folds.
+    ``confirmation`` fits and predicts only those folds and is reserved for the
+    one-shot locked-package path. ``all`` is retained for legacy/read-only
+    callers outside the remediation promotion workflow.
+    """
+    if evaluation_partition not in {"all", "selection", "confirmation"}:
+        raise ValueError(
+            "evaluation_partition must be 'all', 'selection', or 'confirmation'"
+        )
+    if evaluation_partition == "all" and not allow_all_folds:
+        raise ValueError(
+            "all-fold model experiments are disabled; use the selection partition"
+        )
+    if evaluation_partition == "confirmation" and not (
+        isinstance(confirmation_claim_sha256, str)
+        and len(confirmation_claim_sha256) == 64
+        and all(ch in "0123456789abcdef" for ch in confirmation_claim_sha256.lower())
+    ):
+        raise ValueError(
+            "confirmation prediction requires a valid exclusive-claim SHA-256"
+        )
+    if evaluation_partition == "confirmation":
+        claim_path = Path(confirmation_claim_path or "").resolve()
+        if not claim_path.is_file():
+            raise ValueError("confirmation prediction claim artifact is missing")
+        claim_root = (
+            Path(__file__).resolve().parents[2]
+            / "evidence"
+            / "confirmation_claims"
+        ).resolve()
+        repo_root = Path(__file__).resolve().parents[2]
+        def _resolve_claim_bound_path(raw_path: object) -> Path:
+            bound = Path(str(raw_path or ""))
+            if not bound.is_absolute():
+                bound = repo_root / bound
+            return bound.resolve()
+        try:
+            relative_claim = claim_path.relative_to(claim_root)
+        except ValueError as exc:
+            raise ValueError("confirmation claim is outside the canonical global store") from exc
+        if (
+            len(relative_claim.parts) != 2
+            or relative_claim.name != "confirmation_evaluation_claim.json"
+        ):
+            raise ValueError("confirmation claim does not use the canonical global path")
+        actual_claim_sha256 = hashlib.sha256(claim_path.read_bytes()).hexdigest()
+        if actual_claim_sha256 != confirmation_claim_sha256.lower():
+            raise ValueError("confirmation prediction claim SHA-256 does not match")
+        try:
+            claim_payload = json.loads(claim_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("confirmation prediction claim is malformed") from exc
+        if (
+            claim_payload.get("schema_version") != 1
+            or
+            claim_payload.get("protocol")
+            != "integrity_v2_bounded_performance_recovery"
+            or claim_payload.get("status") != "claimed"
+        ):
+            raise ValueError("confirmation prediction claim has invalid semantics")
+        global_key = claim_payload.get("global_claim_key")
+        key_material = claim_payload.get("global_claim_key_material")
+        if (
+            not isinstance(global_key, str)
+            or len(global_key) != 64
+            or relative_claim.parts[0] != global_key
+            or not isinstance(key_material, dict)
+            or hashlib.sha256(
+                json.dumps(
+                    key_material,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            != global_key
+            or _resolve_claim_bound_path(claim_payload.get("claim_path"))
+            != claim_path
+        ):
+            raise ValueError("confirmation global claim key is invalid")
+        global_result_path = _resolve_claim_bound_path(
+            claim_payload.get("global_result_path")
+        )
+        if global_result_path.parent != claim_path.parent or global_result_path.name != (
+            "confirmation_evaluation_result.json"
+        ):
+            raise ValueError("confirmation global result path is invalid")
+        if global_result_path.exists():
+            raise ValueError("confirmation result already exists; sample is consumed")
+        lock_path = _resolve_claim_bound_path(claim_payload.get("lock_path"))
+        lock_sha256 = str(claim_payload.get("lock_sha256") or "").lower()
+        if (
+            lock_path.name != "confirmation_package_lock.json"
+            or not lock_path.is_file()
+            or hashlib.sha256(lock_path.read_bytes()).hexdigest() != lock_sha256
+        ):
+            raise ValueError("confirmation claim does not bind a valid package lock")
+        try:
+            lock_payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("confirmation package lock is malformed") from exc
+        selection = lock_payload.get("selection_evidence") or {}
+        frozen_control = lock_payload.get("frozen_control") or {}
+        lock_bindings = {
+            "package_id": lock_payload.get("package_id"),
+            "source_fingerprint": lock_payload.get("source_fingerprint"),
+            "frozen_control_receipt_sha256": frozen_control.get(
+                "bootstrap_receipt_sha256"
+            ),
+            "full_evaluation_sample_sha256": selection.get(
+                "full_evaluation_sample_sha256"
+            ),
+            "selection_evaluation_sample_sha256": selection.get(
+                "evaluation_sample_sha256"
+            ),
+            "confirmation_evaluation_sample_sha256": selection.get(
+                "confirmation_evaluation_sample_sha256"
+            ),
+            "confirmation_evaluation_fight_identity_sha256": selection.get(
+                "confirmation_evaluation_fight_identity_sha256"
+            ),
+            "confirmation_fight_identities": selection.get(
+                "confirmation_fight_identities"
+            ),
+            "confirmation_evaluation_input_value_sha256": selection.get(
+                "confirmation_evaluation_input_value_sha256"
+            ),
+            "confirmation_evaluation_n_fights": selection.get(
+                "confirmation_evaluation_n_fights"
+            ),
+            "confirmation_fold_ids": selection.get("confirmation_fold_ids"),
+        }
+        expected_key_material = {
+            "key_contract": "confirmation_sample_consumption_v1",
+            "confirmation_evaluation_fight_identity_sha256": selection.get(
+                "confirmation_evaluation_fight_identity_sha256"
+            ),
+        }
+        if (
+            lock_payload.get("protocol")
+            != "integrity_v2_bounded_performance_recovery"
+            or any(
+                claim_payload.get(field) != value
+                for field, value in lock_bindings.items()
+            )
+            or key_material != expected_key_material
+        ):
+            raise ValueError("confirmation claim and package lock bindings differ")
+        selection_identities = selection.get("selection_fight_identities")
+        if not isinstance(selection_identities, list) or not selection_identities:
+            raise ValueError("confirmation lock has no selection-exposure ledger")
+        selection_identity_sha256 = hashlib.sha256(
+            json.dumps(
+                selection_identities,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        selection_key_material = {
+            "key_contract": "selection_outcome_exposure_v1",
+            "selection_evaluation_fight_identity_sha256": selection_identity_sha256,
+        }
+        selection_exposure_key = hashlib.sha256(
+            json.dumps(
+                selection_key_material,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        selection_exposure_path = _resolve_claim_bound_path(
+            claim_payload.get("selection_exposure_path")
+        )
+        expected_selection_exposure_path = (
+            claim_root
+            / "_selection_exposures"
+            / f"{selection_exposure_key}.json"
+        ).resolve()
+        if (
+            selection_identity_sha256
+            != selection.get("evaluation_fight_identity_sha256")
+            or claim_payload.get("selection_exposure_key")
+            != selection_exposure_key
+            or selection_exposure_path != expected_selection_exposure_path
+            or not selection_exposure_path.is_file()
+            or hashlib.sha256(selection_exposure_path.read_bytes()).hexdigest()
+            != claim_payload.get("selection_exposure_sha256")
+        ):
+            raise ValueError("confirmation claim has no valid selection-exposure anchor")
+        marker_paths = []
+        for identity in claim_payload.get("confirmation_fight_identities") or []:
+            identity_sha256 = hashlib.sha256(
+                json.dumps(
+                    identity,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            marker_path = (
+                claim_root / "_fight_reservations" / f"{identity_sha256}.json"
+            )
+            try:
+                marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError("confirmation reservation marker is missing") from exc
+            if marker_payload != {
+                "schema_version": 1,
+                "protocol": "integrity_v2_bounded_performance_recovery",
+                "global_claim_key": global_key,
+                "fight_identity_sha256": identity_sha256,
+                "fight_identity": identity,
+            }:
+                raise ValueError("confirmation reservation marker changed")
+            marker_paths.append(marker_path)
+        require_remotely_anchored_git_artifacts(
+            repo_root,
+            [claim_path, lock_path, selection_exposure_path, *marker_paths],
+            label="confirmation claim",
+        )
+    if (
+        isinstance(confirmation_fold_count, bool)
+        or not isinstance(confirmation_fold_count, int)
+        or confirmation_fold_count < 1
+    ):
+        raise ValueError("confirmation_fold_count must be a positive integer")
     variant = _resolve_variant_against_promoted_baseline(variant)
     features_df = features_df.sort_values("event_date").copy()
     features_df = features_df.dropna(subset=["target"])
@@ -377,36 +857,109 @@ def generate_variant_fold_predictions(
         features_df = features_df[
             (features_df["a_num_fights"] >= 2) & (features_df["b_num_fights"] >= 2)
         ]
+    features_df = _prepare_evaluation_odds(
+        features_df,
+        use_historical_odds=True,
+        entry_offset_days=entry_offset_days,
+        entry_offset_for_features=entry_offset_for_features,
+        require_entry_odds=require_entry_odds,
+        historical_merge_fn=_merge_historical_odds,
+    )
 
     dates = pd.to_datetime(features_df["event_date"])
-    min_date = dates.min()
-    max_date = dates.max()
-    train_end = min_date + pd.DateOffset(years=initial_train_years)
-    bet_start = pd.Timestamp(bet_start_date)
+    fold_windows = _walk_forward_fold_windows(
+        dates,
+        initial_train_years=initial_train_years,
+        retrain_months=retrain_months,
+        bet_start_date=bet_start_date,
+    )
+
+    if evaluation_partition != "all" and len(fold_windows) <= confirmation_fold_count:
+        raise ValueError(
+            "walk-forward schedule must contain at least one selection fold plus "
+            f"{confirmation_fold_count} confirmation folds"
+        )
+
+    confirmation_ids = {
+        fold_id for fold_id, *_rest in fold_windows[-confirmation_fold_count:]
+    }
+    if evaluation_partition == "selection":
+        selected_windows = [
+            window for window in fold_windows if window[0] not in confirmation_ids
+        ]
+    elif evaluation_partition == "confirmation":
+        selected_windows = [
+            window for window in fold_windows if window[0] in confirmation_ids
+        ]
+    else:
+        selected_windows = list(fold_windows)
+
+    # The manifest is deliberately richer than the sample identity.  It is
+    # created before any fit/predict call and preserves the exact ordered model
+    # inputs plus the row-level honest-odds provenance used to construct them.
+    # The orchestrator hashes these values independently for the selection and
+    # confirmation partitions, so an unchanged fight index cannot conceal
+    # changed feature values or a changed T-1 snapshot.
+    manifest_columns = ["event_date", "fighter_a", "fighter_b", "target"]
+    manifest_columns.extend(
+        column
+        for column in ("fighter_a_id", "fighter_b_id")
+        if column in features_df.columns
+    )
+    manifest_columns.extend(base_feature_cols)
+    manifest_columns.extend(
+        column
+        for column in features_df.columns
+        if column.startswith(("entry_", "opening_", "model_odds_", "market_"))
+        or column
+        in {
+            "a_implied_prob",
+            "b_implied_prob",
+            "diff_implied_prob",
+        }
+    )
+    manifest_columns = list(dict.fromkeys(manifest_columns))
+    missing_manifest = [
+        column for column in manifest_columns if column not in features_df.columns
+    ]
+    if missing_manifest:
+        raise ValueError(
+            f"walk-forward manifest is missing columns: {missing_manifest}"
+        )
+    fold_manifest: list[tuple[int, pd.DataFrame]] = []
+    for scheduled_fold, scheduled_train_end, scheduled_test_end, _train_idx, test_idx in fold_windows:
+        manifest = features_df.iloc[test_idx][manifest_columns].copy()
+        manifest["fold"] = scheduled_fold
+        manifest["train_end"] = scheduled_train_end
+        manifest["test_end"] = scheduled_test_end
+        fold_manifest.append((scheduled_fold, manifest))
+
+    if evaluation_partition == "confirmation":
+        _require_locked_confirmation_fit_binding(
+            lock_payload=lock_payload,
+            variant=variant,
+            base_feature_cols=base_feature_cols,
+            retrain_months=retrain_months,
+            fold_manifest=fold_manifest,
+            confirmation_fold_count=confirmation_fold_count,
+        )
+    if evaluation_partition == "selection":
+        # Import lazily to avoid a module cycle: the orchestrator owns the
+        # canonical identity/ledger contract, while every model-lab selection
+        # caller must cross it before the first fit.
+        from src.strategy.run_evaluation import _preflight_selection_fold_manifest
+
+        _preflight_selection_fold_manifest(
+            fold_manifest,
+            confirmation_fold_count=confirmation_fold_count,
+        )
+    if pre_fit_manifest_callback is not None:
+        pre_fit_manifest_callback(fold_manifest)
 
     fold_predictions: list[tuple[int, pd.DataFrame]] = []
-    fold_num = 0
-
-    while train_end < max_date:
-        test_end = train_end + pd.DateOffset(months=retrain_months)
-        if test_end > max_date:
-            test_end = max_date + pd.Timedelta(days=1)
-
-        if pd.Timestamp(test_end) <= bet_start:
-            train_end = test_end
-            continue
-
-        train_mask = dates < train_end
-        test_mask = (dates >= train_end) & (dates < test_end)
-
-        train_df = features_df[train_mask]
-        test_df = features_df[test_mask]
-
-        if len(train_df) < 100 or len(test_df) < 5:
-            train_end = test_end
-            continue
-
-        fold_num += 1
+    for fold_num, train_end, test_end, train_idx, test_idx in selected_windows:
+        train_df = features_df.iloc[train_idx]
+        test_df = features_df.iloc[test_idx]
         logger.info(
             f"  [{variant.name}] Fold {fold_num}: "
             f"Train {len(train_df)}, Test {len(test_df)} "
@@ -423,33 +976,84 @@ def generate_variant_fold_predictions(
         no_odds_variant = _production_no_odds_variant()
         no_odds_result = train_variant_model(train_df, fold_no_odds_cols, no_odds_variant)
 
-        predictions = _predict_batch_with_model(test_df, model_result)
-        no_odds_preds = _predict_batch_with_model(test_df, no_odds_result)
+        scoring_df = test_df
+        predictions = _predict_batch_with_model(scoring_df, model_result)
+        no_odds_preds = _predict_batch_with_model(scoring_df, no_odds_result)
         predictions["no_odds_prob_a"] = no_odds_preds["prob_a"]
         predictions["no_odds_prob_b"] = no_odds_preds["prob_b"]
+        if include_mirror_diagnostics:
+            from src.model.orientation import swap_directional_frame
 
-        predictions = _merge_historical_odds(predictions)
+            swapped_model_inputs = swap_directional_frame(
+                scoring_df,
+                columns=fold_feature_cols,
+            )
+            swapped_no_odds_inputs = swap_directional_frame(
+                scoring_df,
+                columns=fold_no_odds_cols,
+            )
+            swapped_predictions = _predict_batch_with_model(
+                swapped_model_inputs,
+                model_result,
+            )
+            swapped_no_odds_predictions = _predict_batch_with_model(
+                swapped_no_odds_inputs,
+                no_odds_result,
+            )
+            # These are actual second inference calls on A/B-swapped contract
+            # inputs.  They are retained in the selection prediction artifact
+            # so diagnostics can prove symmetry instead of checking the
+            # tautological prob_b = 1 - prob_a construction.
+            predictions["mirror_swapped_prob_a"] = swapped_predictions[
+                "prob_a"
+            ].to_numpy()
+            predictions["mirror_swapped_no_odds_prob_a"] = (
+                swapped_no_odds_predictions["prob_a"].to_numpy()
+            )
+        for column in ("a_fair_prob_avg", "b_fair_prob_avg"):
+            if column in predictions.columns:
+                predictions[column] = np.nan
+
         try:
+            odds_policy_kwargs = {}
+            if allow_closing_odds or require_entry_odds:
+                odds_policy_kwargs = {
+                    "allow_closing_odds": allow_closing_odds,
+                    "require_entry_odds": require_entry_odds,
+                }
             predictions, _ = _resolve_market_odds(
                 predictions,
                 "a_fair_prob_avg",
                 "b_fair_prob_avg",
+                **odds_policy_kwargs,
             )
         except ValueError as exc:
+            if evaluation_partition != "all":
+                raise ValueError(
+                    f"reserved fold {fold_num} cannot be bound to market odds"
+                ) from exc
             logger.warning(
                 "Fold %d skipped (market odds unavailable for %s to %s): %s",
                 fold_num, train_end, test_end, exc,
             )
-            train_end = test_end
             continue
 
         predictions = predictions.sort_values("event_date").reset_index(drop=True)
+        predictions["bet_eligible"] = (
+            predictions["a_market_prob"].notna()
+            & predictions["b_market_prob"].notna()
+        )
+        if require_entry_odds:
+            predictions["bet_eligible"] &= (
+                predictions["market_verified_prefight"].fillna(False).astype(bool)
+            )
         predictions["fold"] = fold_num
         predictions["train_end"] = pd.Timestamp(train_end)
         predictions["test_end"] = pd.Timestamp(test_end)
         fold_predictions.append((fold_num, predictions))
-        train_end = test_end
 
+    if return_fold_manifest:
+        return fold_predictions, fold_manifest
     return fold_predictions
 
 
@@ -460,6 +1064,12 @@ def run_variant_walkforward(
     initial_train_years: int = 5,
     initial_bankroll: float = INITIAL_BANKROLL,
     bet_start_date: str = TRAIN_CUTOFF_DATE,
+    entry_offset_days: float | None = None,
+    entry_offset_for_features: bool = False,
+    require_entry_odds: bool = False,
+    allow_closing_odds: bool = False,
+    evaluation_partition: str = "selection",
+    confirmation_fold_count: int = DEFAULT_CONFIRMATION_FOLD_COUNT,
 ) -> dict:
     """
     Run a walk-forward backtest for a single variant.
@@ -482,6 +1092,49 @@ def run_variant_walkforward(
         features_df = features_df[
             (features_df["a_num_fights"] >= 2) & (features_df["b_num_fights"] >= 2)
         ]
+    features_df = _prepare_evaluation_odds(
+        features_df,
+        use_historical_odds=True,
+        entry_offset_days=entry_offset_days,
+        entry_offset_for_features=entry_offset_for_features,
+        require_entry_odds=require_entry_odds,
+        historical_merge_fn=_merge_historical_odds,
+    )
+
+    if evaluation_partition != "selection":
+        raise ValueError(
+            "model-lab experiments are selection-only; confirmation requires "
+            "the locked one-shot orchestrator"
+        )
+    full_dates = pd.to_datetime(features_df["event_date"])
+    full_schedule = _walk_forward_fold_windows(
+        full_dates,
+        initial_train_years=initial_train_years,
+        retrain_months=retrain_months,
+        bet_start_date=bet_start_date,
+    )
+    if len(full_schedule) <= confirmation_fold_count:
+        raise ValueError(
+            "model-lab walk-forward requires at least one selection fold plus "
+            f"{confirmation_fold_count} confirmation folds"
+        )
+    exposure_manifest: list[tuple[int, pd.DataFrame]] = []
+    for fold_id, train_end, test_end, _train_idx, test_idx in full_schedule:
+        frame = features_df.iloc[test_idx][
+            ["event_date", "fighter_a", "fighter_b"]
+        ].copy()
+        frame["fold"] = fold_id
+        frame["train_end"] = train_end
+        frame["test_end"] = test_end
+        exposure_manifest.append((fold_id, frame))
+    from src.strategy.run_evaluation import _preflight_selection_fold_manifest
+
+    _preflight_selection_fold_manifest(
+        exposure_manifest,
+        confirmation_fold_count=confirmation_fold_count,
+    )
+    confirmation_start = full_schedule[-confirmation_fold_count][1]
+    features_df = features_df[full_dates < confirmation_start].copy()
 
     dates = pd.to_datetime(features_df["event_date"])
     min_date = dates.min()
@@ -564,23 +1217,33 @@ def run_variant_walkforward(
         no_odds_result = train_variant_model(train_df, fold_no_odds_cols, no_odds_variant)
 
         # --- Generate predictions ---
-        predictions = _predict_batch_with_model(test_df, model_result)
-        no_odds_preds = _predict_batch_with_model(test_df, no_odds_result)
+        scoring_df = test_df
+        predictions = _predict_batch_with_model(scoring_df, model_result)
+        no_odds_preds = _predict_batch_with_model(scoring_df, no_odds_result)
         predictions["no_odds_prob_a"] = no_odds_preds["prob_a"]
         predictions["no_odds_prob_b"] = no_odds_preds["prob_b"]
+        for column in ("a_fair_prob_avg", "b_fair_prob_avg"):
+            if column in predictions.columns:
+                predictions[column] = np.nan
 
         # Collect for calibration metrics
         valid_mask = predictions["target"].notna()
         all_y_true.extend(predictions.loc[valid_mask, "target"].values.tolist())
         all_y_prob.extend(predictions.loc[valid_mask, "prob_a"].values.tolist())
 
-        # --- Merge historical odds ---
-        predictions = _merge_historical_odds(predictions)
-
         # --- Resolve market odds ---
         try:
+            odds_policy_kwargs = {}
+            if allow_closing_odds or require_entry_odds:
+                odds_policy_kwargs = {
+                    "allow_closing_odds": allow_closing_odds,
+                    "require_entry_odds": require_entry_odds,
+                }
             predictions, odds_source = _resolve_market_odds(
-                predictions, "a_fair_prob_avg", "b_fair_prob_avg"
+                predictions,
+                "a_fair_prob_avg",
+                "b_fair_prob_avg",
+                **odds_policy_kwargs,
             )
         except ValueError as exc:
             logger.warning(

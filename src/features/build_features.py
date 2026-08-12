@@ -24,11 +24,94 @@ from src.config import (
     RAW_DATA_DIR,
 )
 from src.data.io_utils import write_csv_atomically
-from src.data.name_utils import REVIEWED_FIGHTER_IDENTITIES, same_person_name
+from src.data.event_context import coerce_nullable_bool
+from src.data.name_utils import (
+    KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS,
+    REVIEWED_FIGHTER_IDENTITIES,
+    derive_ambiguous_fighter_name_keys,
+    fighter_identity_is_ambiguous,
+    fighter_identity_key,
+    normalize_ufcstats_id,
+    same_person_name,
+)
 from src.data.pre_ufc_scraper import _dedupe_supplement_rows
 from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
+
+
+class UnresolvedTrainingFighterIdentityError(ValueError):
+    """A collision-prone training row is missing its stable fighter ID."""
+
+
+_training_ambiguous_name_keys_cache: tuple[float, frozenset[str]] | None = None
+
+
+def _training_ambiguous_name_keys() -> frozenset[str]:
+    """Derive collision groups from the checked-in fighter inventory."""
+    global _training_ambiguous_name_keys_cache
+    inventory_path = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+    try:
+        mtime = inventory_path.stat().st_mtime
+    except OSError:
+        return KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
+    if (
+        _training_ambiguous_name_keys_cache is not None
+        and _training_ambiguous_name_keys_cache[0] == mtime
+    ):
+        return _training_ambiguous_name_keys_cache[1]
+    try:
+        inventory = pd.read_csv(inventory_path, usecols=["name", "fighter_url"])
+        derived = derive_ambiguous_fighter_name_keys(
+            (
+                {"name": row.name, "fighter_id": row.fighter_url}
+                for row in inventory.itertuples(index=False)
+            )
+        )
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not derive fighter identity collisions from %s: %s", inventory_path, exc)
+        derived = frozenset()
+    resolved = frozenset(set(KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS) | set(derived))
+    _training_ambiguous_name_keys_cache = (mtime, resolved)
+    return resolved
+
+
+def _attach_fighter_identity_keys(fights_df: pd.DataFrame) -> pd.DataFrame:
+    """Attach temporary stateful keys while preserving display names and IDs."""
+    fights = fights_df.copy()
+    unresolved: list[str] = []
+    ambiguous_name_keys = _training_ambiguous_name_keys()
+    for side in ("a", "b"):
+        name_col = f"fighter_{side}"
+        id_col = f"fighter_{side}_id"
+        key_col = f"__fighter_{side}_key"
+        if id_col not in fights.columns:
+            fights[id_col] = None
+        fights[id_col] = fights[id_col].map(normalize_ufcstats_id)
+        fights[key_col] = fights.apply(
+            lambda row: fighter_identity_key(
+                row.get(name_col),
+                row.get(id_col),
+                ambiguous_name_keys=ambiguous_name_keys,
+            ),
+            axis=1,
+        )
+        bad = fights[name_col].notna() & fights[key_col].isna()
+        if bad.any():
+            unresolved.extend(
+                f"{row.get('event_date')}:{row.get(name_col)}"
+                for _, row in fights.loc[bad].head(5).iterrows()
+            )
+    if unresolved:
+        raise UnresolvedTrainingFighterIdentityError(
+            "ambiguous training fighter rows require UFCStats IDs: "
+            + ", ".join(unresolved)
+        )
+    return fights
+
+
+def _stateful_identity_column(frame: pd.DataFrame) -> str:
+    return "fighter_key" if "fighter_key" in frame.columns else "fighter"
 
 
 # ---------------------------------------------------------------------------
@@ -236,10 +319,20 @@ def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
 
             opp_prefix = "b_" if prefix == "a_" else "a_"
             opp_col = "fighter_b" if prefix == "a_" else "fighter_a"
+            side = "a" if prefix == "a_" else "b"
+            opp_side = "b" if side == "a" else "a"
 
             record = {
                 "fighter": fighter,
+                "fighter_id": row.get(f"fighter_{side}_id"),
+                "fighter_key": row.get(f"__fighter_{side}_key") or fighter_identity_key(
+                    fighter, row.get(f"fighter_{side}_id")
+                ),
                 "opponent": row.get(opp_col, ""),
+                "opponent_id": row.get(f"fighter_{opp_side}_id"),
+                "opponent_key": row.get(f"__fighter_{opp_side}_key") or fighter_identity_key(
+                    row.get(opp_col, ""), row.get(f"fighter_{opp_side}_id")
+                ),
                 "event_date": date,
                 "weight_class": weight_class,
                 "won": 1 if winner == fighter else 0,
@@ -347,11 +440,12 @@ def _compute_ufc_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
         "prior_wins_sub",
         "prior_wins_dec",
     ]
+    identity_col = _stateful_identity_column(per_fight_df)
     if per_fight_df.empty:
-        return pd.DataFrame(columns=["fighter", "event_date", *history_cols])
+        return pd.DataFrame(columns=[identity_col, "event_date", *history_cols])
 
     history_frames = []
-    for fighter, group in per_fight_df.groupby("fighter"):
+    for _fighter, group in per_fight_df.groupby(identity_col):
         group = group.sort_values("event_date").copy()
         (
             group["current_win_streak"],
@@ -367,7 +461,7 @@ def _compute_ufc_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
             group["prior_wins_dec"],
         ) = _career_history_columns(group)
         group["num_fights"] = range(len(group))
-        history_frames.append(group[["fighter", "event_date", *history_cols]])
+        history_frames.append(group[[identity_col, "event_date", *history_cols]])
 
     return pd.concat(history_frames, ignore_index=True)
 
@@ -388,19 +482,22 @@ def _overlay_ufc_history_backed_fields(
     ]
 
     updated = features
-    for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+    history_identity_col = _stateful_identity_column(history_frame)
+    for prefix, side in [("a_", "a"), ("b_", "b")]:
+        fighter_col = f"fighter_{side}"
+        merge_key = f"__fighter_{side}_key" if history_identity_col == "fighter_key" else fighter_col
         existing_cols = [f"{prefix}{col}" for col in override_cols if f"{prefix}{col}" in updated.columns]
         if existing_cols:
             updated = updated.drop(columns=existing_cols)
 
         renamed = history_frame.rename(
             columns={
-                "fighter": fighter_col,
+                history_identity_col: merge_key,
                 **{col: f"{prefix}{col}" for col in override_cols},
             }
         )
-        merge_cols = [fighter_col, "event_date", *[f"{prefix}{col}" for col in override_cols]]
-        updated = updated.merge(renamed[merge_cols], on=[fighter_col, "event_date"], how="left")
+        merge_cols = [merge_key, "event_date", *[f"{prefix}{col}" for col in override_cols]]
+        updated = updated.merge(renamed[merge_cols], on=[merge_key, "event_date"], how="left")
 
     return updated
 
@@ -415,16 +512,17 @@ def _loss_method_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
     - prior_recent_ko_loss: 1.0 when either of the last two fights was a
       KO/TKO loss, 0.0 otherwise, NaN before the first fight
     """
+    identity_col = _stateful_identity_column(per_fight_df)
     if per_fight_df.empty:
         return pd.DataFrame(
             columns=[
-                "fighter", "event_date",
+                identity_col, "event_date",
                 "prior_losses_ko", "prior_losses_sub", "prior_recent_ko_loss",
             ]
         )
 
     frames = []
-    for fighter, group in per_fight_df.groupby("fighter"):
+    for fighter, group in per_fight_df.groupby(identity_col):
         group = group.sort_values("event_date")
         losses_ko = losses_sub = 0
         ko_loss_flags: list[bool] = []
@@ -434,7 +532,7 @@ def _loss_method_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
                 float(any(ko_loss_flags[-2:])) if ko_loss_flags else np.nan
             )
             records.append({
-                "fighter": fighter,
+                identity_col: fighter,
                 "event_date": row["event_date"],
                 "prior_losses_ko": losses_ko,
                 "prior_losses_sub": losses_sub,
@@ -463,17 +561,20 @@ def _add_loss_method_features(
     if history.empty:
         return features
 
-    for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+    history_identity_col = _stateful_identity_column(history)
+    for prefix, side in [("a_", "a"), ("b_", "b")]:
+        fighter_col = f"fighter_{side}"
+        merge_key = f"__fighter_{side}_key" if history_identity_col == "fighter_key" else fighter_col
         renamed = history.rename(columns={
-            "fighter": fighter_col,
+            history_identity_col: merge_key,
             "prior_losses_ko": f"{prefix}losses_ko",
             "prior_losses_sub": f"{prefix}losses_sub",
             "prior_recent_ko_loss": f"{prefix}recent_ko_loss",
         })
-        renamed = renamed.drop_duplicates(subset=[fighter_col, "event_date"], keep="last")
+        renamed = renamed.drop_duplicates(subset=[merge_key, "event_date"], keep="last")
         features = features.merge(
             renamed,
-            on=[fighter_col, "event_date"],
+            on=[merge_key, "event_date"],
             how="left",
         )
 
@@ -515,17 +616,19 @@ def _compute_strength_of_schedule(
     rolling_df = rolling_df.copy()
 
     # Lookup: (fighter, event_date) → roll_won at that fight
-    _won_rows = rolling_df[["fighter", "event_date", "roll_won"]].dropna(
+    identity_col = _stateful_identity_column(rolling_df)
+    opponent_col = "opponent_key" if identity_col == "fighter_key" else "opponent"
+    _won_rows = rolling_df[[identity_col, "event_date", "roll_won"]].dropna(
         subset=["roll_won"]
     )
     _lookup: dict[tuple, float] = {
-        (r["fighter"], r["event_date"]): r["roll_won"]
+        (r[identity_col], r["event_date"]): r["roll_won"]
         for _, r in _won_rows.iterrows()
     }
 
     sos_results = np.full(len(rolling_df), np.nan)
 
-    for _fighter, group in rolling_df.groupby("fighter"):
+    for _fighter, group in rolling_df.groupby(identity_col):
         group = group.sort_values("event_date")
         past_opps: list[tuple[str, object]] = []
 
@@ -543,7 +646,7 @@ def _compute_strength_of_schedule(
                 if opp_wrs:
                     sos_results[df_idx] = float(np.average(opp_wrs, weights=weights))
 
-            opp = row.get("opponent")
+            opp = row.get(opponent_col)
             if pd.notna(opp) and opp:
                 past_opps.append((opp, row["event_date"]))
 
@@ -572,7 +675,7 @@ def _career_history_columns(fighter_fights: pd.DataFrame) -> tuple[list[int], ..
     prior_lose_streaks: list[int] = []
     prior_longest_win_streaks: list[int] = []
     prior_total_rounds: list[float] = []
-    prior_title_bouts: list[int] = []
+    prior_title_bouts: list[float] = []
     prior_wins_ko: list[int] = []
     prior_wins_sub: list[int] = []
     prior_wins_dec: list[int] = []
@@ -581,6 +684,7 @@ def _career_history_columns(fighter_fights: pd.DataFrame) -> tuple[list[int], ..
     win_streak = lose_streak = longest_win_streak = 0
     total_rounds = 0.0
     title_bouts = 0
+    title_bouts_unknown = False
     wins_ko = wins_sub = wins_dec = 0
 
     for _, row in fighter_fights.iterrows():
@@ -591,7 +695,9 @@ def _career_history_columns(fighter_fights: pd.DataFrame) -> tuple[list[int], ..
         prior_lose_streaks.append(lose_streak)
         prior_longest_win_streaks.append(longest_win_streak)
         prior_total_rounds.append(total_rounds)
-        prior_title_bouts.append(title_bouts)
+        prior_title_bouts.append(
+            np.nan if title_bouts_unknown else float(title_bouts)
+        )
         prior_wins_ko.append(wins_ko)
         prior_wins_sub.append(wins_sub)
         prior_wins_dec.append(wins_dec)
@@ -623,8 +729,10 @@ def _career_history_columns(fighter_fights: pd.DataFrame) -> tuple[list[int], ..
         if not pd.isna(finish_round):
             total_rounds += float(finish_round)
 
-        title_flag = pd.to_numeric(pd.Series([row.get("title_bout")]), errors="coerce").iloc[0]
-        if not pd.isna(title_flag) and float(title_flag) != 0.0:
+        title_flag = coerce_nullable_bool(row.get("title_bout"))
+        if title_flag is None:
+            title_bouts_unknown = True
+        elif title_flag:
             title_bouts += 1
 
     return (
@@ -726,6 +834,7 @@ def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     records: list[dict] = []
+    ambiguous_name_keys = _training_ambiguous_name_keys()
     for _, row in raw.iterrows():
         date = row.get("event_date")
         winner = row.get("winner", "")
@@ -746,7 +855,13 @@ def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
 
             record = {
                 "fighter": fighter,
+                "fighter_key": fighter_identity_key(
+                    fighter, ambiguous_name_keys=ambiguous_name_keys
+                ),
                 "opponent": row.get(opp_col, ""),
+                "opponent_key": fighter_identity_key(
+                    row.get(opp_col, ""), ambiguous_name_keys=ambiguous_name_keys
+                ),
                 "event_date": date,
                 "weight_class": row.get("weight_class", ""),
                 "won": 1 if winner == fighter else 0,
@@ -782,8 +897,13 @@ def _drop_quarantined_supplement_identities(
     if long_df.empty or "fighter" not in long_df.columns:
         return long_df
 
-    quarantined_mask = long_df["fighter"].isin(
-        _SUPPLEMENT_QUARANTINED_IDENTITIES
+    ambiguous_name_keys = _training_ambiguous_name_keys()
+    quarantined_mask = long_df["fighter"].isin(_SUPPLEMENT_QUARANTINED_IDENTITIES) | long_df[
+        "fighter"
+    ].map(
+        lambda name: fighter_identity_is_ambiguous(
+            name, ambiguous_name_keys=ambiguous_name_keys
+        )
     )
     if not quarantined_mask.any():
         return long_df
@@ -897,6 +1017,7 @@ def _load_reviewed_supplement_history(history_type: str) -> pd.DataFrame:
         selected = selected[~selected["ufcstats_id"].astype(str).isin(unknown_ids)]
 
     records: list[dict[str, object]] = []
+    ambiguous_name_keys = _training_ambiguous_name_keys()
     for ufcstats_id, identity in REVIEWED_FIGHTER_IDENTITIES.items():
         group = selected[selected["ufcstats_id"].astype(str) == ufcstats_id].copy()
         expected = identity.get("reviewed_history", {}).get(history_type)
@@ -926,7 +1047,12 @@ def _load_reviewed_supplement_history(history_type: str) -> pd.DataFrame:
             result_label = str(row["subject_result"]).strip().casefold()
             record: dict[str, object] = {
                 "fighter": canonical_name,
+                "fighter_id": ufcstats_id,
+                "fighter_key": fighter_identity_key(canonical_name, ufcstats_id),
                 "opponent": row["fighter_b"],
+                "opponent_key": fighter_identity_key(
+                    row["fighter_b"], ambiguous_name_keys=ambiguous_name_keys
+                ),
                 "event_date": pd.to_datetime(row["event_date"], errors="coerce"),
                 "weight_class": row.get("weight_class", ""),
                 "won": 1 if result_label == "win" else 0,
@@ -1313,7 +1439,9 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     logger.info(f"Building features for {len(fights_df)} fights")
 
     # Ensure sorted by date
-    fights_df = fights_df.sort_values("event_date").reset_index(drop=True)
+    fights_df = _attach_fighter_identity_keys(
+        fights_df.sort_values("event_date").reset_index(drop=True)
+    )
 
     # Step 1: Compute per-fight stats in long format
     ufc_per_fight = _compute_per_fight_stats(fights_df)
@@ -1348,7 +1476,8 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
 
     # Step 2: Compute rolling stats per fighter
     all_rolling = []
-    for fighter, group in per_fight.groupby("fighter"):
+    rolling_identity_col = _stateful_identity_column(per_fight)
+    for _fighter, group in per_fight.groupby(rolling_identity_col):
         rolled = _compute_rolling_stats(group)
         all_rolling.append(rolled)
 
@@ -1372,7 +1501,11 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     # For fighter_a
     rolling_helper_cols = {
         "fighter",
+        "fighter_id",
+        "fighter_key",
         "opponent",
+        "opponent_id",
+        "opponent_key",
         "event_date",
         "weight_class",
         "won",
@@ -1388,7 +1521,8 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
                  if c not in rolling_helper_cols}
     )
     # Keep key columns for merge
-    a_merge_cols = ["fighter", "event_date"] + [
+    rolling_merge_key = _stateful_identity_column(rolling_df)
+    a_merge_cols = [rolling_merge_key, "event_date"] + [
         c for c in a_rolling.columns
         if c.startswith("a_roll_") or c in ["current_win_streak", "num_fights", "days_since_last_fight"]
     ]
@@ -1398,12 +1532,12 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         if c in a_rolling.columns:
             rename_map[c] = f"a_{c}"
     a_rolling = a_rolling.rename(columns=rename_map)
-    a_merge_cols = ["fighter", "event_date"] + [
+    a_merge_cols = [rolling_merge_key, "event_date"] + [
         c for c in a_rolling.columns if c.startswith("a_")
     ]
     a_rolling_deduped = a_rolling[
         [c for c in a_merge_cols if c in a_rolling.columns]
-    ].drop_duplicates(subset=["fighter", "event_date"], keep="last")
+    ].drop_duplicates(subset=[rolling_merge_key, "event_date"], keep="last")
 
     # For fighter_b
     b_rolling = rolling_df.copy()
@@ -1413,28 +1547,28 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         if c not in rolling_helper_cols
     }
     b_rolling = b_rolling.rename(columns=rename_b)
-    b_merge_cols = ["fighter", "event_date"] + [
+    b_merge_cols = [rolling_merge_key, "event_date"] + [
         c for c in b_rolling.columns if c.startswith("b_")
     ]
     b_rolling_deduped = b_rolling[
         [c for c in b_merge_cols if c in b_rolling.columns]
-    ].drop_duplicates(subset=["fighter", "event_date"], keep="last")
+    ].drop_duplicates(subset=[rolling_merge_key, "event_date"], keep="last")
 
     # Merge fighter A rolling stats
     features = fights_df.merge(
         a_rolling_deduped,
-        left_on=["fighter_a", "event_date"],
-        right_on=["fighter", "event_date"],
+        left_on=["__fighter_a_key", "event_date"],
+        right_on=[rolling_merge_key, "event_date"],
         how="left",
-    ).drop(columns=["fighter"], errors="ignore")
+    ).drop(columns=[rolling_merge_key], errors="ignore")
 
     # Merge fighter B rolling stats
     features = features.merge(
         b_rolling_deduped,
-        left_on=["fighter_b", "event_date"],
-        right_on=["fighter", "event_date"],
+        left_on=["__fighter_b_key", "event_date"],
+        right_on=[rolling_merge_key, "event_date"],
         how="left",
-    ).drop(columns=["fighter"], errors="ignore")
+    ).drop(columns=[rolling_merge_key], errors="ignore")
 
     features = _overlay_ufc_history_backed_fields(features, ufc_per_fight)
     _fill_history_backed_fighter_fields(features)
@@ -1665,8 +1799,8 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     is_rematch_vals = []
     h2h_diff_vals = []
     for _, row in features.iterrows():
-        fa = str(row.get("fighter_a", ""))
-        fb = str(row.get("fighter_b", ""))
+        fa = str(row.get("__fighter_a_key", ""))
+        fb = str(row.get("__fighter_b_key", ""))
         pair = tuple(sorted([fa, fb]))
         prior = h2h.get(pair, [])
         if prior:
@@ -1677,9 +1811,11 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             h2h_diff_vals.append(0)
         if pair not in h2h:
             h2h[pair] = []
-        winner = str(row.get("winner", ""))
-        if winner:
-            h2h[pair].append(winner)
+        winner = row.get("winner", "")
+        if winner == row.get("fighter_a"):
+            h2h[pair].append(fa)
+        elif winner == row.get("fighter_b"):
+            h2h[pair].append(fb)
     features["is_rematch"] = is_rematch_vals
     features["h2h_record_diff"] = h2h_diff_vals
 
@@ -1776,7 +1912,7 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     features["has_data"] = features.get("a_num_fights", pd.Series(0)) + features.get("b_num_fights", pd.Series(0))
 
     logger.info(f"Built {len(features)} fight feature rows with {len(features.columns)} columns")
-    return features
+    return features.drop(columns=["__fighter_a_key", "__fighter_b_key"], errors="ignore")
 
 
 def _fill_history_backed_fighter_fields(features: pd.DataFrame) -> None:
@@ -1824,33 +1960,33 @@ def _detect_weight_class_moves(features: pd.DataFrame) -> None:
     # Build rolling prior-mode weight class per fighter (per-fight basis)
     fighter_wc_history: dict[str, Counter] = {}
     # Store per-row wc_move flags keyed by DataFrame index
-    wc_move_a: dict[int, int] = {}
-    wc_move_b: dict[int, int] = {}
+    wc_move_a: dict[int, float] = {}
+    wc_move_b: dict[int, float] = {}
     for idx, row in features.sort_values("event_date").iterrows():
         wc_w = _wc_to_weight(row.get("weight_class"))
         if wc_w is None:
-            wc_move_a[idx] = 0
-            wc_move_b[idx] = 0
+            wc_move_a[idx] = np.nan
+            wc_move_b[idx] = np.nan
             continue
 
         # Compute flag using prior mode BEFORE updating history
-        fa = row.get("fighter_a")
-        fb = row.get("fighter_b")
+        fa = row.get("__fighter_a_key") or row.get("fighter_a")
+        fb = row.get("__fighter_b_key") or row.get("fighter_b")
         fa_home = fighter_wc_history[fa].most_common(1)[0][0] if fa and fa in fighter_wc_history else None
         fb_home = fighter_wc_history[fb].most_common(1)[0][0] if fb and fb in fighter_wc_history else None
-        wc_move_a[idx] = 1 if (fa_home and wc_w != fa_home) else 0
-        wc_move_b[idx] = 1 if (fb_home and wc_w != fb_home) else 0
+        wc_move_a[idx] = float(fa_home != wc_w) if fa_home is not None else np.nan
+        wc_move_b[idx] = float(fb_home != wc_w) if fb_home is not None else np.nan
 
         # Now update history with this fight
-        for col in ["fighter_a", "fighter_b"]:
-            fighter = row.get(col)
+        for side in ["a", "b"]:
+            fighter = row.get(f"__fighter_{side}_key") or row.get(f"fighter_{side}")
             if fighter:
                 if fighter not in fighter_wc_history:
                     fighter_wc_history[fighter] = Counter()
                 fighter_wc_history[fighter][wc_w] += 1
 
-    a_moving = [wc_move_a.get(idx, 0) for idx in features.index]
-    b_moving = [wc_move_b.get(idx, 0) for idx in features.index]
+    a_moving = [wc_move_a.get(idx, np.nan) for idx in features.index]
+    b_moving = [wc_move_b.get(idx, np.nan) for idx in features.index]
 
     features["a_wc_move"] = a_moving
     features["b_wc_move"] = b_moving

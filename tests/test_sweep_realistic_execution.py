@@ -68,9 +68,9 @@ def test_realistic_mode_defers_settlement_within_event():
     assert len(legacy_log) == 2
     assert len(realistic_log) == 2
 
-    # Legacy: fight 1 settles (a win grows the bankroll) before fight 2 is
-    # sized, so the second stake exceeds the first.
-    assert legacy_log.iloc[1]["bet_size"] > legacy_log.iloc[0]["bet_size"]
+    # Both execution modes defer same-card settlement, so fight 1 winnings
+    # cannot increase fight 2's stake.
+    assert legacy_log.iloc[1]["bet_size"] <= legacy_log.iloc[0]["bet_size"]
 
     # Realistic: both fights are sized from the same event-start bankroll
     # (fight 2 actually sees slightly LESS cash because fight 1's stake is

@@ -21,6 +21,8 @@ def test_lab_baseline_mirrors_promoted_spec():
     assert baseline.xgb_params == spec.xgb_params
     assert baseline.time_decay_half_life == spec.time_decay_half_life
     assert baseline.odds_noise_std == spec.odds_noise_std
+    assert baseline.odds_noise_seed == spec.odds_noise_seed
+    assert baseline.odds_noise_mode == spec.odds_noise_mode
     assert getattr(baseline, "_native_nan", False) == (spec.impute_strategy == "native_nan")
 
 
@@ -42,6 +44,8 @@ def test_train_variant_model_routes_through_production_trainer(monkeypatch):
         calibration_method="sigmoid",
         calibration_cv="temporal_holdout",
         odds_noise_std=0.06,
+        odds_noise_seed=42,
+        odds_noise_mode="antithetic",
         time_decay_half_life=365,
     )
     variant._native_nan = True
@@ -56,6 +60,8 @@ def test_train_variant_model_routes_through_production_trainer(monkeypatch):
     assert calls["kwargs"]["calibration_method"] == "sigmoid"
     assert calls["kwargs"]["calibration_cv"] == "temporal_holdout"
     assert calls["kwargs"]["odds_noise_std"] == 0.06
+    assert calls["kwargs"]["odds_noise_seed"] == 42
+    assert calls["kwargs"]["odds_noise_mode"] == "antithetic"
     assert calls["kwargs"]["time_decay_half_life_days"] == 365
     assert result["impute_strategy"] == "native_nan"
 

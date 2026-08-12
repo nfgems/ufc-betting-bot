@@ -552,7 +552,7 @@ def test_api_predictions_detail_marks_already_bet_sc_candidate(tmp_path, monkeyp
     assert response.status_code == 200
     pred = response.get_json()["predictions"][0]
     assert pred["pick_is_bettable"] is False
-    assert pred["pick_filter_reason"] == "No-odds unavailable"
+    assert pred["pick_filter_reason"] == "Invalid probability"
     assert pred["trade_candidate_active"] is True
     assert pred["trade_candidate_status"] == "already_bet"
     assert pred["trade_candidate_label"] == "Already bet"

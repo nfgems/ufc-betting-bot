@@ -31,6 +31,7 @@ visible in both the console summary and JSON report.
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import sys
@@ -100,6 +101,14 @@ def _write_report(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=1, default=str), encoding="utf-8")
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _established_history_mask(df: pd.DataFrame) -> pd.Series:
     """Select fights where both fighters have earlier snapshot history.
 
@@ -130,12 +139,21 @@ def main() -> int:
     parser.add_argument("--start", default="2025-01-01")
     parser.add_argument("--limit", type=int, default=250)
     parser.add_argument("--tol", type=float, default=1e-6)
-    parser.add_argument("--spec", default="full_live_contract_v6_fullfit")
+    parser.add_argument("--spec", default=None)
     parser.add_argument(
         "--processed-dir",
         type=Path,
-        default=PROCESSED_DATA_DIR,
+        default=None,
         help="Processed snapshot directory containing features.csv and fights_cleaned.csv.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Validated production manifest whose embedded spec and immutable "
+            "processed snapshot must be replayed."
+        ),
     )
     parser.add_argument("--out", default=None)
     parser.add_argument("--seed", type=int, default=7)
@@ -152,9 +170,57 @@ def main() -> int:
 
     logging.basicConfig(level=logging.WARNING)
 
-    spec = resolve_named_training_spec(args.spec)
+    manifest_binding = None
+    if args.manifest is not None:
+        from src.model.production_bundle import (
+            load_production_bundle,
+            validate_production_bundle,
+        )
+
+        bundle = load_production_bundle(args.manifest)
+        bundle_summary = validate_production_bundle(bundle)
+        if args.spec is not None and args.spec != bundle.model_spec_name:
+            parser.error(
+                "--spec does not match the validated manifest: "
+                f"{args.spec!r} != {bundle.model_spec_name!r}"
+            )
+        if (
+            args.processed_dir is not None
+            and args.processed_dir.resolve(strict=False)
+            != bundle.processed_dir.resolve(strict=False)
+        ):
+            parser.error(
+                "--processed-dir does not match the validated manifest: "
+                f"{args.processed_dir} != {bundle.processed_dir}"
+            )
+        spec_name = bundle.model_spec_name
+        processed_dir = bundle.processed_dir.resolve(strict=False)
+        manifest_binding = {
+            "manifest_path": str(bundle.manifest_path.resolve(strict=False)),
+            "manifest_sha256": _file_sha256(bundle.manifest_path),
+            "bundle_id": bundle.bundle_id,
+            "model_spec_name": bundle.model_spec_name,
+            "processed_fights_sha256": bundle_summary.get(
+                "processed_fights_sha256"
+            ),
+            "processed_features_sha256": bundle_summary.get(
+                "processed_features_sha256"
+            ),
+            "immutable_training_fights_sha256": bundle_summary.get(
+                "immutable_training_fights_sha256"
+            ),
+            "immutable_training_features_sha256": bundle_summary.get(
+                "immutable_training_features_sha256"
+            ),
+        }
+    else:
+        spec_name = args.spec or "full_live_contract_v6_fullfit"
+        processed_dir = (args.processed_dir or PROCESSED_DATA_DIR).resolve(
+            strict=False
+        )
+
+    spec = resolve_named_training_spec(spec_name)
     feature_cols = list(spec.feature_cols)
-    processed_dir = args.processed_dir.resolve(strict=False)
     out_path = Path(args.out or f"logs/parity_replay_{args.mode}.json")
 
     features_path = processed_dir / "features.csv"
@@ -171,8 +237,9 @@ def main() -> int:
             "mode": args.mode,
             "n_fights": 0,
             "start": args.start,
-            "spec": args.spec,
+            "spec": spec_name,
             "processed_dir": str(processed_dir),
+            "manifest_binding": manifest_binding,
             "features_path": str(features_path),
             "established_only": bool(args.established_only),
             "requested_feature_count": len(feature_cols),
@@ -251,9 +318,27 @@ def main() -> int:
                 row["fighter_b"],
                 odds_features=odds_features,
                 weight_class=row.get("weight_class") if isinstance(row.get("weight_class"), str) else None,
-                is_title_bout=bool(row.get("is_title_bout", 0)),
-                num_rounds=int(row["num_rounds_feat"]) if pd.notna(row.get("num_rounds_feat")) else 3,
+                is_title_bout=(
+                    bool(row.get("is_title_bout"))
+                    if pd.notna(row.get("is_title_bout"))
+                    else None
+                ),
+                num_rounds=(
+                    int(row["num_rounds_feat"])
+                    if pd.notna(row.get("num_rounds_feat"))
+                    else None
+                ),
                 is_empty_arena=row.get("is_empty_arena"),
+                fighter_a_id=(
+                    str(row.get("fighter_a_id")).strip()
+                    if pd.notna(row.get("fighter_a_id"))
+                    else None
+                ),
+                fighter_b_id=(
+                    str(row.get("fighter_b_id")).strip()
+                    if pd.notna(row.get("fighter_b_id"))
+                    else None
+                ),
                 as_of_date=as_of,
                 training_spec=spec,
                 processed_data_dir=processed_dir,
@@ -370,9 +455,10 @@ def main() -> int:
             "mode": args.mode,
             "n_fights": n_fights,
             "start": args.start,
-            "spec": args.spec,
+            "spec": spec_name,
             "processed_dir": str(processed_dir),
             "features_path": str(features_path),
+            "manifest_binding": manifest_binding,
             "established_only": bool(args.established_only),
             "established_eligible_count_all_dates": established_eligible_count,
             "eligible_fight_count_before_sampling": eligible_fight_count_before_sampling,

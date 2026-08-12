@@ -956,6 +956,61 @@ def full_live_contract_v6_durability_corrected_20260805_fullfit_spec(
     )
 
 
+def full_live_contract_v6_integrity_211_spec() -> NamedModelTrainingSpec:
+    """Fixed integrity evaluation contract when recent method provenance passes."""
+    base = full_live_contract_v6_durability_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_integrity_211",
+        description=(
+            "Fixed durability contract under verified T-1 evaluation semantics; "
+            "retains six method-odds inputs only after the external method-data gate."
+        ),
+        xgb_params={**base.xgb_params, "random_state": 42},
+        odds_noise_std=0.06,
+        odds_noise_seed=42,
+        odds_noise_mode="antithetic",
+    )
+
+
+def full_live_contract_v6_integrity_205_spec() -> NamedModelTrainingSpec:
+    """Deterministic fallback removing exactly the six method-odds inputs."""
+    base = full_live_contract_v6_integrity_211_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_integrity_205",
+        description=(
+            "Fixed durability integrity contract with exactly the six method-odds "
+            "inputs removed after the predeclared method-data gate failed."
+        ),
+        feature_cols=[
+            column
+            for column in base.feature_cols
+            if column not in V4_METHOD_ODDS_FEATURE_COLS
+        ],
+    )
+
+
+def full_live_contract_v6_integrity_211_fullfit_spec() -> NamedModelTrainingSpec:
+    base = full_live_contract_v6_integrity_211_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_integrity_211_fullfit",
+        description=f"Production full fit: {base.description}",
+        train_cutoff_date="2027-01-01",
+    )
+
+
+def full_live_contract_v6_integrity_205_fullfit_spec() -> NamedModelTrainingSpec:
+    base = full_live_contract_v6_integrity_205_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_integrity_205_fullfit",
+        description=f"Production full fit: {base.description}",
+        train_cutoff_date="2027-01-01",
+    )
+
+
 def full_live_contract_v6_plus_rankings_spec() -> NamedModelTrainingSpec:
     """E16 candidate: V6 tuned plus point-in-time official rankings."""
     base = full_live_contract_v6_tuned_spec()
@@ -1057,6 +1112,14 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v6_durability_fullfit": full_live_contract_v6_durability_fullfit_spec,
         "full_live_contract_v6_durability_corrected_20260805_fullfit": (
             full_live_contract_v6_durability_corrected_20260805_fullfit_spec
+        ),
+        "full_live_contract_v6_integrity_211": full_live_contract_v6_integrity_211_spec,
+        "full_live_contract_v6_integrity_205": full_live_contract_v6_integrity_205_spec,
+        "full_live_contract_v6_integrity_211_fullfit": (
+            full_live_contract_v6_integrity_211_fullfit_spec
+        ),
+        "full_live_contract_v6_integrity_205_fullfit": (
+            full_live_contract_v6_integrity_205_fullfit_spec
         ),
         "full_live_contract_v6_plus_rankings": full_live_contract_v6_plus_rankings_spec,
         "full_live_contract_v7": full_live_contract_v7_spec,

@@ -19,10 +19,24 @@ import src.strategy.model_variants as model_variants
 import src.strategy.run_evaluation as run_eval
 
 
+_TEST_SOURCE_ENTRIES: list[dict[str, str]] = []
+_TEST_ENVIRONMENT = {"schema_version": 1, "runtime": "test"}
+_TEST_ENVIRONMENT_SHA = run_eval._canonical_json_sha256(_TEST_ENVIRONMENT)
+_TEST_SOURCE_INVENTORY = {
+    "schema_version": 2,
+    "source_contract": {"python_glob": "src/**/*.py", "required_scripts": []},
+    "sources": _TEST_SOURCE_ENTRIES,
+    "environment_payload_sha256": _TEST_ENVIRONMENT_SHA,
+}
+_TEST_SOURCE_FINGERPRINT = run_eval._canonical_json_sha256(_TEST_SOURCE_INVENTORY)
 TEST_RUNTIME_CODE = {
     "git_sha": "deadbeef",
     "git_dirty": False,
-    "source_fingerprint": "fingerprint-123",
+    "source_fingerprint": _TEST_SOURCE_FINGERPRINT,
+    "source_inventory_sha256": _TEST_SOURCE_FINGERPRINT,
+    "source_inventory": _TEST_SOURCE_INVENTORY,
+    "environment": _TEST_ENVIRONMENT,
+    "environment_payload_sha256": _TEST_ENVIRONMENT_SHA,
 }
 
 
@@ -677,7 +691,7 @@ def test_main_stage2_only_does_not_require_stage3_or_stage4_artifacts(monkeypatc
     monkeypatch.setattr(run_eval, "_configure_logging", lambda run_dir: None)
     monkeypatch.setattr(run_eval, "_collect_runtime_code_metadata", lambda: TEST_RUNTIME_CODE)
     monkeypatch.setattr(run_eval, "_feature_cache_format", lambda: "pickle")
-    monkeypatch.setattr(run_eval, "_load_stage1_results", lambda run_dir: [])
+    monkeypatch.setattr(run_eval, "_load_stage1_results", lambda run_dir, **_kwargs: [])
     monkeypatch.setattr(run_eval, "_run_stage2", lambda **kwargs: [])
     monkeypatch.setattr(
         run_eval,
@@ -850,7 +864,22 @@ def test_run_stage3_candidate_resumes_from_broad_checkpoint(monkeypatch, tmp_pat
     def fake_generate_walk_forward_predictions(**kwargs):
         captured_prediction_kwargs.update(kwargs)
         calls.append("predictions")
-        return [(1, pd.DataFrame())]
+        return [
+            (
+                1,
+                pd.DataFrame(
+                    {
+                        "event_date": pd.to_datetime(["2025-01-01"]),
+                        "fighter_a": ["A"],
+                        "fighter_b": ["B"],
+                        "target": [1],
+                        "fold": [1],
+                        "train_end": pd.to_datetime(["2024-12-01"]),
+                        "test_end": pd.to_datetime(["2025-02-01"]),
+                    }
+                ),
+            )
+        ]
 
     def fail_build_sweep_configs(**kwargs):
         raise AssertionError("Broad sweep should not rerun when broad checkpoint exists")
@@ -905,7 +934,7 @@ def test_run_stage3_candidate_resumes_from_broad_checkpoint(monkeypatch, tmp_pat
 
 
 def test_stage1_and_stage3_prediction_paths_are_strictly_in_parity(monkeypatch, tmp_path):
-    features_df = _synthetic_parity_features()
+    features_df = _synthetic_parity_features(300)
     cell = run_eval.CellSpec(
         model_variant="baseline",
         dataset_variant="append_only_2026",
@@ -962,6 +991,7 @@ def test_stage1_and_stage3_prediction_paths_are_strictly_in_parity(monkeypatch, 
         {
             "cell": asdict(cell),
             "features_path": str(features_path),
+            "reserved_confirmation_folds": 0,
         }
     )
 
@@ -974,6 +1004,8 @@ def test_stage1_and_stage3_prediction_paths_are_strictly_in_parity(monkeypatch, 
         dataset_variant=cell.dataset_variant,
         feature_family=cell.feature_family,
         calibration_method=cell.calibration_method,
+        evaluation_partition="all",
+        allow_all_folds=True,
     )
     stage3_predictions = pd.concat(
         [predictions for _, predictions in stage3_fold_predictions],
@@ -1075,6 +1107,11 @@ def test_generate_variant_fold_predictions_resolves_variant_and_uses_production_
         ].assign(prob_a=0.55, prob_b=0.45),
     )
     monkeypatch.setattr(model_lab, "_merge_historical_odds", lambda predictions: predictions)
+    monkeypatch.setattr(
+        run_eval,
+        "_preflight_selection_fold_manifest",
+        lambda *_args, **_kwargs: "0" * 64,
+    )
     monkeypatch.setattr(
         model_lab,
         "_resolve_market_odds",
@@ -1782,7 +1819,7 @@ def test_run_stage4_blocks_when_control_sweep_is_placeholder(monkeypatch, tmp_pa
     assert "BLOCKED" in report
 
 
-def test_run_stage4_canonicalizes_nested_stage3_best_result(monkeypatch, tmp_path):
+def test_run_stage4_canonicalizes_nested_stage3_production_result(monkeypatch, tmp_path):
     monkeypatch.setattr(
         run_eval,
         "validate_frozen_control_arm_for_promotion_gate",
@@ -1828,7 +1865,8 @@ def test_run_stage4_canonicalizes_nested_stage3_best_result(monkeypatch, tmp_pat
     ]
     sweep_results = {
         "combined_v3_append_only_2026_production": {
-            "best_result": {
+            "production_result": {
+                "promotion_eligible": True,
                 "combined": {
                     "roi": 0.22,
                     "total_profit": 150.0,
@@ -1906,7 +1944,8 @@ def test_run_stage4_preserves_frozen_baseline_trading_artifacts(monkeypatch, tmp
     ]
     sweep_results = {
         "combined_v3_append_only_2026_production": {
-            "best_result": {
+            "production_result": {
+                "promotion_eligible": True,
                 "combined": {
                     "roi": 0.22,
                     "total_profit": 150.0,
@@ -2092,7 +2131,7 @@ def test_fresh_run_warns_on_default_freeze_id(monkeypatch, tmp_path, caplog):
             "--stage", "2",
         ],
     )
-    monkeypatch.setattr(run_eval, "_load_stage1_results", lambda run_dir: [])
+    monkeypatch.setattr(run_eval, "_load_stage1_results", lambda run_dir, **_kwargs: [])
     monkeypatch.setattr(run_eval, "_run_stage2", lambda **kwargs: [])
 
     with caplog.at_level(logging.WARNING):
@@ -2120,7 +2159,7 @@ def test_fresh_run_warns_on_calibration_override(monkeypatch, tmp_path, caplog):
             "--stage", "2",
         ],
     )
-    monkeypatch.setattr(run_eval, "_load_stage1_results", lambda run_dir: [])
+    monkeypatch.setattr(run_eval, "_load_stage1_results", lambda run_dir, **_kwargs: [])
     monkeypatch.setattr(run_eval, "_run_stage2", lambda **kwargs: [])
 
     with caplog.at_level(logging.WARNING):

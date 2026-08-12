@@ -8,6 +8,7 @@ from src.polymarket.monitor import PositionDataPartialError
 from src.polymarket.tracker import BetLedger, ReadOnlyBetLedgerView
 from src.web import app as web_app
 from src.web import serve as web_serve
+from src.web import startup_parity
 
 
 def _open_filled_test_bet(ledger_path):
@@ -277,6 +278,44 @@ def _runtime_status(**overrides):
     return status
 
 
+def _valid_startup_parity_receipt() -> dict:
+    binding = {
+        "deployed_git_sha": "d" * 40,
+        "bundle_id": "release-1",
+        "model_spec_name": "full_live_contract_v6_integrity_205_fullfit",
+        "registered_spec_sha256": "1" * 64,
+        "confirmed_strategy_sha256": "7" * 64,
+        "source_manifest_sha256": "2" * 64,
+        "runtime_manifest_sha256": "3" * 64,
+        "installed_manifest_sha256": "2" * 64,
+        "immutable_fights_sha256": "4" * 64,
+        "immutable_features_sha256": "5" * 64,
+        "replay_args": {
+            "start": "2025-01-01",
+            "limit": 250,
+            "seed": 7,
+            "tol": 1e-6,
+            "exact": {"mode": "exact", "established_only": False},
+            "prefight": {"mode": "prefight", "established_only": True},
+        },
+    }
+    report = {
+        "path": "parity.json",
+        "sha256": "6" * 64,
+        "n_fights": 10,
+        "requested_feature_count": 205,
+        "forbidden_mismatch_count": 0,
+    }
+    return {
+        "schema_version": 1,
+        "receipt_key": startup_parity._canonical_sha256(binding),
+        "passed": True,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "binding": binding,
+        "reports": {"exact": dict(report), "prefight": dict(report)},
+    }
+
+
 @pytest.fixture(autouse=True)
 def _reset_runtime_state(monkeypatch):
     monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
@@ -360,6 +399,146 @@ def test_readyz_exposes_exact_production_model_hashes():
     assert bundle["model_sha256"] == "1" * 64
     assert bundle["no_odds_model_sha256"] == "2" * 64
     assert bundle["logistic_model_sha256"] == "3" * 64
+
+
+def test_hosted_real_money_readyz_requires_strictly_validated_startup_receipt(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "ufc-bot")
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+    web_app.set_runtime_status(
+        _runtime_status(
+            requested_live_mode="real",
+            requested_live_mode_raw="real",
+            effective_live_mode="real",
+            trading_enabled=True,
+            trading_live=True,
+            components={
+                "betting_loop": {"state": "running"},
+                "clob": {"state": "running"},
+                "monitor_loop": {"state": "running"},
+            },
+        )
+    )
+
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["ready"] is False
+    assert payload["startup_parity_required"] is True
+    assert payload["startup_parity_validated"] is False
+    assert "startup_parity_receipt_not_validated" in payload["errors"]
+
+
+def test_hosted_real_money_readyz_accepts_startup_validated_exact_receipt(monkeypatch):
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "ufc-bot")
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+    receipt = _valid_startup_parity_receipt()
+    web_app.set_runtime_status(
+        _runtime_status(
+            requested_live_mode="real",
+            requested_live_mode_raw="real",
+            effective_live_mode="real",
+            trading_enabled=True,
+            trading_live=True,
+            startup_parity=receipt,
+            startup_parity_required=True,
+            startup_parity_validation=(
+                startup_parity.startup_parity_validation_record(receipt)
+            ),
+            components={
+                "betting_loop": {"state": "running"},
+                "clob": {"state": "running"},
+                "monitor_loop": {"state": "running"},
+            },
+        )
+    )
+
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ready"] is True
+    assert payload["startup_parity_required"] is True
+    assert payload["startup_parity_validated"] is True
+
+
+def test_hosted_real_money_readyz_keeps_startup_manifest_receipt_after_lookup_refresh(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "ufc-bot")
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+    receipt = _valid_startup_parity_receipt()
+    validation = startup_parity.startup_parity_validation_record(receipt)
+    status = _runtime_status(
+        requested_live_mode="real",
+        requested_live_mode_raw="real",
+        effective_live_mode="real",
+        trading_enabled=True,
+        trading_live=True,
+        startup_parity=receipt,
+        startup_parity_required=True,
+        startup_parity_validation=validation,
+        production_bundle={"processed_features_sha256": "7" * 64},
+        components={
+            "betting_loop": {"state": "running"},
+            "clob": {"state": "running"},
+            "monitor_loop": {"state": "running"},
+        },
+    )
+    web_app.set_runtime_status(status)
+
+    refreshed = web_app.get_runtime_status()
+    refreshed["production_bundle"] = {"processed_features_sha256": "8" * 64}
+    web_app.set_runtime_status(refreshed)
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["production_bundle"]["processed_features_sha256"] == "8" * 64
+    assert payload["startup_parity_validation"] == validation
+    assert payload["startup_parity_validated"] is True
+
+
+@pytest.mark.parametrize(
+    ("hosted", "mode"),
+    [(False, "real"), (True, "off"), (True, "dry-run")],
+)
+def test_startup_receipt_does_not_gate_local_off_or_dry_run_readyz(
+    monkeypatch,
+    hosted,
+    mode,
+):
+    if hosted:
+        monkeypatch.setenv("RAILWAY_SERVICE_NAME", "ufc-bot")
+    else:
+        monkeypatch.delenv("RAILWAY_SERVICE_NAME", raising=False)
+    monkeypatch.setenv("LIVE_TRADING_MODE", mode)
+    real = mode == "real"
+    web_app.set_runtime_status(
+        _runtime_status(
+            requested_live_mode=mode,
+            requested_live_mode_raw=mode,
+            effective_live_mode=mode,
+            trading_enabled=real,
+            trading_live=real,
+            components=(
+                {
+                    "betting_loop": {"state": "running"},
+                    "clob": {"state": "running"},
+                    "monitor_loop": {"state": "running"},
+                }
+                if real
+                else {}
+            ),
+        )
+    )
+
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 200
+    assert response.get_json()["ready"] is True
 
 
 def test_api_runtime_status_returns_components_without_probe_failure():

@@ -30,6 +30,7 @@ from src.strategy.duo_trader_sweep import (
     _sort_summary_rows,
     _print_sweep_results,
 )
+from src.strategy.model_lab import DEFAULT_CONFIRMATION_FOLD_COUNT
 from src.strategy.selection_gate import SweepTargetSpec, specs_from_variant_names
 
 logger = logging.getLogger(__name__)
@@ -260,6 +261,9 @@ def run_finalist_sweep(
             feature_family=spec.feature_family,
             calibration_method=spec.calibration_method,
             retrain_months=spec.retrain_months,
+            evaluation_partition="selection",
+            confirmation_fold_count=DEFAULT_CONFIRMATION_FOLD_COUNT,
+            allow_all_folds=False,
         )
 
         # Step 2: production controls anchor
