@@ -1862,6 +1862,32 @@ def test_resolve_live_event_context_uses_official_roster_for_late_debutant_addit
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_resolve_live_event_context_matches_eduardo_henrique_ring_name_on_utc_rollover():
+    event_context = bot._resolve_live_event_context(
+        {
+            "event_id": "6d9093bc392e34155f0f79848263d33a",
+            # UFC 330 is August 15 locally and rolls into August 16 UTC.
+            "commence_time": "2026-08-16T00:15:00+00:00",
+            "fighter_a": "Charles Johnson",
+            "fighter_b": "Eduardo Henrique",
+        },
+        [{
+            "event_date": "August 15, 2026",
+            "fighter_a": "Charles Johnson",
+            "fighter_b": "Eduardo Chapolin",
+            "weight_class": "Catchweight Bout",
+            "num_rounds": 3,
+            "is_title_bout": False,
+        }],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is not None
+    assert event_context["weight_class"] == "Catchweight Bout"
+    assert event_context["num_rounds"] == 3
+    assert event_context["card_date"] == "2026-08-15"
+
+
 def test_official_roster_late_addition_fallback_requires_confirmed_ufc_date(monkeypatch):
     monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 7, 18, tzinfo=timezone.utc))
     monkeypatch.setattr(bot, "_official_roster_weight_class", lambda *_args: "Featherweight")

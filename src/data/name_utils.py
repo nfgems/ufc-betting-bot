@@ -225,6 +225,9 @@ _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
     # The Odds API uses the common Sergey transliteration while UFC.com and
     # UFCStats use Serghei for the same heavyweight.
     "sergey spivak": "serghei spivac",
+    # Bookmakers use his legal surname, while UFCStats indexes the TUF/DWCS
+    # flyweight under his ring name, Eduardo Chapolin.
+    "eduardo henrique": "eduardo chapolin",
     # "Bobby" is expanded by _NICKNAME_MAP before this alias table is applied.
     "robert green": "king green",
 }
@@ -245,6 +248,7 @@ _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
     "william ray goff": "Billy Ray Goff",
     "yadier del valle": "Yadier del Valle",
     "giovanna canuto": "Giovanna Canuto",
+    "eduardo chapolin": "Eduardo Chapolin",
 }
 
 

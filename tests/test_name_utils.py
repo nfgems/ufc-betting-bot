@@ -25,6 +25,12 @@ def test_sergey_spivak_matches_official_serghei_spivac_identity():
     assert canonical_fighter_display_name("Sergey Spivak") == "Serghei Spivac"
 
 
+def test_eduardo_henrique_matches_ufcstats_ring_name():
+    assert same_person_name("Eduardo Henrique", "Eduardo Chapolin")
+    assert normalize_cross_source_name("Eduardo Henrique") == "eduardo chapolin"
+    assert canonical_fighter_display_name("Eduardo Henrique") == "Eduardo Chapolin"
+
+
 def test_name_appears_in_text_matches_cross_source_aliases():
     assert name_appears_in_text(
         "Joseph Pyfer",
@@ -234,6 +240,33 @@ def test_search_fighter_url_uses_nursultan_ruziboev_alias(monkeypatch):
         == "http://ufcstats.com/fighter-details/nursulton"
     )
     assert requested_urls[0].endswith("char=r&page=all")
+
+
+def test_search_fighter_url_matches_eduardo_henrique_ring_name(monkeypatch):
+    fighter_lookup.clear_cache()
+    requested_urls = []
+
+    def fake_get_soup(url):
+        requested_urls.append(url)
+        return BeautifulSoup(
+            """
+            <table>
+              <tr class="b-statistics__table-row">
+                <td><a class="b-link" href="http://ufcstats.com/fighter-details/62f3039da2f92a8c">Eduardo</a></td>
+                <td><a class="b-link">Chapolin</a></td>
+              </tr>
+            </table>
+            """,
+            "lxml",
+        )
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", fake_get_soup)
+
+    assert (
+        fighter_lookup.search_fighter_url("Eduardo Henrique")
+        == "http://ufcstats.com/fighter-details/62f3039da2f92a8c"
+    )
+    assert requested_urls[0].endswith("char=c&page=all")
 
 
 def test_search_fighter_url_matches_billy_goff_middle_name_alias(monkeypatch):
