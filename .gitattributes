@@ -2,6 +2,3 @@
 Dockerfile text eol=lf
 data/raw/ufc_fighters_profile_supplement.csv text eol=lf
 evidence/confirmation_claims/** -text
-evidence/logs/integrity_v2/track_c_summary.csv -text -diff
-evidence/method_odds/integrity_v2_contract_decision.json -text -diff
-evidence/method_odds/integrity_v2_campaign/method_odds_recovery_terminal.csv -text -diff
