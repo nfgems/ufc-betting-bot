@@ -674,7 +674,6 @@ def audit_single_value_pipeline(
     min_edge: float = MIN_EDGE_THRESHOLD,
     blend_weight: float = BLEND_WEIGHT,
     edge_scaling_base: Optional[float] = None,
-    model_agreement_min_edge: Optional[float] = None,
 ) -> None:
     audit_unmatched_markets(
         collector,
@@ -691,7 +690,6 @@ def audit_single_value_pipeline(
             min_edge=min_edge,
             blend_weight=blend_weight,
             edge_scaling_base=edge_scaling_base,
-            model_agreement_min_edge=model_agreement_min_edge,
         )
         collector.record_path("S", row, **decision)
 
@@ -702,10 +700,6 @@ def audit_conviction_pipeline(
     predictions: pd.DataFrame,
     matched_predictions: pd.DataFrame,
     require_positive_ev: bool = True,
-    min_model_prob: float = CONVICTION_MIN_MODEL_PROB,
-    min_no_odds_prob: float = CONVICTION_MIN_NO_ODDS_PROB,
-    min_edge: float | None = None,
-    max_decimal_odds: float | None = None,
 ) -> None:
     audit_unmatched_markets(
         collector,
@@ -720,14 +714,7 @@ def audit_conviction_pipeline(
         collector.record_path(
             "C",
             row,
-            **explain_conviction_row(
-                row,
-                require_positive_ev=require_positive_ev,
-                min_model_prob=min_model_prob,
-                min_no_odds_prob=min_no_odds_prob,
-                min_edge=min_edge,
-                max_decimal_odds=max_decimal_odds,
-            ),
+            **explain_conviction_row(row, require_positive_ev=require_positive_ev),
         )
 
 
@@ -737,7 +724,6 @@ def explain_single_value_row(
     min_edge: float = MIN_EDGE_THRESHOLD,
     blend_weight: float = BLEND_WEIGHT,
     edge_scaling_base: Optional[float] = None,
-    model_agreement_min_edge: Optional[float] = None,
 ) -> dict:
     data = _row_dict(row)
     model_a = _coerce_probability(data.get("prob_a"))
@@ -787,7 +773,6 @@ def explain_single_value_row(
             line_movement=line_movement,
             line_is_sharp=line_is_sharp,
             line_steam_move=line_steam_move,
-            model_agreement_min_edge=model_agreement_min_edge,
         ),
         _value_candidate(
             data,
@@ -804,7 +789,6 @@ def explain_single_value_row(
             line_movement=line_movement,
             line_is_sharp=line_is_sharp,
             line_steam_move=line_steam_move,
-            model_agreement_min_edge=model_agreement_min_edge,
         ),
     ]
     candidates.sort(key=lambda item: item["numbers"].get("edge") or -999.0, reverse=True)
@@ -863,7 +847,6 @@ def _value_candidate(
     line_movement: Optional[float],
     line_is_sharp: Optional[int],
     line_steam_move: Optional[int],
-    model_agreement_min_edge: Optional[float],
 ) -> dict:
     edge = blended_prob - market_prob
     rejection = _filter_rejection_reason(
@@ -882,7 +865,6 @@ def _value_candidate(
         b_org_tier=data.get("b_pre_ufc_org_tier_best"),
         newbie_adjustment=newbie_adjustment,
         edge_scaling_base=edge_scaling_base,
-        model_agreement_min_edge=model_agreement_min_edge,
     )
     required_edge = required_edge_for_market(
         market_prob,
@@ -906,13 +888,7 @@ def _value_candidate(
                 no_odds_prob - market_prob if no_odds_prob is not None else None
             ),
             "model_agreement_min_edge": (
-                (
-                    MODEL_AGREEMENT_MIN_EDGE
-                    if model_agreement_min_edge is None
-                    else model_agreement_min_edge
-                )
-                if REQUIRE_MODEL_AGREEMENT
-                else None
+                MODEL_AGREEMENT_MIN_EDGE if REQUIRE_MODEL_AGREEMENT else None
             ),
             "newbie_rule": _newbie_rule_config(None).name,
             "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
@@ -976,15 +952,7 @@ def _value_rejection_explanation(numbers: dict, rejection: dict) -> str:
     return f"Skipped by Single Trader at {reason or 'strategy filter'}: {detail}"
 
 
-def explain_conviction_row(
-    row,
-    *,
-    require_positive_ev: bool = True,
-    min_model_prob: float = CONVICTION_MIN_MODEL_PROB,
-    min_no_odds_prob: float = CONVICTION_MIN_NO_ODDS_PROB,
-    min_edge: float | None = None,
-    max_decimal_odds: float | None = None,
-) -> dict:
+def explain_conviction_row(row, *, require_positive_ev: bool = True) -> dict:
     data = _row_dict(row)
     model_a = _coerce_probability(data.get("prob_a"))
     model_b = _coerce_probability(data.get("prob_b"))
@@ -1027,10 +995,6 @@ def explain_conviction_row(
             data,
             candidate,
             require_positive_ev=require_positive_ev,
-            min_model_prob=min_model_prob,
-            min_no_odds_prob=min_no_odds_prob,
-            min_edge=min_edge,
-            max_decimal_odds=max_decimal_odds,
         )
         if result["status"] == "candidate":
             return result
@@ -1038,23 +1002,10 @@ def explain_conviction_row(
         data,
         candidates[0],
         require_positive_ev=require_positive_ev,
-        min_model_prob=min_model_prob,
-        min_no_odds_prob=min_no_odds_prob,
-        min_edge=min_edge,
-        max_decimal_odds=max_decimal_odds,
     )
 
 
-def _explain_conviction_candidate(
-    data: dict,
-    candidate: dict,
-    *,
-    require_positive_ev: bool,
-    min_model_prob: float,
-    min_no_odds_prob: float,
-    min_edge: float | None,
-    max_decimal_odds: float | None,
-) -> dict:
+def _explain_conviction_candidate(data: dict, candidate: dict, *, require_positive_ev: bool) -> dict:
     side = candidate["side"]
     model_prob = candidate["model"]
     market_prob = candidate["market"]
@@ -1069,35 +1020,34 @@ def _explain_conviction_candidate(
         "market_probability": market_prob,
         "blended_probability": model_prob,
         "edge": model_prob - market_prob,
-        "required_model_probability": min_model_prob,
-        "required_no_odds_probability": min_no_odds_prob,
-        "required_edge": min_edge,
-        "maximum_decimal_odds": max_decimal_odds,
+        "required_model_probability": CONVICTION_MIN_MODEL_PROB,
+        "required_no_odds_probability": CONVICTION_MIN_NO_ODDS_PROB,
+        "required_edge": 0.0,
         "decimal_odds": implied_prob_to_decimal_odds(market_prob),
     }
-    if model_prob < min_model_prob:
+    if model_prob < CONVICTION_MIN_MODEL_PROB:
         return {
             "status": "skipped",
             "gate": "conviction_model_probability",
             "explanation": (
                 f"Skipped by Conviction Trader because {fighter}'s model probability "
-                f"was {_prob(model_prob)}, needs {_prob(min_model_prob)}."
+                f"was {_prob(model_prob)}, needs {_prob(CONVICTION_MIN_MODEL_PROB)}."
             ),
             "numbers": numbers,
         }
-    if no_odds_prob is None or no_odds_prob < min_no_odds_prob:
+    if no_odds_prob is None or no_odds_prob < CONVICTION_MIN_NO_ODDS_PROB:
         return {
             "status": "skipped",
             "gate": "conviction_no_odds_probability",
             "explanation": (
                 f"Skipped by Conviction Trader because no-odds probability was "
-                f"{_prob(no_odds_prob)}, needs {_prob(min_no_odds_prob)}."
+                f"{_prob(no_odds_prob)}, needs {_prob(CONVICTION_MIN_NO_ODDS_PROB)}."
             ),
             "numbers": numbers,
         }
     own_fights = candidate.get("own_fights")
     opp_fights = candidate.get("opp_fights")
-    if own_fights is None or own_fights < MIN_FIGHTER_FIGHTS:
+    if own_fights is not None and own_fights < MIN_FIGHTER_FIGHTS:
         return {
             "status": "skipped",
             "gate": "conviction_experience",
@@ -1107,34 +1057,13 @@ def _explain_conviction_candidate(
             ),
             "numbers": numbers,
         }
-    if opp_fights is None or opp_fights < MIN_FIGHTER_FIGHTS:
+    if opp_fights is not None and opp_fights < MIN_FIGHTER_FIGHTS:
         return {
             "status": "skipped",
             "gate": "conviction_experience",
             "explanation": (
                 f"Skipped by Conviction Trader because opponent has {opp_fights} UFC fights, "
                 f"minimum is {MIN_FIGHTER_FIGHTS}."
-            ),
-            "numbers": numbers,
-        }
-    edge = model_prob - market_prob
-    if min_edge is not None and edge < min_edge:
-        return {
-            "status": "skipped",
-            "gate": "conviction_minimum_edge",
-            "explanation": (
-                f"Skipped by Conviction Trader because edge was {_pct(edge)}, "
-                f"needs {_pct(min_edge)}."
-            ),
-            "numbers": numbers,
-        }
-    if max_decimal_odds is not None and numbers["decimal_odds"] > max_decimal_odds:
-        return {
-            "status": "skipped",
-            "gate": "conviction_maximum_odds",
-            "explanation": (
-                "Skipped by Conviction Trader because decimal odds were "
-                f"{numbers['decimal_odds']:.2f}, maximum is {max_decimal_odds:.2f}."
             ),
             "numbers": numbers,
         }

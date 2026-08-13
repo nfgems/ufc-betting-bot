@@ -39,14 +39,9 @@ from src.model.production_bundle import (
     validate_production_bundle,
 )
 from src.model.training_spec import resolve_named_training_spec
-from src.strategy.runtime_strategy import (
-    build_confirmed_strategy_payload,
-    validate_confirmed_strategy_payload,
-)
 
 import scripts.build_model_input_inventory as model_input_inventory
 import scripts.bfo_lineage as bfo_lineage
-import scripts.check_production_refit_contract as production_refit_contract
 
 
 MODEL_FILENAMES = {
@@ -87,9 +82,6 @@ SCHEDULED_POLICY_CONTRACT_KEYS = frozenset(
         "minimum_cutoff_buffer_days",
         "feature_count",
     }
-)
-SCHEDULED_POLICY_CONTRACT_V2_KEYS = SCHEDULED_POLICY_CONTRACT_KEYS | frozenset(
-    {"method_contract_decision_path", "method_contract_decision_sha256"}
 )
 SCHEDULED_POLICY_ROOT_RELEASE_KEYS = frozenset(
     {
@@ -136,16 +128,6 @@ SCHEDULED_POLICY_EVALUATION_KEYS = frozenset(
         "minimum_fighter_fights",
         "line_movement_filter",
         "execution_assumptions",
-    }
-)
-SCHEDULED_POLICY_EVALUATION_V2_KEYS = SCHEDULED_POLICY_EVALUATION_KEYS | frozenset(
-    {
-        "require_entry_odds",
-        "quality_recent_window_days",
-        "quality_minimum_recent_rows",
-        "quality_minimum_entry_coverage",
-        "quality_maximum_entry_lag_days",
-        "quality_allowed_prefight_sources",
     }
 )
 SCHEDULED_POLICY_EXECUTION_ASSUMPTION_KEYS = frozenset(
@@ -205,7 +187,6 @@ SCHEDULED_POLICY_HEALTH_LIMIT_KEYS = frozenset(
 )
 SCHEDULED_REFIT_MANIFEST_KEYS = frozenset(
     {
-        "policy_schema_version",
         "policy_id",
         "sha256",
         "root_bundle_id",
@@ -328,7 +309,6 @@ class BundleInputs:
     inference_sample_rows: int = 32
     scheduled_refit_policy_path: Path | None = None
     previous_bfo_lineage_manifest_path: Path | None = None
-    final_track_c_pass_receipt_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -506,19 +486,17 @@ def _load_scheduled_refit_policy(
     repo_root: Path,
 ) -> ScheduledRefitPolicy:
     resolved = _existing_file(path, repo_root=repo_root, label="Scheduled refit policy")
-    try:
-        payload = production_refit_contract.load_policy(resolved)
-    except (production_refit_contract.ContractInputError, OSError) as exc:
-        raise StagingBundleError(f"Scheduled refit policy is invalid: {exc}") from exc
-    _require_exact_keys(
-        payload,
-        SCHEDULED_POLICY_TOP_LEVEL_KEYS
-        | ({"performance_confirmation"} if "performance_confirmation" in payload else set()),
+    payload = _load_json_object_without_duplicates(
+        resolved,
         label="Scheduled refit policy",
     )
-    schema_version = payload.get("schema_version")
-    if schema_version not in {1, 2} or isinstance(schema_version, bool):
-        raise StagingBundleError("Scheduled refit policy must use schema_version 1 or 2")
+    _require_exact_keys(
+        payload,
+        SCHEDULED_POLICY_TOP_LEVEL_KEYS,
+        label="Scheduled refit policy",
+    )
+    if payload.get("schema_version") != 1:
+        raise StagingBundleError("Scheduled refit policy must use schema_version 1")
     policy_id = payload.get("policy_id")
     if (
         not isinstance(policy_id, str)
@@ -540,20 +518,12 @@ def _load_scheduled_refit_policy(
         raise StagingBundleError("Scheduled refit policy sections must be objects")
     _require_exact_keys(
         contract,
-        (
-            SCHEDULED_POLICY_CONTRACT_V2_KEYS
-            if schema_version == 2
-            else SCHEDULED_POLICY_CONTRACT_KEYS
-        ),
+        SCHEDULED_POLICY_CONTRACT_KEYS,
         label="Scheduled refit policy contract",
     )
     _require_exact_keys(
         evaluation,
-        (
-            SCHEDULED_POLICY_EVALUATION_V2_KEYS
-            if schema_version == 2
-            else SCHEDULED_POLICY_EVALUATION_KEYS
-        ),
+        SCHEDULED_POLICY_EVALUATION_KEYS,
         label="Scheduled refit policy evaluation",
     )
     assumptions = evaluation.get("execution_assumptions")
@@ -586,65 +556,6 @@ def _load_scheduled_refit_policy(
     ):
         if not SHA256_RE.fullmatch(str(contract.get(field) or "")):
             raise StagingBundleError(f"Scheduled refit contract {field} is not SHA-256")
-    if schema_version == 2:
-        decision_path = Path(str(contract.get("method_contract_decision_path") or ""))
-        if (
-            not str(decision_path)
-            or decision_path.is_absolute()
-            or ".." in decision_path.parts
-            or not SHA256_RE.fullmatch(
-                str(contract.get("method_contract_decision_sha256") or "")
-            )
-        ):
-            raise StagingBundleError(
-                "Scheduled refit method-contract decision binding is invalid"
-            )
-        resolved_decision_path = _existing_file(
-            decision_path,
-            repo_root=repo_root,
-            label="Scheduled refit method-contract decision",
-        )
-        if _sha256_file(resolved_decision_path) != str(
-            contract["method_contract_decision_sha256"]
-        ).lower():
-            raise StagingBundleError(
-                "Scheduled refit method-contract decision SHA-256 does not match policy"
-            )
-        registry_errors, _, _ = production_refit_contract.validate_policy_registry(
-            payload,
-            repo_root=repo_root,
-        )
-        if registry_errors:
-            raise StagingBundleError(
-                "Scheduled refit policy-v2 registry validation failed: "
-                + "; ".join(registry_errors)
-            )
-        try:
-            entry_offset_days = float(evaluation.get("entry_offset_days", -1.0))
-            minimum_entry_coverage = float(
-                evaluation.get("quality_minimum_entry_coverage", -1.0)
-            )
-            maximum_entry_lag_days = float(
-                evaluation.get("quality_maximum_entry_lag_days", -1.0)
-            )
-        except (TypeError, ValueError) as exc:
-            raise StagingBundleError(
-                "Scheduled refit policy v2 honest-odds quality settings are invalid"
-            ) from exc
-        if (
-            evaluation.get("require_entry_odds") is not True
-            or evaluation.get("entry_offset_for_features") is not True
-            or entry_offset_days != 1.0
-            or evaluation.get("quality_recent_window_days") != 60
-            or evaluation.get("quality_minimum_recent_rows") != 50
-            or minimum_entry_coverage != 0.70
-            or maximum_entry_lag_days != 35.0
-            or evaluation.get("quality_allowed_prefight_sources")
-            != ["line_history", "odds_api"]
-        ):
-            raise StagingBundleError(
-                "Scheduled refit policy v2 honest-odds quality settings are invalid"
-            )
     if set(contract.get("allowed_fullfit_differences") or []) != set(
         FULLFIT_ALLOWED_DIFFERENCES
     ) or len(contract.get("allowed_fullfit_differences") or []) != len(
@@ -684,15 +595,9 @@ def _load_scheduled_refit_policy(
     ):
         if not SHA256_RE.fullmatch(str(baseline.get(field) or "")):
             raise StagingBundleError(f"Scheduled refit baseline.{field} is not SHA-256")
-    expected_baseline_role = (
-        "confirmed_winner_track_c_baseline"
-        if payload.get("performance_confirmation", {}).get("state")
-        == "final_track_c_bound"
-        else "root_release_reference_thresholds"
-    )
-    if baseline.get("comparison_role") != expected_baseline_role:
+    if baseline.get("comparison_role") != "root_release_reference_thresholds":
         raise StagingBundleError(
-            "Scheduled refit baseline role does not match its policy state"
+            "Scheduled refit baseline role is not the root-release reference"
         )
     if baseline.get("evidence_protocol_sha256") != baseline.get(
         "scheduled_protocol_sha256"
@@ -1837,7 +1742,6 @@ def _validate_test_set_metadata(
     metadata_path: Path,
     primary_spec: dict[str, Any],
     expected_test_frame,
-    expected_training_input_evidence: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     import pandas as pd
 
@@ -1848,10 +1752,6 @@ def _validate_test_set_metadata(
     if metadata.get("training_spec") != primary_spec:
         raise StagingBundleError(
             "Test-set metadata training_spec does not exactly match the primary artifact"
-        )
-    if metadata.get("training_input_evidence") != expected_training_input_evidence:
-        raise StagingBundleError(
-            "Test-set metadata training_input_evidence does not match the primary artifact"
         )
     feature_cols = primary_spec.get("feature_cols")
     expected_feature_hash = _canonical_json_sha256(feature_cols)
@@ -2290,10 +2190,7 @@ def _replay_trainer_preprocessing(
     trainer_features_path: Path,
     fullfit_spec_name: str,
 ) -> dict[str, object]:
-    from src.bot import (
-        _load_training_dataframe,
-        _prepare_policy_bound_fullfit_training_features,
-    )
+    from src.bot import _load_training_dataframe
     from src.data.kaggle_loader import save_processed
     from src.features.build_features import build_features, save_features
 
@@ -2309,12 +2206,6 @@ def _replay_trainer_preprocessing(
             )
             save_processed(fights_frame, filename=replay_fights)
             features_frame = build_features(fights_frame)
-            features_frame, _training_input_evidence = (
-                _prepare_policy_bound_fullfit_training_features(
-                    features_frame,
-                    spec=spec,
-                )
-            )
             save_features(features_frame, filename=replay_features)
         except Exception as exc:
             raise StagingBundleError(
@@ -2347,7 +2238,6 @@ def _replay_trainer_preprocessing(
             "src.bot._load_training_dataframe",
             "src.data.kaggle_loader.save_processed",
             "src.features.build_features.build_features",
-            "src.bot._prepare_policy_bound_fullfit_training_features",
             "src.features.build_features.save_features",
         ],
         "fights": {
@@ -2381,58 +2271,26 @@ def _audit_trainer_relationship(
     primary_spec: dict[str, Any],
     model_results: dict[str, dict[str, Any]],
 ) -> dict[str, object]:
-    from io import StringIO
-
-    import pandas as pd
-
-    from src.bot import _prepare_policy_bound_fullfit_training_features
-
     fights_report = _semantic_csv_equivalence(
         audit_fights_path,
         trainer_fights_path,
         label="fights",
     )
+    features_report = _semantic_csv_equivalence(
+        audit_features_path,
+        trainer_features_path,
+        label="features",
+    )
+    if fights_report["byte_equal"] or features_report["byte_equal"]:
+        raise StagingBundleError(
+            "Approved audit and trainer snapshots must retain both distinct exact identities"
+        )
     audit_features = _read_semantic_csv(
         audit_features_path, label="audit features eligibility"
     )
     trainer_features = _read_semantic_csv(
         trainer_features_path, label="trainer features eligibility"
     )
-    try:
-        registered_spec = resolve_named_training_spec(str(primary_spec.get("name") or ""))
-        audit_features, preparation_evidence = (
-            _prepare_policy_bound_fullfit_training_features(
-                audit_features,
-                spec=registered_spec,
-            )
-        )
-    except Exception as exc:
-        raise StagingBundleError(
-            f"Unable to prepare the audit feature matrix with trainer odds semantics: {exc}"
-        ) from exc
-    if preparation_evidence is not None:
-        # Normalize through the same CSV boundary used by the completed trainer
-        # before enforcing dtype/NaN/value equivalence.
-        audit_features = pd.read_csv(
-            StringIO(audit_features.to_csv(index=False)),
-            low_memory=False,
-        )
-    features_report = _semantic_frame_equivalence(
-        audit_features,
-        trainer_features,
-        label="features",
-    )
-    features_report.update(
-        {
-            "audit_sha256": _sha256_file(audit_features_path),
-            "trainer_sha256": _sha256_file(trainer_features_path),
-            "byte_equal": _files_byte_equal(audit_features_path, trainer_features_path),
-        }
-    )
-    if fights_report["byte_equal"] or features_report["byte_equal"]:
-        raise StagingBundleError(
-            "Approved audit and trainer snapshots must retain both distinct exact identities"
-        )
     eligibility = _eligible_split_equivalence(
         audit_features,
         trainer_features,
@@ -2463,307 +2321,6 @@ def _audit_trainer_relationship(
         "features": features_report,
         "eligibility": eligibility,
         "prediction_invariance": predictions,
-        "policy_bound_training_preparation": preparation_evidence,
-    }
-
-
-def _validate_policy_bound_training_input_evidence(
-    *,
-    features_path: Path,
-    model_results: dict[str, dict[str, Any]],
-    scheduled_policy: ScheduledRefitPolicy | None,
-    final_track_c_binding: dict[str, Any] | None = None,
-) -> dict[str, object] | None:
-    """Validate the model receipts against the exact prepared feature CSV."""
-    import numpy as np
-    import pandas as pd
-
-    primary_spec = model_results.get("primary", {}).get("training_spec")
-    spec_name = str((primary_spec or {}).get("name") or "")
-    policy_bound = bool(
-        scheduled_policy is not None
-        and scheduled_policy.payload.get("schema_version") == 2
-        and spec_name == scheduled_policy.contract.get("fullfit_spec_name")
-    )
-    receipts = {
-        role: result.get("training_input_evidence")
-        for role, result in model_results.items()
-    }
-    if not policy_bound:
-        if any(receipt is not None for receipt in receipts.values()):
-            raise StagingBundleError(
-                "Only policy-bound integrity full-fit artifacts may carry training-input evidence"
-            )
-        return None
-    if scheduled_policy is None:
-        raise StagingBundleError(
-            "Policy-bound integrity full-fit artifacts require a scheduled refit policy"
-        )
-    if final_track_c_binding is None:
-        raise StagingBundleError(
-            "Policy-bound full-fit artifacts require a final Track-C PASS binding"
-        )
-    if set(receipts) != set(MODEL_FILENAMES) or any(
-        not isinstance(receipt, dict) for receipt in receipts.values()
-    ):
-        raise StagingBundleError(
-            "Every policy-bound model artifact must embed training-input evidence"
-        )
-    primary_receipt = deepcopy(receipts["primary"])
-    if any(receipt != primary_receipt for receipt in receipts.values()):
-        raise StagingBundleError("Policy-bound model training-input receipts do not match")
-
-    receipt_payload = deepcopy(primary_receipt)
-    receipt_sha256 = str(receipt_payload.pop("receipt_sha256", "") or "").lower()
-    if receipt_sha256 != _canonical_json_sha256(receipt_payload):
-        raise StagingBundleError("Policy-bound training-input receipt hash is invalid")
-    evaluation = scheduled_policy.payload["evaluation"]
-    expected_values = {
-        "schema_version": 1,
-        "preparation": "verified_t_minus_entry_model_odds",
-        "policy_id": scheduled_policy.payload["policy_id"],
-        "policy_sha256": scheduled_policy.sha256,
-        "fullfit_spec_name": scheduled_policy.contract["fullfit_spec_name"],
-        "fullfit_spec_payload_sha256": scheduled_policy.contract[
-            "fullfit_spec_payload_sha256"
-        ],
-        "entry_offset_days": float(evaluation["entry_offset_days"]),
-        "entry_offset_for_features": True,
-        "require_entry_odds": True,
-        "allowed_prefight_sources": list(
-            evaluation["quality_allowed_prefight_sources"]
-        ),
-    }
-    for field, expected in expected_values.items():
-        if receipt_payload.get(field) != expected:
-            raise StagingBundleError(
-                f"Policy-bound training-input receipt differs from policy: {field}"
-            )
-    final_receipt_expected = {
-        "final_track_c_pass_receipt_path": str(
-            final_track_c_binding["receipt_path"]
-        ),
-        "final_track_c_pass_receipt_sha256": final_track_c_binding[
-            "receipt_sha256"
-        ],
-        "performance_confirmation_result_sha256": final_track_c_binding[
-            "confirmation_result_sha256"
-        ],
-        "confirmed_strategy_config_sha256": final_track_c_binding[
-            "strategy_config_sha256"
-        ],
-        "confirmation_evaluation_input_value_sha256": final_track_c_binding[
-            "confirmation_evaluation_input_value_sha256"
-        ],
-        "feature_contract_count": final_track_c_binding["feature_contract_count"],
-        "feature_contract_sha256": final_track_c_binding[
-            "feature_contract_sha256"
-        ],
-        "confirmation_features_value_sha256": final_track_c_binding[
-            "features_value_sha256"
-        ],
-        "confirmation_source_features_path": str(
-            final_track_c_binding["source_features_path"]
-        ),
-        "confirmation_source_features_sha256": final_track_c_binding[
-            "source_features_sha256"
-        ],
-        "confirmation_odds_source_inventory_path": str(
-            final_track_c_binding["odds_source_inventory_path"]
-        ),
-        "confirmation_odds_source_inventory_sha256": final_track_c_binding[
-            "odds_source_inventory_sha256"
-        ],
-        "confirmation_source_fingerprint": final_track_c_binding[
-            "source_fingerprint"
-        ],
-        "confirmation_source_inventory_path": str(
-            final_track_c_binding["source_inventory_path"]
-        ),
-        "confirmation_source_inventory_sha256": final_track_c_binding[
-            "source_inventory_sha256"
-        ],
-        "confirmation_source_inventory_artifact_sha256": final_track_c_binding[
-            "source_inventory_artifact_sha256"
-        ],
-        "confirmation_environment_path": str(
-            final_track_c_binding["environment_path"]
-        ),
-        "confirmation_environment_artifact_sha256": final_track_c_binding[
-            "environment_artifact_sha256"
-        ],
-        "confirmation_environment_payload_sha256": final_track_c_binding[
-            "environment_payload_sha256"
-        ],
-        "confirmation_evaluation_protocol_sha256": final_track_c_binding[
-            "evaluation_protocol_sha256"
-        ],
-    }
-    for field, expected in final_receipt_expected.items():
-        if receipt_payload.get(field) != expected:
-            raise StagingBundleError(
-                f"Policy-bound training-input receipt differs from final PASS: {field}"
-            )
-
-    source_fights_record = receipt_payload.get("source_fights_csv")
-    if not isinstance(source_fights_record, dict):
-        raise StagingBundleError(
-            "Policy-bound training-input receipt has no source fights binding"
-        )
-    source_fights_path = Path(
-        str(source_fights_record.get("path") or "")
-    ).resolve(strict=False)
-    if (
-        source_fights_path != final_track_c_binding["dataset_fights_path"]
-        or source_fights_record.get("sha256")
-        != final_track_c_binding["dataset_fights_sha256"]
-        or not source_fights_path.is_file()
-        or _sha256_file(source_fights_path)
-        != final_track_c_binding["dataset_fights_sha256"]
-        or source_fights_record.get("bytes") != source_fights_path.stat().st_size
-    ):
-        raise StagingBundleError(
-            "Policy-bound training source fights differ from final Track-C PASS"
-        )
-
-    features_identity = _csv_identity(features_path)
-    features_record = receipt_payload.get("features_csv")
-    if (
-        not isinstance(features_record, dict)
-        or features_record.get("sha256") != features_identity["sha256"]
-        or features_record.get("bytes") != features_identity["bytes"]
-    ):
-        raise StagingBundleError(
-            "Policy-bound training-input receipt is not bound to prepared features.csv"
-        )
-    try:
-        features = pd.read_csv(features_path, low_memory=False)
-    except Exception as exc:
-        raise StagingBundleError(
-            f"Unable to inspect policy-bound training features: {exc}"
-        ) from exc
-    if receipt_payload.get("row_count") != len(features):
-        raise StagingBundleError("Policy-bound training-input row count is stale")
-
-    odds_columns = ["a_implied_prob", "b_implied_prob", "diff_implied_prob"]
-    provenance_columns = [
-        "model_odds_source_kind",
-        "model_odds_source_file",
-        "model_odds_observed_at",
-        "model_odds_commence_time",
-        "model_odds_hours_to_start",
-        "model_odds_verified_prefight",
-    ]
-    if receipt_payload.get("prepared_odds_columns") != odds_columns or receipt_payload.get(
-        "provenance_columns"
-    ) != provenance_columns:
-        raise StagingBundleError("Policy-bound training-input column receipt is invalid")
-    missing = [
-        column for column in [*odds_columns, *provenance_columns] if column not in features
-    ]
-    if missing:
-        raise StagingBundleError(
-            f"Policy-bound prepared features omit odds provenance columns: {missing}"
-        )
-
-    odds_present = features[odds_columns].notna()
-    populated = odds_present.all(axis=1)
-    if (odds_present.any(axis=1) & ~populated).any():
-        raise StagingBundleError("Policy-bound prepared features contain partial odds rows")
-    strict_verified = features["model_odds_verified_prefight"].map(
-        lambda value: value is True or (isinstance(value, np.bool_) and bool(value))
-    )
-    allowed_sources = set(expected_values["allowed_prefight_sources"])
-    hours = pd.to_numeric(features["model_odds_hours_to_start"], errors="coerce")
-    minimum_hours = float(expected_values["entry_offset_days"]) * 24.0
-    invalid = populated & (
-        ~strict_verified
-        | ~features["model_odds_source_kind"].isin(allowed_sources)
-        | ~hours.ge(minimum_hours)
-    )
-    if invalid.any() or strict_verified[~populated].any():
-        raise StagingBundleError(
-            "Policy-bound prepared odds are not exclusively verified T-1 observations"
-        )
-    if populated.any() and not np.allclose(
-        features.loc[populated, "diff_implied_prob"].to_numpy(dtype=float),
-        (
-            features.loc[populated, "a_implied_prob"]
-            - features.loc[populated, "b_implied_prob"]
-        ).to_numpy(dtype=float),
-        rtol=0.0,
-        atol=1e-12,
-    ):
-        raise StagingBundleError("Policy-bound prepared odds differential is invalid")
-    populated_count = int(populated.sum())
-    missing_count = int((~populated).sum())
-    if (
-        receipt_payload.get("rows_with_verified_t_minus_entry") != populated_count
-        or receipt_payload.get("rows_missing_t_minus_entry") != missing_count
-    ):
-        raise StagingBundleError("Policy-bound training-input coverage receipt is stale")
-
-    return {
-        "schema_version": 1,
-        "artifact_receipt_sha256": receipt_sha256,
-        "artifact_roles": sorted(receipts),
-        "policy_id": expected_values["policy_id"],
-        "policy_sha256": expected_values["policy_sha256"],
-        "fullfit_spec_name": spec_name,
-        "entry_offset_days": expected_values["entry_offset_days"],
-        "prepared_features_sha256": features_identity["sha256"],
-        "prepared_features_bytes": features_identity["bytes"],
-        "source_fights_path": str(source_fights_path),
-        "source_fights_sha256": source_fights_record["sha256"],
-        "source_fights_bytes": source_fights_record["bytes"],
-        "final_track_c_pass_receipt_sha256": final_track_c_binding[
-            "receipt_sha256"
-        ],
-        "performance_confirmation_result_sha256": final_track_c_binding[
-            "confirmation_result_sha256"
-        ],
-        "confirmed_strategy_config_sha256": final_track_c_binding[
-            "strategy_config_sha256"
-        ],
-        "confirmation_evaluation_input_value_sha256": final_track_c_binding[
-            "confirmation_evaluation_input_value_sha256"
-        ],
-        "feature_contract_count": final_track_c_binding["feature_contract_count"],
-        "feature_contract_sha256": final_track_c_binding[
-            "feature_contract_sha256"
-        ],
-        "confirmation_features_value_sha256": final_track_c_binding[
-            "features_value_sha256"
-        ],
-        "confirmation_source_features_sha256": final_track_c_binding[
-            "source_features_sha256"
-        ],
-        "confirmation_odds_source_inventory_sha256": final_track_c_binding[
-            "odds_source_inventory_sha256"
-        ],
-        "confirmation_source_fingerprint": final_track_c_binding[
-            "source_fingerprint"
-        ],
-        "confirmation_source_inventory_sha256": final_track_c_binding[
-            "source_inventory_sha256"
-        ],
-        "confirmation_source_inventory_artifact_sha256": final_track_c_binding[
-            "source_inventory_artifact_sha256"
-        ],
-        "confirmation_environment_artifact_sha256": final_track_c_binding[
-            "environment_artifact_sha256"
-        ],
-        "confirmation_environment_payload_sha256": final_track_c_binding[
-            "environment_payload_sha256"
-        ],
-        "confirmation_evaluation_protocol_sha256": final_track_c_binding[
-            "evaluation_protocol_sha256"
-        ],
-        "row_count": int(len(features)),
-        "rows_with_verified_t_minus_entry": populated_count,
-        "rows_missing_t_minus_entry": missing_count,
-        "prepared_odds_columns": odds_columns,
-        "provenance_columns": provenance_columns,
     }
 
 
@@ -2793,7 +2350,6 @@ def _validate_training_argv(
     expected_fights_sha256: str,
     expected_features_sha256: str,
     scheduled_refit: bool = False,
-    final_track_c_binding: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     if not argv or any(not isinstance(token, str) or not token for token in argv):
         raise StagingBundleError("Exact training argv must be a nonempty string array")
@@ -2813,22 +2369,12 @@ def _validate_training_argv(
             "Training argv Python executable must match the interpreter building the bundle: "
             f"argv={executable_path}, builder={sys.executable}"
         )
-    expected_options = ["--data", "--spec", "--output-subdir"]
-    if final_track_c_binding is not None:
-        expected_options.append("--final-track-c-pass-receipt")
-    if len(argv) != 4 + 2 * len(expected_options) or list(argv[1:4]) != [
-        "-m",
-        "src.bot",
-        "train",
-    ] or list(argv[4::2]) != expected_options:
+    if len(argv) != 10 or list(argv[1:4]) != ["-m", "src.bot", "train"] or list(
+        argv[4::2]
+    ) != ["--data", "--spec", "--output-subdir"]:
         raise StagingBundleError(
             "Training argv must exactly be: PYTHON -m src.bot train --data PATH "
             "--spec NAME --output-subdir PATH"
-            + (
-                " --final-track-c-pass-receipt PATH"
-                if final_track_c_binding is not None
-                else ""
-            )
         )
     if _argv_option(argv, "--spec") != fullfit_spec_name:
         raise StagingBundleError("Training argv --spec does not match the primary artifact")
@@ -2848,47 +2394,26 @@ def _validate_training_argv(
 
     data_raw = Path(_argv_option(argv, "--data"))
     data_path = _existing_file(data_raw, repo_root=repo_root, label="Training --data input")
-    if final_track_c_binding is not None:
-        receipt_argument = _existing_file(
-            Path(_argv_option(argv, "--final-track-c-pass-receipt")),
-            repo_root=repo_root,
-            label="Training final Track-C PASS receipt",
-        )
-        if (
-            receipt_argument != final_track_c_binding["receipt_path"]
-            or _sha256_file(receipt_argument)
-            != final_track_c_binding["receipt_sha256"]
-            or data_path != final_track_c_binding["dataset_fights_path"]
-            or _sha256_file(data_path)
-            != final_track_c_binding["dataset_fights_sha256"]
-        ):
-            raise StagingBundleError(
-                "Training argv does not bind the exact final Track-C PASS/fights"
-            )
-        audit_features = final_track_c_binding["features_path"]
-    else:
-        audit_features = None
     if data_path.name != "fights_cleaned.csv" or data_path.parent == candidate_processed_dir:
         raise StagingBundleError(
             "Training --data must be the independent audit rebuild's fights_cleaned.csv"
         )
-    if final_track_c_binding is None:
-        candidates_root = (repo_root / "data" / "processed" / "candidates").resolve(
-            strict=True
-        )
-        try:
-            audit_relative = data_path.parent.relative_to(candidates_root)
-        except ValueError as exc:
-            raise StagingBundleError(
-                "Training --data audit directory must be strictly below data/processed/candidates"
-            ) from exc
-        if not audit_relative.parts:
-            raise StagingBundleError("Training audit rebuild must use a distinct run directory")
-        audit_features = _exact_child_file(
-            data_path.parent,
-            "features.csv",
-            label="independent audit features",
-        )
+    candidates_root = (repo_root / "data" / "processed" / "candidates").resolve(
+        strict=True
+    )
+    try:
+        audit_relative = data_path.parent.relative_to(candidates_root)
+    except ValueError as exc:
+        raise StagingBundleError(
+            "Training --data audit directory must be strictly below data/processed/candidates"
+        ) from exc
+    if not audit_relative.parts:
+        raise StagingBundleError("Training audit rebuild must use a distinct run directory")
+    audit_features = _exact_child_file(
+        data_path.parent,
+        "features.csv",
+        label="independent audit features",
+    )
     candidate_fights = candidate_processed_dir / "fights_cleaned.csv"
     candidate_features = candidate_processed_dir / "features.csv"
     audit_fights_sha = _sha256_file(data_path)
@@ -3027,117 +2552,6 @@ def _selection_evidence(
             f"Selection evidence exceeds {MAX_EVIDENCE_TOTAL_BYTES} total bytes"
         )
     return rows, total
-
-
-def _portable_performance_evidence(
-    binding: dict[str, Any],
-    *,
-    repo_root: Path,
-) -> dict[str, Any]:
-    """Inventory the complete immutable PASS proof copied into a release.
-
-    Original artifacts remain byte-for-byte unchanged.  The records provide
-    release-relative locators so validation never depends on an ephemeral CI
-    checkout after the bundle is installed.
-    """
-
-    root = repo_root.resolve(strict=True)
-    roles_by_path: dict[Path, set[str]] = {}
-
-    def add(source: Path, role: str, *, require_evidence: bool = False) -> None:
-        path = Path(source).resolve(strict=True)
-        try:
-            relative = path.relative_to(root)
-        except ValueError as exc:
-            raise StagingBundleError(
-                f"Performance evidence {role} is outside the repository: {path}"
-            ) from exc
-        if require_evidence and (not relative.parts or relative.parts[0] != "evidence"):
-            raise StagingBundleError(
-                f"Performance evidence {role} is not durable below evidence/: {relative}"
-            )
-        roles_by_path.setdefault(path, set()).add(role)
-
-    add(binding["receipt_path"], "final_track_c_pass_receipt", require_evidence=True)
-    add(binding["policy_path"], "final_child_policy")
-    for name, path in sorted(binding["artifacts"].items()):
-        add(path, f"final_track_c_artifact:{name}", require_evidence=True)
-
-    confirmation_result_path = Path(binding["confirmation_result_path"]).resolve(
-        strict=True
-    )
-    try:
-        confirmation_result = _load_json_object(
-            confirmation_result_path,
-            label="Authoritative confirmation result",
-        )
-        claim_path = _repo_path(
-            Path(str(confirmation_result["claim_path"])),
-            repo_root=root,
-            label="Authoritative confirmation claim",
-        )
-    except (KeyError, TypeError, ValueError) as exc:
-        raise StagingBundleError(
-            f"Authoritative confirmation result has no durable claim: {exc}"
-        ) from exc
-    claim_root = (root / "evidence" / "confirmation_claims").resolve(strict=True)
-    try:
-        claim_path.relative_to(claim_root)
-    except ValueError as exc:
-        raise StagingBundleError(
-            "Authoritative confirmation claim is outside evidence/confirmation_claims/"
-        ) from exc
-    claim_dir = claim_path.parent
-    claim_files = sorted(path for path in claim_dir.rglob("*") if path.is_file())
-    if not claim_files or confirmation_result_path not in claim_files:
-        raise StagingBundleError(
-            "Authoritative confirmation evidence directory is incomplete"
-        )
-    for path in claim_files:
-        relative = path.relative_to(claim_dir).as_posix()
-        role = (
-            "confirmation_result"
-            if path == confirmation_result_path
-            else f"confirmation_dependency:{relative}"
-        )
-        add(path, role, require_evidence=True)
-
-    files: list[dict[str, Any]] = []
-    for source in sorted(roles_by_path, key=lambda value: value.relative_to(root).as_posix()):
-        source_relative = source.relative_to(root).as_posix()
-        files.append(
-            {
-                "roles": sorted(roles_by_path[source]),
-                "source_path": source_relative,
-                "staged_path": (
-                    "evidence/performance_confirmation/repository/" + source_relative
-                ),
-                "sha256": _sha256_file(source),
-                "bytes": int(source.stat().st_size),
-            }
-        )
-    staged_paths = [str(record["staged_path"]) for record in files]
-    if len(staged_paths) != len(set(staged_paths)):
-        raise StagingBundleError("Portable performance evidence paths are not unique")
-    role_counts: dict[str, int] = {}
-    for record in files:
-        for role in record["roles"]:
-            role_counts[role] = role_counts.get(role, 0) + 1
-    required_roles = {
-        "final_track_c_pass_receipt",
-        "final_child_policy",
-        "confirmation_result",
-        *(f"final_track_c_artifact:{name}" for name in binding["artifacts"]),
-    }
-    if any(role_counts.get(role) != 1 for role in required_roles):
-        raise StagingBundleError("Portable performance evidence has ambiguous required roles")
-    return {
-        "schema_version": 1,
-        "aggregate_sha256": _canonical_json_sha256(files),
-        "file_count": len(files),
-        "total_bytes": sum(int(record["bytes"]) for record in files),
-        "files": files,
-    }
 
 
 def _validate_legacy_previous_rollback(
@@ -3540,7 +2954,6 @@ def _scheduled_refit_manifest_identity(
             "Scheduled refit identity requires rich readyz predecessor evidence"
         )
     identity = {
-        "policy_schema_version": policy.payload["schema_version"],
         "policy_id": policy.payload["policy_id"],
         "sha256": policy.sha256,
         "root_bundle_id": policy.root_release["bundle_id"],
@@ -3612,171 +3025,6 @@ def _verify_rich_file(path: Path, record: dict[str, Any], *, label: str) -> None
         raise StagingBundleError(f"{label} rich identity does not match its staged file")
 
 
-def _validate_portable_performance_evidence(
-    payload: dict[str, Any],
-    *,
-    staging_root: Path,
-) -> dict[str, dict[str, Any]]:
-    """Rehash the self-contained confirmation/Track-C evidence package."""
-
-    evidence = _rich_object(payload, "performance_evidence")
-    if set(evidence) != {
-        "schema_version",
-        "aggregate_sha256",
-        "file_count",
-        "total_bytes",
-        "files",
-    } or evidence.get("schema_version") != 1:
-        raise StagingBundleError("Portable performance evidence schema is invalid")
-    records = evidence.get("files")
-    if not isinstance(records, list) or not records:
-        raise StagingBundleError("Portable performance evidence file list is empty")
-    expected_record_keys = {"roles", "source_path", "staged_path", "sha256", "bytes"}
-    staged_paths: set[str] = set()
-    source_paths: set[str] = set()
-    role_records: dict[str, dict[str, Any]] = {}
-    total_bytes = 0
-    for record in records:
-        if not isinstance(record, dict) or set(record) != expected_record_keys:
-            raise StagingBundleError("Portable performance evidence record is malformed")
-        roles = record.get("roles")
-        source_path = str(record.get("source_path") or "")
-        staged_path = str(record.get("staged_path") or "")
-        if (
-            not isinstance(roles, list)
-            or not roles
-            or roles != sorted(set(roles))
-            or source_path in source_paths
-            or staged_path in staged_paths
-            or not staged_path.startswith("evidence/performance_confirmation/repository/")
-        ):
-            raise StagingBundleError("Portable performance evidence identity is ambiguous")
-        source_raw = Path(source_path)
-        staged_raw = Path(staged_path)
-        if (
-            source_raw.is_absolute()
-            or not source_raw.parts
-            or ".." in source_raw.parts
-            or source_raw.as_posix() != source_path
-            or staged_raw.is_absolute()
-            or ".." in staged_raw.parts
-            or staged_raw.as_posix() != staged_path
-        ):
-            raise StagingBundleError("Portable performance evidence path is unsafe")
-        source_paths.add(source_path)
-        staged_paths.add(staged_path)
-        artifact = _staged_file(
-            staging_root,
-            staged_path,
-            label="portable performance evidence",
-        )
-        _verify_rich_file(artifact, record, label="portable performance evidence")
-        total_bytes += int(record["bytes"])
-        for role in roles:
-            if not isinstance(role, str) or not role or role in role_records:
-                raise StagingBundleError("Portable performance evidence role is ambiguous")
-            role_records[role] = record
-    package_root = staging_root / "evidence" / "performance_confirmation" / "repository"
-    actual_paths = {
-        path.relative_to(staging_root).as_posix()
-        for path in package_root.rglob("*")
-        if path.is_file()
-    }
-    if actual_paths != staged_paths:
-        raise StagingBundleError("Portable performance evidence file allowlist differs")
-    if (
-        evidence.get("file_count") != len(records)
-        or evidence.get("total_bytes") != total_bytes
-        or evidence.get("aggregate_sha256") != _canonical_json_sha256(records)
-    ):
-        raise StagingBundleError("Portable performance evidence aggregate is invalid")
-    required_roles = {
-        "final_track_c_pass_receipt",
-        "final_child_policy",
-        "confirmation_result",
-        "final_track_c_artifact:summary",
-        "final_track_c_artifact:evaluation_index",
-        "final_track_c_artifact:data_quality",
-        "final_track_c_artifact:predictive",
-        "final_track_c_artifact:production_bets",
-    }
-    if not required_roles.issubset(role_records):
-        raise StagingBundleError("Portable performance evidence is incomplete")
-
-    receipt_record = role_records["final_track_c_pass_receipt"]
-    receipt = _load_json_object(
-        _staged_file(staging_root, receipt_record["staged_path"], label="final receipt"),
-        label="Portable final Track-C receipt",
-    )
-    performance = _rich_object(payload, "performance_confirmation")
-    exact_hashes = {
-        "final_policy_sha256": performance.get("policy_sha256"),
-        "confirmation_result_sha256": performance.get(
-            "confirmation_result_sha256"
-        ),
-        "strategy_config_sha256": performance.get("strategy_config_sha256"),
-        "features_sha256": performance.get("features_sha256"),
-        "features_value_sha256": performance.get("features_value_sha256"),
-        "feature_contract_sha256": performance.get("feature_contract_sha256"),
-        "confirmation_evaluation_input_value_sha256": performance.get(
-            "confirmation_evaluation_input_value_sha256"
-        ),
-        "evaluation_protocol_sha256": performance.get(
-            "evaluation_protocol_sha256"
-        ),
-        "odds_source_inventory_sha256": performance.get(
-            "odds_source_inventory_sha256"
-        ),
-        "source_fingerprint": performance.get("source_fingerprint"),
-        "source_inventory_sha256": performance.get("source_inventory_sha256"),
-        "source_inventory_artifact_sha256": performance.get(
-            "source_inventory_artifact_sha256"
-        ),
-        "environment_artifact_sha256": performance.get(
-            "environment_artifact_sha256"
-        ),
-        "environment_payload_sha256": performance.get(
-            "environment_payload_sha256"
-        ),
-    }
-    if any(receipt.get(field) != expected for field, expected in exact_hashes.items()):
-        raise StagingBundleError("Portable final Track-C receipt cross-binding differs")
-    if receipt_record["sha256"] != performance.get("final_track_c_pass_receipt_sha256"):
-        raise StagingBundleError("Portable final Track-C receipt hash differs")
-
-    source_index = {record["source_path"]: record for record in records}
-    required_source_hashes = {
-        receipt["final_policy_path"]: receipt["final_policy_sha256"],
-        receipt["confirmation_result_path"]: receipt[
-            "confirmation_result_sha256"
-        ],
-        receipt["dataset_fights_path"]: receipt["dataset_fights_sha256"],
-        receipt["source_dataset_fights_path"]: receipt[
-            "source_dataset_fights_sha256"
-        ],
-        receipt["features_path"]: receipt["features_sha256"],
-        receipt["source_features_path"]: receipt["source_features_sha256"],
-        receipt["odds_source_inventory_path"]: receipt[
-            "odds_source_inventory_sha256"
-        ],
-        receipt["source_inventory_path"]: receipt[
-            "source_inventory_artifact_sha256"
-        ],
-        receipt["environment_path"]: receipt["environment_artifact_sha256"],
-    }
-    for artifact in (receipt.get("artifacts") or {}).values():
-        if not isinstance(artifact, dict):
-            raise StagingBundleError("Portable final Track-C artifact record is invalid")
-        required_source_hashes[artifact.get("path")] = artifact.get("sha256")
-    if any(
-        not isinstance(source_index.get(path), dict)
-        or source_index[path].get("sha256") != sha256
-        for path, sha256 in required_source_hashes.items()
-    ):
-        raise StagingBundleError("Portable performance evidence dependency is missing")
-    return role_records
-
-
 def validate_rich_staged_manifest(
     manifest_path: Path,
     *,
@@ -3808,14 +3056,7 @@ def validate_rich_staged_manifest(
         )
         scheduled_policy = _load_scheduled_refit_policy(
             scheduled_policy_path,
-            repo_root=(
-                REPO_ROOT
-                if json.loads(scheduled_policy_path.read_text(encoding="utf-8")).get(
-                    "schema_version"
-                )
-                == 2
-                else staging_root
-            ),
+            repo_root=staging_root,
         )
         if (
             scheduled_record.get("policy_id")
@@ -3966,110 +3207,6 @@ def validate_rich_staged_manifest(
         used_staged_paths.add(str(record["staged_path"]))
     if snapshot["fights"]["max_event_date"] != snapshot["features"]["max_event_date"]:
         raise StagingBundleError("Rich training snapshot dates disagree")
-    rich_final_track_c_binding: dict[str, Any] | None = None
-    if scheduled_policy is not None and scheduled_policy.payload["schema_version"] == 2:
-        portable_performance_roles = _validate_portable_performance_evidence(
-            payload,
-            staging_root=staging_root,
-        )
-        embedded_receipt = staged_model_results["primary"].get(
-            "training_input_evidence"
-        )
-        if not isinstance(embedded_receipt, dict):
-            raise StagingBundleError(
-                "Rich policy-v2 model omits final Track-C training evidence"
-            )
-        try:
-            rich_final_track_c_binding = (
-                production_refit_contract.validate_final_track_c_pass_receipt(
-                    Path(str(embedded_receipt["final_track_c_pass_receipt_path"])),
-                    repo_root=REPO_ROOT,
-                )
-            )
-            observed_confirmed_strategy = validate_confirmed_strategy_payload(
-                payload.get("confirmed_strategy")
-            )
-        except (KeyError, ValueError, OSError) as exc:
-            raise StagingBundleError(
-                f"Rich final Track-C/strategy binding is invalid: {exc}"
-            ) from exc
-        if (
-            observed_confirmed_strategy["strategy_config_sha256"]
-            != rich_final_track_c_binding["strategy_config_sha256"]
-        ):
-            raise StagingBundleError(
-                "Rich confirmed strategy differs from final Track-C PASS"
-            )
-        performance_record = payload.get("performance_confirmation")
-        if not isinstance(performance_record, dict) or any(
-            performance_record.get(field) != expected
-            for field, expected in {
-                "policy_sha256": rich_final_track_c_binding["policy_sha256"],
-                "confirmation_result_sha256": rich_final_track_c_binding[
-                    "confirmation_result_sha256"
-                ],
-                "final_track_c_pass_receipt_sha256": rich_final_track_c_binding[
-                    "receipt_sha256"
-                ],
-                "strategy_config_sha256": rich_final_track_c_binding[
-                    "strategy_config_sha256"
-                ],
-                "dataset_fights_sha256": rich_final_track_c_binding[
-                    "dataset_fights_sha256"
-                ],
-                "features_sha256": rich_final_track_c_binding["features_sha256"],
-                "features_value_sha256": rich_final_track_c_binding[
-                    "features_value_sha256"
-                ],
-                "feature_contract_sha256": rich_final_track_c_binding[
-                    "feature_contract_sha256"
-                ],
-                "confirmation_evaluation_input_value_sha256": rich_final_track_c_binding[
-                    "confirmation_evaluation_input_value_sha256"
-                ],
-                "evaluation_protocol_sha256": rich_final_track_c_binding[
-                    "evaluation_protocol_sha256"
-                ],
-                "odds_source_inventory_sha256": rich_final_track_c_binding[
-                    "odds_source_inventory_sha256"
-                ],
-                "source_fingerprint": rich_final_track_c_binding[
-                    "source_fingerprint"
-                ],
-                "source_inventory_sha256": rich_final_track_c_binding[
-                    "source_inventory_sha256"
-                ],
-                "source_inventory_artifact_sha256": rich_final_track_c_binding[
-                    "source_inventory_artifact_sha256"
-                ],
-                "environment_artifact_sha256": rich_final_track_c_binding[
-                    "environment_artifact_sha256"
-                ],
-                "environment_payload_sha256": rich_final_track_c_binding[
-                    "environment_payload_sha256"
-                ],
-                "performance_evidence_aggregate_sha256": payload[
-                    "performance_evidence"
-                ]["aggregate_sha256"],
-            }.items()
-        ):
-            raise StagingBundleError(
-                "Rich performance confirmation does not match final Track-C PASS"
-            )
-    observed_training_input_evidence = _validate_policy_bound_training_input_evidence(
-        features_path=_staged_file(
-            staging_root,
-            snapshot["features"]["staged_path"],
-            label="prepared training features",
-        ),
-        model_results=staged_model_results,
-        scheduled_policy=scheduled_policy,
-        final_track_c_binding=rich_final_track_c_binding,
-    )
-    if payload.get("training_input_evidence") != observed_training_input_evidence:
-        raise StagingBundleError(
-            "Rich policy-bound training-input evidence does not reconcile"
-        )
     cutoff = snapshot.get("cutoff_safety")
     required_minimum_buffer = (
         int(scheduled_policy.contract["minimum_cutoff_buffer_days"])
@@ -4110,13 +3247,6 @@ def validate_rich_staged_manifest(
         or int(metadata_path.stat().st_size) != test_record.get("metadata_bytes")
     ):
         raise StagingBundleError("Rich staged test-set identity is invalid")
-    test_metadata_payload = _load_json_object(metadata_path, label="Staged test metadata")
-    if test_metadata_payload.get("training_input_evidence") != staged_model_results[
-        "primary"
-    ].get("training_input_evidence"):
-        raise StagingBundleError(
-            "Rich staged test metadata training-input evidence does not reconcile"
-        )
     used_staged_paths.update(
         {str(test_record["staged_path"]), str(test_record["metadata_staged_path"])}
     )
@@ -4631,7 +3761,6 @@ def validate_rich_staged_manifest(
             )
         expected_parent_policy = {
             "policy_id": scheduled_policy.payload["policy_id"],
-            "policy_schema_version": scheduled_policy.payload["schema_version"],
             "sha256": scheduled_policy.sha256,
             "root_bundle_id": scheduled_policy.root_release["bundle_id"],
             "parent_bundle_id": ready_bundle["bundle_id"],
@@ -4724,45 +3853,6 @@ def assemble_staged_bundle(
             repo_root=root,
         )
         if inputs.scheduled_refit_policy_path is not None
-        else None
-    )
-    final_track_c_binding: dict[str, Any] | None = None
-    if scheduled_policy is not None and scheduled_policy.payload["schema_version"] == 2:
-        if inputs.final_track_c_pass_receipt_path is None:
-            raise StagingBundleError(
-                "Policy-v2 staging requires the final-policy Track-C PASS receipt"
-            )
-        try:
-            final_track_c_binding = (
-                production_refit_contract.validate_final_track_c_pass_receipt(
-                    inputs.final_track_c_pass_receipt_path,
-                    expected_policy_path=scheduled_policy.path,
-                    repo_root=root,
-                )
-            )
-        except (
-            production_refit_contract.ContractInputError,
-            OSError,
-            ValueError,
-        ) as exc:
-            raise StagingBundleError(
-                f"Final-policy Track-C PASS receipt is invalid: {exc}"
-            ) from exc
-    elif inputs.final_track_c_pass_receipt_path is not None:
-        raise StagingBundleError(
-            "Final-policy Track-C PASS receipt is allowed only in policy-v2 mode"
-        )
-    confirmed_strategy = (
-        build_confirmed_strategy_payload(
-            final_track_c_binding["strategy_config"],
-            expected_sha256=final_track_c_binding["strategy_config_sha256"],
-        )
-        if final_track_c_binding is not None
-        else None
-    )
-    performance_evidence = (
-        _portable_performance_evidence(final_track_c_binding, repo_root=root)
-        if final_track_c_binding is not None
         else None
     )
 
@@ -4935,7 +4025,6 @@ def assemble_staged_bundle(
         expected_fights_sha256=inputs.expected_fights_sha256,
         expected_features_sha256=inputs.expected_features_sha256,
         scheduled_refit=scheduled_policy is not None,
-        final_track_c_binding=final_track_c_binding,
     )
     audit_snapshot = invocation["independent_audit_snapshot"]
     audit_fights_path = root / str(audit_snapshot["fights"]["path"])
@@ -4959,12 +4048,6 @@ def assemble_staged_bundle(
 
     fights_identity = _csv_identity(processed_paths["fights_cleaned.csv"])
     features_identity = _csv_identity(processed_paths["features.csv"])
-    training_input_evidence = _validate_policy_bound_training_input_evidence(
-        features_path=processed_paths["features.csv"],
-        model_results=model_results,
-        scheduled_policy=scheduled_policy,
-        final_track_c_binding=final_track_c_binding,
-    )
     if not fights_identity["max_event_date"] or not features_identity["max_event_date"]:
         raise StagingBundleError("Training fights/features snapshots must not be empty")
     if fights_identity["max_event_date"] != features_identity["max_event_date"]:
@@ -5004,9 +4087,6 @@ def assemble_staged_bundle(
         metadata_path=processed_paths["test_set.csv.metadata.json"],
         primary_spec=model_results["primary"]["training_spec"],
         expected_test_frame=reconstructed_test,
-        expected_training_input_evidence=model_results["primary"].get(
-            "training_input_evidence"
-        ),
     )
     eligible_training_rows = len(reconstructed_training)
 
@@ -5172,71 +4252,8 @@ def assemble_staged_bundle(
         "finite_inference": inference_summary,
         "previous_rollback_identity": rollback,
     }
-    if training_input_evidence is not None:
-        manifest["training_input_evidence"] = training_input_evidence
     if scheduled_refit_identity is not None:
         manifest["scheduled_refit_policy"] = scheduled_refit_identity
-    if confirmed_strategy is not None and final_track_c_binding is not None:
-        manifest["confirmed_strategy"] = confirmed_strategy
-        manifest["performance_evidence"] = performance_evidence
-        manifest["performance_confirmation"] = {
-            "schema_version": 1,
-            "policy_sha256": final_track_c_binding["policy_sha256"],
-            "confirmation_result_sha256": final_track_c_binding[
-                "confirmation_result_sha256"
-            ],
-            "final_track_c_pass_receipt_sha256": final_track_c_binding[
-                "receipt_sha256"
-            ],
-            "evaluation_spec_name": final_track_c_binding[
-                "evaluation_spec"
-            ].name,
-            "evaluation_spec_payload_sha256": _canonical_json_sha256(
-                asdict(final_track_c_binding["evaluation_spec"])
-            ),
-            "fullfit_spec_name": final_track_c_binding["fullfit_spec"].name,
-            "fullfit_spec_payload_sha256": _canonical_json_sha256(
-                asdict(final_track_c_binding["fullfit_spec"])
-            ),
-            "strategy_config_sha256": final_track_c_binding[
-                "strategy_config_sha256"
-            ],
-            "dataset_fights_sha256": final_track_c_binding[
-                "dataset_fights_sha256"
-            ],
-            "features_sha256": final_track_c_binding["features_sha256"],
-            "features_value_sha256": final_track_c_binding[
-                "features_value_sha256"
-            ],
-            "feature_contract_sha256": final_track_c_binding[
-                "feature_contract_sha256"
-            ],
-            "confirmation_evaluation_input_value_sha256": final_track_c_binding[
-                "confirmation_evaluation_input_value_sha256"
-            ],
-            "evaluation_protocol_sha256": final_track_c_binding[
-                "evaluation_protocol_sha256"
-            ],
-            "odds_source_inventory_sha256": final_track_c_binding[
-                "odds_source_inventory_sha256"
-            ],
-            "source_fingerprint": final_track_c_binding["source_fingerprint"],
-            "source_inventory_sha256": final_track_c_binding[
-                "source_inventory_sha256"
-            ],
-            "source_inventory_artifact_sha256": final_track_c_binding[
-                "source_inventory_artifact_sha256"
-            ],
-            "environment_artifact_sha256": final_track_c_binding[
-                "environment_artifact_sha256"
-            ],
-            "environment_payload_sha256": final_track_c_binding[
-                "environment_payload_sha256"
-            ],
-            "performance_evidence_aggregate_sha256": performance_evidence[
-                "aggregate_sha256"
-            ],
-        }
 
     temp_root = Path(
         tempfile.mkdtemp(prefix=".bundle-build-", dir=staging_root.parent)
@@ -5323,13 +4340,6 @@ def assemble_staged_bundle(
                 temp_root / "evidence" / str(row["path"]),
                 str(row["sha256"]),
             )
-        if performance_evidence is not None:
-            for record in performance_evidence["files"]:
-                _copy_with_identity(
-                    root / str(record["source_path"]),
-                    temp_root / str(record["staged_path"]),
-                    str(record["sha256"]),
-                )
         _copy_with_identity(
             previous_readyz,
             temp_root / "rollback" / "previous_readyz.json",
@@ -5461,14 +4471,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             "legacy predecessor manifest/hash arguments are forbidden."
         ),
     )
-    parser.add_argument(
-        "--final-track-c-pass-receipt",
-        type=Path,
-        help=(
-            "Required in scheduled policy-v2 mode; exact durable PASS for the "
-            "final child policy and confirmed package."
-        ),
-    )
     args = parser.parse_args(argv)
 
     legacy_parent_args_present = bool(
@@ -5526,7 +4528,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         inference_sample_rows=args.inference_sample_rows,
         scheduled_refit_policy_path=args.scheduled_refit_policy,
         previous_bfo_lineage_manifest_path=args.previous_bfo_lineage_manifest,
-        final_track_c_pass_receipt_path=args.final_track_c_pass_receipt,
     )
     try:
         result = assemble_staged_bundle(inputs)

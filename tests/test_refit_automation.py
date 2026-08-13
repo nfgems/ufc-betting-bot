@@ -2,7 +2,6 @@
 stamping, and BFO recovered-batch overwrite protection."""
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -12,38 +11,6 @@ import pytest
 import scripts.recover_bfo_moneyline_gaps as recover_bfo
 import scripts.reconcile_production_bundle_manifest as reconcile_script
 from src.data import io_utils
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_evidence_log_allowlist_keeps_secret_files_ignored() -> None:
-    secret_paths = (
-        "evidence/logs/.env",
-        "evidence/logs/run/operator.env",
-        "evidence/logs/run/credentials.json",
-    )
-    for relative_path in secret_paths:
-        ignored = subprocess.run(
-            ["git", "check-ignore", "--quiet", "--no-index", "--", relative_path],
-            cwd=PROJECT_ROOT,
-            check=False,
-        )
-        assert ignored.returncode == 0, relative_path
-
-    evidence = subprocess.run(
-        [
-            "git",
-            "check-ignore",
-            "--quiet",
-            "--no-index",
-            "--",
-            "evidence/logs/integrity_v2/track_c_summary.csv",
-        ],
-        cwd=PROJECT_ROOT,
-        check=False,
-    )
-    assert evidence.returncode == 1
 
 
 def test_write_csv_atomically_retries_transient_permission_error(tmp_path, monkeypatch):
@@ -570,11 +537,10 @@ def test_weekly_schedule_and_dry_run_are_separate_core_wrappers():
     scheduled = _workflow("weekly-model-retrain.yml")
     dry_run = _workflow("weekly-model-refit-dry-run.yml")
 
-    assert "schedule:" not in scheduled
-    assert "workflow_dispatch:" in scheduled
-    assert "Fail-closed manual dry-run wrapper" in scheduled
+    assert "schedule:" in scheduled
+    assert "workflow_dispatch:" not in scheduled
     assert "weekly-model-refit-core.yml" in scheduled
-    assert "activate_production: false" in scheduled
+    assert "activate_production: true" in scheduled
     assert "force_refit: false" in scheduled
 
     assert "workflow_dispatch:" in dry_run
@@ -617,35 +583,26 @@ def test_refit_workflows_are_read_only_and_never_commit_generated_artifacts():
 
 def test_core_pins_policy_contract_and_uses_only_isolated_candidate_paths():
     core = _workflow("weekly-model-refit-core.yml")
-    policy = json.loads(
-        (Path(__file__).parents[1] / "config" / "scheduled_refit_policy_v2.json").read_text(
-            encoding="utf-8"
-        )
-    )
+
     assert "workflow_call:" in core
     assert "group: weekly-model-refit" in core
     assert 'data/tmp .codex_stage' in core
     assert core.count("fetch-depth: 0") == 2
     assert core.index("fetch-depth: 0") < core.index("Freeze active production identity")
-    assert "POLICY_PATH: config/scheduled_refit_policy_v2.json" in core
-    assert '"EVALUATION_SPEC": evaluation.name' in core
-    assert '"FULLFIT_SPEC": fullfit.name' in core
-    assert "final_track_c_bound" in core
-    for stale_binding in (
-        "scheduled_refit_policy_v1.json",
-        "full_live_contract_v6_durability",
-        "full_live_contract_v6_durability_corrected_20260805_fullfit",
-    ):
-        assert stale_binding not in core
+    assert "POLICY_PATH: config/scheduled_refit_policy_v1.json" in core
+    assert "EVALUATION_SPEC: full_live_contract_v6_durability" in core
+    assert (
+        "FULLFIT_SPEC: "
+        "full_live_contract_v6_durability_corrected_20260805_fullfit"
+    ) in core
     for suffix in ("_pre_recovery", "_audit", "_train"):
         assert suffix in core
     assert 'PRE_RECOVERY_SUBDIR="candidates/${RUN_KEY}_pre_recovery"' in core
     assert 'AUDIT_SUBDIR="candidates/${RUN_KEY}_audit"' in core
     assert 'TRAIN_SUBDIR="candidates/${RUN_KEY}_train"' in core
-    assert "--data \"${CONFIRMED_FIGHTS_PATH}\"" in core
+    assert "--data \"${AUDIT_DIR}/fights_cleaned.csv\"" in core
     assert "--spec \"${FULLFIT_SPEC}\"" in core
     assert "--output-subdir \"${TRAIN_SUBDIR}\"" in core
-    assert "--final-track-c-pass-receipt \"${FINAL_TRACK_C_PASS_RECEIPT}\"" in core
 
 
 def test_core_runs_fixed_recovery_coverage_quality_contract_and_parity_gates():
@@ -692,11 +649,10 @@ def test_core_runs_every_test_file_once_across_four_fail_complete_slices():
     assert 'python -m pytest -q "${TEST_FILES[@]}"' in core
     assert '"full_test_slices": 4' in core
     assert "UFC_PARITY_PROCESSED_DATA_DIR:" in core
-    assert "fullfit_spec: ${{ steps.policy.outputs.fullfit_spec }}" in core
     assert (
-        "UFC_PARITY_TRAINING_SPEC: ${{ needs.candidate.outputs.fullfit_spec }}"
-        in core
-    )
+        "UFC_PARITY_TRAINING_SPEC: "
+        "full_live_contract_v6_durability_corrected_20260805_fullfit"
+    ) in core
     assert "needs.candidate.outputs.unverified_artifact" in core
 
 

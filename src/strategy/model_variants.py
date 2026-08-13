@@ -76,8 +76,6 @@ class VariantConfig:
     # Training overrides
     time_decay_half_life: Optional[int] = None  # Override TIME_DECAY_HALF_LIFE_DAYS
     odds_noise_std: Optional[float] = None  # Override ODDS_NOISE_STD
-    odds_noise_seed: Optional[int] = None
-    odds_noise_mode: str = "independent"
 
     # Feature selection
     max_features: Optional[int] = None  # If set, keep only top N by importance
@@ -146,8 +144,6 @@ def train_variant_model(
                 if variant.odds_noise_std is not None
                 else _DEFAULT_NOISE
             ),
-            odds_noise_seed=variant.odds_noise_seed,
-            odds_noise_mode=variant.odds_noise_mode,
             time_decay_half_life_days=variant.time_decay_half_life,
         )
 
@@ -190,32 +186,7 @@ def train_variant_model(
 
     # --- Odds noise ---
     noise_std = variant.odds_noise_std if variant.odds_noise_std is not None else ODDS_NOISE_STD
-    noise_seed = (
-        int(variant.odds_noise_seed)
-        if variant.odds_noise_seed is not None
-        else int((variant.xgb_params or {}).get("random_state", 42))
-    )
-    if variant.odds_noise_mode == "antithetic":
-        from src.model.train import _add_antithetic_odds_noise
-
-        X_train = _add_antithetic_odds_noise(
-            X_train,
-            feature_cols,
-            train_df,
-            noise_std=noise_std,
-            seed=noise_seed,
-        )
-    elif variant.odds_noise_mode == "independent":
-        X_train = _add_odds_noise(
-            X_train,
-            feature_cols,
-            noise_std=noise_std,
-            seed=noise_seed,
-        )
-    else:
-        raise ValueError(
-            f"Unsupported odds noise mode: {variant.odds_noise_mode!r}"
-        )
+    X_train = _add_odds_noise(X_train, feature_cols, noise_std=noise_std)
 
     # --- Sample weights ---
     if variant.time_decay_half_life is not None:
@@ -454,34 +425,6 @@ def _promoted_spec_name() -> str:
     return "full_live_contract_v6_fullfit"
 
 
-def variant_from_named_training_spec(
-    spec_name: str,
-    *,
-    variant_name: str = "baseline",
-) -> VariantConfig:
-    """Build an evaluation variant from one explicit named training contract."""
-    from src.model.training_spec import resolve_named_training_spec
-
-    spec = resolve_named_training_spec(spec_name)
-    variant = VariantConfig(
-        name=variant_name,
-        description=f"Named training contract ({spec.name})",
-        feature_cols=list(spec.feature_cols),
-        add_rematch_features=spec.add_rematch_features,
-        add_line_movement=spec.add_line_movement,
-        calibration_method=spec.calibration_method,
-        calibration_cv=spec.calibration_cv,
-        xgb_params=dict(spec.xgb_params) if spec.xgb_params else None,
-        time_decay_half_life=spec.time_decay_half_life,
-        odds_noise_std=spec.odds_noise_std,
-        odds_noise_seed=spec.odds_noise_seed,
-        odds_noise_mode=spec.odds_noise_mode,
-    )
-    variant._native_nan = spec.impute_strategy == "native_nan"  # type: ignore[attr-defined]
-    variant._training_spec_name = spec.name  # type: ignore[attr-defined]
-    return variant
-
-
 def baseline() -> VariantConfig:
     """Production baseline — the PROMOTED training contract.
 
@@ -490,11 +433,23 @@ def baseline() -> VariantConfig:
     every variant A/B verdict is rendered against what actually runs in
     production rather than a stale contract.
     """
-    variant = variant_from_named_training_spec(_promoted_spec_name())
-    variant.description = variant.description.replace(
-        "Named training contract", "Promoted production contract", 1
+    from src.model.training_spec import resolve_named_training_spec
+
+    spec = resolve_named_training_spec(_promoted_spec_name())
+    v = VariantConfig(
+        name="baseline",
+        description=f"Promoted production contract ({spec.name})",
+        feature_cols=list(spec.feature_cols),
+        add_rematch_features=spec.add_rematch_features,
+        add_line_movement=spec.add_line_movement,
+        calibration_method=spec.calibration_method,
+        calibration_cv=spec.calibration_cv,
+        xgb_params=dict(spec.xgb_params) if spec.xgb_params else None,
+        time_decay_half_life=spec.time_decay_half_life,
+        odds_noise_std=spec.odds_noise_std,
     )
-    return variant
+    v._native_nan = spec.impute_strategy == "native_nan"  # type: ignore[attr-defined]
+    return v
 
 
 def _full_live_contract_feature_cols() -> list[str]:

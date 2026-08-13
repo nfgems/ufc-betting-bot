@@ -46,11 +46,6 @@ from src.strategy.value import (
     find_value_bets,
     implied_prob_to_decimal_odds,
 )
-from src.strategy.runtime_strategy import (
-    canonical_json_sha256,
-    shared_strategy_constants_snapshot,
-    validate_locked_strategy_config,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -1170,8 +1165,6 @@ def run_duo_traders(
     bankroll_basis: Optional[WalletBankrollBasis] = None,
     legacy_g_maintenance: Optional[dict] = None,
     run_model_tracker: bool = True,
-    strategy_config: Optional[dict] = None,
-    confirmed_shared_constants: Optional[dict] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> dict:
     """
@@ -1180,100 +1173,6 @@ def run_duo_traders(
     S sizes from total equity, spends from available cash, and runs first.
     C evaluates next, then M records its flat model-tracking position.
     """
-
-    confirmed_config = (
-        validate_locked_strategy_config(strategy_config)
-        if strategy_config is not None
-        else None
-    )
-    if confirmed_config is not None:
-        # DIR-AUD-P2-019: the confirmed hash covers only the locked strategy
-        # fields, so the shared module constants that also shape live sizing
-        # and filtering must be proven unchanged since confirmation before any
-        # confirmed execution.
-        if not isinstance(confirmed_shared_constants, dict):
-            raise ValueError(
-                "Confirmed strategy execution requires the bound shared "
-                "strategy constants"
-            )
-        current_shared_constants = shared_strategy_constants_snapshot()
-        if confirmed_shared_constants != current_shared_constants:
-            drifted = sorted(
-                key
-                for key in set(confirmed_shared_constants)
-                | set(current_shared_constants)
-                if confirmed_shared_constants.get(key)
-                != current_shared_constants.get(key)
-            )
-            raise ValueError(
-                "Shared strategy constants drifted from the confirmed "
-                "strategy: " + ", ".join(drifted)
-            )
-    s_min_edge = (
-        float(confirmed_config["s_min_edge"])
-        if confirmed_config is not None
-        else float(min_edge)
-    )
-    if (
-        confirmed_config is not None
-        and not dry_run
-        and float(min_edge) != s_min_edge
-    ):
-        raise ValueError(
-            "Real-money min_edge differs from the immutable confirmed strategy"
-        )
-    s_blend_weight = (
-        float(confirmed_config["s_blend_weight"])
-        if confirmed_config is not None
-        else BLEND_WEIGHT
-    )
-    s_model_agreement_min_edge = (
-        float(confirmed_config["s_model_agreement_min_edge"])
-        if confirmed_config is not None
-        else None
-    )
-    near_miss_min_edge = 0.0 if confirmed_config is not None else NEAR_MISS_MIN_EDGE
-    c_min_model_prob = (
-        float(confirmed_config["c_min_model_prob"])
-        if confirmed_config is not None
-        else None
-    )
-    c_min_no_odds_prob = (
-        float(confirmed_config["c_min_no_odds_prob"])
-        if confirmed_config is not None
-        else None
-    )
-    c_share = (
-        float(confirmed_config["c_share"])
-        if confirmed_config is not None
-        else TRADER_C_SHARE
-    )
-    c_bet_fraction = (
-        float(confirmed_config["c_bet_fraction"])
-        if confirmed_config is not None
-        else None
-    )
-    c_max_bet_fraction = (
-        float(confirmed_config["c_max_bet_fraction"])
-        if confirmed_config is not None
-        else CONVICTION_MAX_BET_FRACTION
-    )
-    c_min_edge = (
-        float(confirmed_config["c_min_edge"])
-        if confirmed_config is not None
-        else 0.0
-    )
-    c_max_decimal_odds = (
-        confirmed_config["c_max_decimal_odds"]
-        if confirmed_config is not None
-        else None
-    )
-    if c_max_decimal_odds is not None:
-        c_max_decimal_odds = float(c_max_decimal_odds)
-    if confirmed_config is not None:
-        # Confirmation evaluates S+C only. The explicit false value is also
-        # validated above, so a caller's legacy default cannot arm M.
-        run_model_tracker = False
 
     from src.strategy.execution_audit import (
         ExecutionAuditCollector,
@@ -1305,11 +1204,6 @@ def run_duo_traders(
                 dry_run=False,
             )
         except Exception as exc:
-            if confirmed_config is not None:
-                raise RuntimeError(
-                    "Confirmed S+C strategy cannot run while Model Tracker order "
-                    "retirement is unverified"
-                ) from exc
             model_tracker_maintenance = {
                 "status": "degraded",
                 "cancelled": 0,
@@ -1322,11 +1216,6 @@ def run_duo_traders(
                 "Model Tracker order retirement failed; S/C execution continues"
             )
         if model_tracker_maintenance.get("maintenance_incomplete"):
-            if confirmed_config is not None:
-                raise RuntimeError(
-                    "Confirmed S+C strategy cannot run with incomplete Model "
-                    "Tracker order retirement"
-                )
             logger.warning(
                 "Model Tracker order retirement is incomplete; S/C execution "
                 "continues because test traders cannot gate primary traders"
@@ -1351,14 +1240,7 @@ def run_duo_traders(
             "bankroll_source": bankroll_basis.source,
             "total_equity": total_equity,
             "available_cash": available_cash,
-            "min_edge": s_min_edge,
-            "confirmed_strategy_config_sha256": (
-                canonical_json_sha256(confirmed_config)
-                if confirmed_config is not None
-                else None
-            ),
-            "near_miss_orders_enabled": near_miss_min_edge > 0.0,
-            "model_tracker_enabled": run_model_tracker,
+            "min_edge": min_edge,
         },
     )
 
@@ -1442,16 +1324,16 @@ def run_duo_traders(
 
     single = _create_trader(
         TraderProfile(
-            name=f"Single Trader (S, blend={s_blend_weight:.2f})",
-            blend_weight=s_blend_weight,
+            name="Single Trader (S, blend=0.30)",
+            blend_weight=BLEND_WEIGHT,
             ledger_path=SINGLE_LEDGER,
         ),
         allocation=total_equity,
         available_cash=available_cash,
         clob=clob,
         dry_run=dry_run,
-        min_edge_threshold=s_min_edge,
-        edge_scaling_base=s_min_edge,
+        min_edge_threshold=min_edge,
+        edge_scaling_base=min_edge,
     )
     execution_audit.bind_executor(single.executor, "S")
 
@@ -1474,18 +1356,16 @@ def run_duo_traders(
         execution_audit,
         predictions=predictions,
         matched_predictions=matched_s,
-        min_edge=s_min_edge,
-        blend_weight=s_blend_weight,
-        edge_scaling_base=s_min_edge,
-        model_agreement_min_edge=s_model_agreement_min_edge,
+        min_edge=min_edge,
+        blend_weight=BLEND_WEIGHT,
+        edge_scaling_base=min_edge,
     )
     result = find_value_bets(
         matched_s,
-        min_edge=s_min_edge,
-        blend_weight=s_blend_weight,
-        near_miss_min_edge=near_miss_min_edge,
-        edge_scaling_base=s_min_edge,
-        model_agreement_min_edge=s_model_agreement_min_edge,
+        min_edge=min_edge,
+        blend_weight=BLEND_WEIGHT,
+        near_miss_min_edge=NEAR_MISS_MIN_EDGE,
+        edge_scaling_base=min_edge,
     )
     if isinstance(result, tuple):
         value_bets, near_miss_bets = result
@@ -1518,40 +1398,13 @@ def run_duo_traders(
         close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
     )
 
-    single_limit_maintenance = single.executor.refresh_open_limit_orders(
+    single.executor.refresh_open_limit_orders(
         matched_predictions=matched_s,
         primary_bets=value_bets,
         limit_only_bets=near_miss_bets,
         trader_name=single.name,
-        cancel_without_model_view_reason=(
-            "confirmed strategy disables near-miss orders"
-            if confirmed_config is not None
-            else None
-        ),
-        cancel_partially_filled=confirmed_config is not None,
         preclosed_cash_already_available=not dry_run,
     )
-    if confirmed_config is not None and not dry_run:
-        if (
-            not isinstance(single_limit_maintenance, dict)
-            or single_limit_maintenance.get("maintenance_incomplete")
-        ):
-            raise RuntimeError(
-                "Confirmed S+C strategy cannot run with incomplete Single Trader "
-                "limit-order reconciliation"
-            )
-        remaining_near_miss = [
-            bet
-            for bet in _ledger_snapshot(
-                single.executor.ledger, open_only=True, fresh=True
-            )
-            if bet.get("order_type") == "near_miss_limit"
-        ]
-        if remaining_near_miss:
-            raise RuntimeError(
-                "Confirmed S+C strategy cannot run while unevaluated near-miss "
-                "orders remain open"
-            )
 
     logger.info("\n%s: %s value bets found", single.name, len(value_bets))
     _report_progress(f"Cycle active: executing {len(value_bets)} value bets for Single Trader")
@@ -1605,8 +1458,8 @@ def run_duo_traders(
                 s_fight_keys.add(_fight_key(bet))
 
     remaining_cash = _bankroll_available_cash(single.bankroll)
-    conv_equity_allocation = remaining_cash * c_share
-    conv_cash_allocation = remaining_cash * c_share
+    conv_equity_allocation = remaining_cash * TRADER_C_SHARE
+    conv_cash_allocation = remaining_cash * TRADER_C_SHARE
 
     conv = _create_trader(
         TraderProfile(
@@ -1619,9 +1472,9 @@ def run_duo_traders(
         clob=clob,
         dry_run=dry_run,
         kelly_fraction=1.0,
-        max_bet_fraction=c_max_bet_fraction,
-        min_edge_threshold=c_min_edge,
-        edge_scaling_base=c_min_edge,
+        max_bet_fraction=CONVICTION_MAX_BET_FRACTION,
+        min_edge_threshold=min_edge,
+        edge_scaling_base=min_edge,
     )
     execution_audit.bind_executor(conv.executor, "C")
 
@@ -1637,28 +1490,9 @@ def run_duo_traders(
         execution_audit,
         predictions=predictions,
         matched_predictions=matched_c,
-        require_positive_ev=confirmed_config is None,
-        **(
-            {
-                "min_model_prob": c_min_model_prob,
-                "min_no_odds_prob": c_min_no_odds_prob,
-                "min_edge": c_min_edge,
-                "max_decimal_odds": c_max_decimal_odds,
-            }
-            if confirmed_config is not None
-            else {}
-        ),
+        require_positive_ev=True,
     )
-    conviction_kwargs = {
-        "require_positive_ev": confirmed_config is None,
-        "min_edge": c_min_edge,
-        "max_decimal_odds": c_max_decimal_odds,
-    }
-    if c_min_model_prob is not None:
-        conviction_kwargs["min_model_prob"] = c_min_model_prob
-    if c_min_no_odds_prob is not None:
-        conviction_kwargs["min_no_odds_prob"] = c_min_no_odds_prob
-    conviction_bets = find_conviction_bets(matched_c, **conviction_kwargs)
+    conviction_bets = find_conviction_bets(matched_c, require_positive_ev=True)
     conviction_bets_before_window = conviction_bets.copy() if not conviction_bets.empty else conviction_bets
     conviction_bets = _filter_bets_to_execution_window(
         conviction_bets,
@@ -1735,15 +1569,6 @@ def run_duo_traders(
             bet_size = conviction_bet_size(
                 model_prob=bet["model_prob"],
                 bankroll=_bankroll_total_equity(conv.bankroll),
-                **(
-                    {
-                        "bet_fraction": c_bet_fraction,
-                        "max_bet_fraction": c_max_bet_fraction,
-                        "min_model_prob": c_min_model_prob,
-                    }
-                    if confirmed_config is not None
-                    else {}
-                ),
             )
             if bet_size <= 0:
                 logger.info(
@@ -1934,7 +1759,7 @@ def run_duo_traders(
     return {
         "trader_s": {
             "name": single.name,
-            "blend_weight": s_blend_weight,
+            "blend_weight": BLEND_WEIGHT,
             "allocation": total_equity,
             "available_cash_start": available_cash,
             "orders": s_orders,
@@ -1975,12 +1800,4 @@ def run_duo_traders(
             "fight_count": audit_payload.get("fight_count"),
             "completed_at": audit_payload.get("completed_at"),
         },
-        "confirmed_strategy_config": confirmed_config,
-        "confirmed_strategy_config_sha256": (
-            canonical_json_sha256(confirmed_config)
-            if confirmed_config is not None
-            else None
-        ),
-        "near_miss_orders_enabled": near_miss_min_edge > 0.0,
-        "model_tracker_enabled": run_model_tracker,
     }

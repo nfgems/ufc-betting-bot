@@ -12,33 +12,9 @@ from bs4 import BeautifulSoup
 
 from scripts import scrape_bfo_moneyline
 from src.data import line_tracker, live_monitor, method_odds, rankings_scraper
-from src.polymarket.markets import GammaEventsUnavailableError
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-
-
-def test_polymarket_snapshot_typed_outage_is_informational(monkeypatch, caplog):
-    monkeypatch.setattr(
-        line_tracker,
-        "get_ufc_fight_markets",
-        lambda: (_ for _ in ()).throw(
-            GammaEventsUnavailableError("Gamma retry suppressed")
-        ),
-    )
-
-    with caplog.at_level(logging.INFO, logger="src.data.line_tracker"):
-        snapshot = line_tracker.snapshot_polymarket_prices()
-
-    assert snapshot.empty
-    records = [
-        record
-        for record in caplog.records
-        if "Polymarket price snapshot unavailable" in record.getMessage()
-    ]
-    assert len(records) == 1
-    assert records[0].levelno == logging.INFO
-    assert not hasattr(records[0], "alert_incident_key")
 
 
 def _fresh_snapshot_time(*, hours_ago: int = 0) -> str:
@@ -62,39 +38,6 @@ def _write_method_snapshot(snapshot_dir: Path, snapshot_time: str, payload: dict
     path = snapshot_dir / _snapshot_filename("method_odds", snapshot_time)
     path.write_text(json.dumps(payload, indent=2))
     return path
-
-
-def _v2_method_record(
-    *,
-    fighter_a="Alpha Fighter",
-    fighter_b="Beta Fighter",
-    captured_at,
-    commence_time="2026-08-01T22:00:00Z",
-    event_id="evt-1",
-    event_title="UFC Test",
-    method_values=None,
-):
-    return method_odds._snapshot_record(
-        fighter_a=fighter_a,
-        fighter_b=fighter_b,
-        method_odds=method_values
-        or {
-            "a_ko_odds_prob": 0.40,
-            "a_sub_odds_prob": np.nan,
-            "a_dec_odds_prob": np.nan,
-            "b_ko_odds_prob": np.nan,
-            "b_sub_odds_prob": np.nan,
-            "b_dec_odds_prob": 0.30,
-        },
-        source="bestfightodds",
-        captured_at=captured_at,
-        event_id=event_id,
-        commence_time=commence_time,
-        event_title=event_title,
-        source_url="https://www.bestfightodds.com/events/ufc-test-4000",
-        page_sha256="a" * 64,
-        parser_contract=method_odds.BFO_PARSER_CONTRACT,
-    )
 
 
 def _patch_line_history_dir(monkeypatch, tmp_path: Path) -> Path:
@@ -365,13 +308,15 @@ def test_womens_rankings_lookup_supports_legacy_collapsed_snapshot(monkeypatch):
     assert result["pfp_rank_feat"] == rankings_scraper.UNRANKED_DEFAULT
 
 
-def test_parse_bfo_method_odds_markerless_fixture_returns_none():
+def test_parse_bfo_method_odds_fixture():
     html = (FIXTURES_DIR / "method_odds" / "bfo_method_odds_sample.html").read_text()
     soup = BeautifulSoup(html, "lxml")
 
     result = method_odds._parse_bfo_method_odds(soup, "Bruno Silva", "Anderson Silva")
 
-    assert result is None
+    assert result is not None
+    assert result["a_ko_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(200))
+    assert result["b_dec_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(150))
 
 
 def test_parse_bfo_method_odds_ambiguous_fixture_returns_none():
@@ -459,9 +404,8 @@ def test_parse_bfo_method_odds_scopes_stale_replacement_matchup():
 def test_parse_bfo_method_odds_accepts_unique_last_name_shorthand():
     html = """
     <html><body>
-      <table class="odds-table">
-        <tr id="mu-100"><td class="t-b-fcc">Sean Strickland</td></tr>
-        <tr><td class="t-b-fcc">Dricus Du Plessis</td></tr>
+      <h1>Sean Strickland vs Dricus Du Plessis</h1>
+      <table>
         <tr><td>Plessis wins by TKO/KO</td><td>+230</td></tr>
         <tr><td>Plessis wins by submission</td><td>+500</td></tr>
         <tr><td>Plessis wins by decision</td><td>+750</td></tr>
@@ -490,9 +434,8 @@ def test_parse_bfo_method_odds_accepts_unique_last_name_shorthand():
 def test_parse_bfo_method_odds_accepts_curated_surname_spelling_alias():
     html = """
     <html><body>
-      <table class="odds-table">
-        <tr id="mu-101"><td class="t-b-fcc">Bogdan Grad</td></tr>
-        <tr><td class="t-b-fcc">Dennis Buzukia</td></tr>
+      <h1>Bogdan Grad vs Dennis Buzukia</h1>
+      <table>
         <tr><th>Grad wins by TKO/KO</th><td>+375</td></tr>
         <tr><th>Grad wins by submission</th><td>+600</td></tr>
         <tr><th>Grad wins by decision</th><td>+145</td></tr>
@@ -529,32 +472,50 @@ def test_method_odds_reads_snapshot_with_event_context(tmp_path, monkeypatch):
         snapshot_dir,
         fresh_time,
         {
-            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": 1,
             "snapshot_time": fresh_time,
             "status": "success",
             "record_count": 2,
             "sources": [],
             "records": [
-                _v2_method_record(
-                    captured_at="2024-01-01T10:00:00Z",
-                    commence_time="2024-02-01T18:00:00Z",
-                    event_id="evt-1",
-                    event_title="Event 1",
-                ),
-                _v2_method_record(
-                    captured_at="2024-01-01T10:00:00Z",
-                    commence_time="2024-03-01T18:00:00Z",
-                    event_id="evt-2",
-                    event_title="Event 2",
-                    method_values={
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.40,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.30,
+                    },
+                },
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-2",
+                    "commence_time": "2024-03-01T18:00:00Z",
+                    "event_title": "Event 2",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {
                         "a_ko_odds_prob": 0.55,
-                        "a_sub_odds_prob": np.nan,
-                        "a_dec_odds_prob": np.nan,
-                        "b_ko_odds_prob": np.nan,
-                        "b_sub_odds_prob": np.nan,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
                         "b_dec_odds_prob": 0.22,
                     },
-                ),
+                },
             ],
         },
     )
@@ -629,18 +590,24 @@ def test_method_odds_short_lived_cache_survives_snapshot_removal(tmp_path, monke
         snapshot_dir,
         fresh_time,
         {
-            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": 1,
             "snapshot_time": fresh_time,
             "status": "success",
             "record_count": 1,
             "sources": [],
             "records": [
-                _v2_method_record(
-                    captured_at="2024-01-01T10:00:00Z",
-                    commence_time="2024-02-01T18:00:00Z",
-                    event_id="evt-1",
-                    event_title="Event 1",
-                )
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {"a_ko_odds_prob": 0.40, "a_sub_odds_prob": None, "a_dec_odds_prob": None, "b_ko_odds_prob": None, "b_sub_odds_prob": None, "b_dec_odds_prob": 0.30},
+                }
             ],
         },
     )
@@ -704,18 +671,31 @@ def test_method_odds_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch
         snapshot_dir,
         "2024-01-14T12:00:00",
         {
-            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": 1,
             "snapshot_time": "2024-01-14T12:00:00",
             "status": "success",
             "record_count": 1,
             "sources": [],
             "records": [
-                _v2_method_record(
-                    captured_at="2024-01-14T12:00:00Z",
-                    commence_time="2024-02-01T18:00:00Z",
-                    event_id="evt-1",
-                    event_title="Event 1",
-                )
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-14T12:00:00",
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.40,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.30,
+                    },
+                }
             ],
         },
     )
@@ -723,26 +703,31 @@ def test_method_odds_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch
         snapshot_dir,
         "2024-01-16T12:00:00",
         {
-            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": 1,
             "snapshot_time": "2024-01-16T12:00:00",
             "status": "success",
             "record_count": 1,
             "sources": [],
             "records": [
-                _v2_method_record(
-                    captured_at="2024-01-16T12:00:00Z",
-                    commence_time="2024-02-01T18:00:00Z",
-                    event_id="evt-1",
-                    event_title="Event 1",
-                    method_values={
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-16T12:00:00",
+                    "method_odds": {
                         "a_ko_odds_prob": 0.55,
-                        "a_sub_odds_prob": np.nan,
-                        "a_dec_odds_prob": np.nan,
-                        "b_ko_odds_prob": np.nan,
-                        "b_sub_odds_prob": np.nan,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
                         "b_dec_odds_prob": 0.22,
                     },
-                )
+                }
             ],
         },
     )
@@ -823,26 +808,31 @@ def test_method_odds_eventless_record_is_reachable_with_or_without_event_id(tmp_
         snapshot_dir,
         fresh_time,
         {
-            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": 1,
             "snapshot_time": fresh_time,
             "status": "success",
             "record_count": 1,
             "sources": [],
             "records": [
-                _v2_method_record(
-                    captured_at="2024-01-01T10:00:00Z",
-                    commence_time="2024-02-01T18:00:00Z",
-                    event_id="",
-                    event_title="BFO-only Event",
-                    method_values={
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "BFO-only Event",
+                    "source": "bestfightodds",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {
                         "a_ko_odds_prob": 0.41,
-                        "a_sub_odds_prob": np.nan,
-                        "a_dec_odds_prob": np.nan,
-                        "b_ko_odds_prob": np.nan,
-                        "b_sub_odds_prob": np.nan,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
                         "b_dec_odds_prob": 0.29,
                     },
-                )
+                }
             ],
         },
     )
@@ -2127,7 +2117,7 @@ def test_scrape_event_card_extracts_weight_class_from_nonblank_row_text(monkeypa
     assert fights[0]["fighter_b"] == "Beta Fighter"
     assert fights[0]["weight_class"] == "Women's Flyweight"
     assert fights[0]["is_title_bout"] is True
-    assert fights[0]["num_rounds"] is None
+    assert fights[0]["num_rounds"] == 5
 
 
 def test_scrape_event_card_extracts_event_location(monkeypatch):
@@ -2391,16 +2381,11 @@ def test_scrape_event_card_parses_ufc_com_card(monkeypatch):
         "fighter_b": "Beta Fighter",
         "weight_class": "Bantamweight Bout",
         "is_main_event": True,
-        "is_title_bout": None,
-        "num_rounds": None,
-        "fighter_a_id": None,
-        "fighter_b_id": None,
-        "fighter_a_athlete_url": None,
-        "fighter_b_athlete_url": None,
+        "is_title_bout": False,
+        "num_rounds": 5,
         "location": "Galaxy Arena, Macao",
     }
-    assert fights[1]["is_title_bout"] is None
-    assert fights[1]["num_rounds"] is None
+    assert fights[1]["num_rounds"] == 3
 
 
 def test_collect_upcoming_fight_contexts_marks_las_vegas_fight_night_as_empty(monkeypatch):
@@ -2545,17 +2530,15 @@ def test_bfo_snapshot_fallback_parses_one_event_page_for_card(monkeypatch):
     """
     event_html = """
     <html><body>
-      <table class="odds-table">
-        <tr id="mu-201"><td class="t-b-fcc">Andre Fili</td></tr>
-        <tr><td class="t-b-fcc">Vinicius Oliveira</td></tr>
+      <table>
+        <tr><td>Andre Fili</td><td>Vinicius Oliveira</td></tr>
         <tr><th>Fili wins by TKO/KO</th><td>+250</td></tr>
         <tr><th>Fili wins by submission</th><td>+1200</td></tr>
         <tr><th>Fili wins by decision</th><td>+340</td></tr>
         <tr><th>Oliveira wins by TKO/KO</th><td>+230</td></tr>
         <tr><th>Oliveira wins by submission</th><td>+500</td></tr>
         <tr><th>Oliveira wins by decision</th><td>+750</td></tr>
-        <tr id="mu-202"><td class="t-b-fcc">Ion Cutelaba</td></tr>
-        <tr><td class="t-b-fcc">Navajo Stirling</td></tr>
+        <tr><td>Ion Cutelaba</td><td>Navajo Stirling</td></tr>
         <tr><th>Cutelaba wins by TKO/KO</th><td>+180</td></tr>
         <tr><th>Cutelaba wins by submission</th><td>+900</td></tr>
         <tr><th>Cutelaba wins by decision</th><td>+400</td></tr>
@@ -2726,9 +2709,8 @@ def test_method_odds_snapshot_retries_bfo_failure_even_with_api_records(monkeypa
     """
     event_html = """
     <html><body>
-      <table class="odds-table">
-        <tr id="mu-203"><td class="t-b-fcc">Andre Fili</td></tr>
-        <tr><td class="t-b-fcc">Vinicius Oliveira</td></tr>
+      <table>
+        <tr><td>Andre Fili</td><td>Vinicius Oliveira</td></tr>
         <tr><th>Fili wins by TKO/KO</th><td>+250</td></tr>
         <tr><th>Fili wins by submission</th><td>+1200</td></tr>
         <tr><th>Fili wins by decision</th><td>+340</td></tr>
@@ -3015,10 +2997,10 @@ def test_collect_method_odds_snapshot_reports_latest_usable_snapshot_on_failure(
     monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
     monkeypatch.setattr(method_odds, "METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", 1)
 
-    record = _v2_method_record(
-        captured_at="2026-06-27T04:23:00Z",
-        event_id="evt-1",
-        method_values={
+    record = method_odds._snapshot_record(
+        fighter_a="Alpha Fighter",
+        fighter_b="Beta Fighter",
+        method_odds={
             "a_ko_odds_prob": 0.25,
             "a_sub_odds_prob": np.nan,
             "a_dec_odds_prob": np.nan,
@@ -3026,6 +3008,9 @@ def test_collect_method_odds_snapshot_reports_latest_usable_snapshot_on_failure(
             "b_sub_odds_prob": np.nan,
             "b_dec_odds_prob": 0.35,
         },
+        source="bestfightodds",
+        captured_at="2026-06-27T04:23:00",
+        event_id="evt-1",
     )
     usable_time = _fresh_snapshot_time(hours_ago=1)
     usable_path = _write_method_snapshot(
@@ -3079,10 +3064,10 @@ def test_method_odds_live_lookup_uses_latest_matching_fight_snapshot(tmp_path, m
     matching_time = _fresh_snapshot_time(hours_ago=2)
     unrelated_time = _fresh_snapshot_time(hours_ago=1)
 
-    matching_record = _v2_method_record(
-        captured_at=matching_time,
-        event_id="evt-current",
-        method_values={
+    matching_record = method_odds._snapshot_record(
+        fighter_a="Alpha Fighter",
+        fighter_b="Beta Fighter",
+        method_odds={
             "a_ko_odds_prob": 0.40,
             "a_sub_odds_prob": np.nan,
             "a_dec_odds_prob": np.nan,
@@ -3090,13 +3075,14 @@ def test_method_odds_live_lookup_uses_latest_matching_fight_snapshot(tmp_path, m
             "b_sub_odds_prob": np.nan,
             "b_dec_odds_prob": 0.30,
         },
+        source="bestfightodds",
+        captured_at=matching_time,
+        event_id="evt-current",
     )
-    unrelated_record = _v2_method_record(
+    unrelated_record = method_odds._snapshot_record(
         fighter_a="Old Fighter",
         fighter_b="Old Opponent",
-        captured_at=unrelated_time,
-        event_id="evt-old",
-        method_values={
+        method_odds={
             "a_ko_odds_prob": 0.91,
             "a_sub_odds_prob": np.nan,
             "a_dec_odds_prob": np.nan,
@@ -3104,6 +3090,9 @@ def test_method_odds_live_lookup_uses_latest_matching_fight_snapshot(tmp_path, m
             "b_sub_odds_prob": np.nan,
             "b_dec_odds_prob": 0.82,
         },
+        source="bestfightodds",
+        captured_at=unrelated_time,
+        event_id="evt-old",
     )
     _write_method_snapshot(
         tmp_path,
@@ -3151,10 +3140,10 @@ def test_method_odds_zero_record_attempt_drives_diagnostics_without_per_fight_wa
         datetime.now(timezone.utc) - method_odds.METHOD_ODDS_SNAPSHOT_MAX_AGE - timedelta(hours=1)
     ).replace(microsecond=0).isoformat()
     attempt_time = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    stale_record = _v2_method_record(
-        captured_at=stale_time,
-        event_id="evt-1",
-        method_values={
+    stale_record = method_odds._snapshot_record(
+        fighter_a="Alpha Fighter",
+        fighter_b="Beta Fighter",
+        method_odds={
             "a_ko_odds_prob": 0.40,
             "a_sub_odds_prob": np.nan,
             "a_dec_odds_prob": np.nan,
@@ -3162,6 +3151,9 @@ def test_method_odds_zero_record_attempt_drives_diagnostics_without_per_fight_wa
             "b_sub_odds_prob": np.nan,
             "b_dec_odds_prob": 0.30,
         },
+        source="bestfightodds",
+        captured_at=stale_time,
+        event_id="evt-1",
     )
     _write_method_snapshot(
         tmp_path,
@@ -3316,12 +3308,11 @@ def test_method_odds_fingerprint_changes_only_when_fight_inputs_change(tmp_path,
         "Alpha Fighter", "Beta Fighter", event_id="evt-1"
     )
 
-    def write_snapshot(snapshot_time: datetime, ko_probability: float) -> None:
-        timestamp = snapshot_time.isoformat()
-        record = _v2_method_record(
-            captured_at=timestamp,
-            event_id="evt-1",
-            method_values={
+    def write_snapshot(snapshot_time: datetime, ko_probability: float, captured_at: str) -> None:
+        record = method_odds._snapshot_record(
+            fighter_a="Alpha Fighter",
+            fighter_b="Beta Fighter",
+            method_odds={
                 "a_ko_odds_prob": ko_probability,
                 "a_sub_odds_prob": np.nan,
                 "a_dec_odds_prob": np.nan,
@@ -3329,7 +3320,11 @@ def test_method_odds_fingerprint_changes_only_when_fight_inputs_change(tmp_path,
                 "b_sub_odds_prob": np.nan,
                 "b_dec_odds_prob": 0.30,
             },
+            source="bestfightodds",
+            captured_at=captured_at,
+            event_id="evt-1",
         )
+        timestamp = snapshot_time.isoformat()
         _write_method_snapshot(
             tmp_path,
             timestamp,
@@ -3343,15 +3338,15 @@ def test_method_odds_fingerprint_changes_only_when_fight_inputs_change(tmp_path,
             },
         )
 
-    write_snapshot(base_time - timedelta(minutes=3), 0.40)
+    write_snapshot(base_time - timedelta(minutes=3), 0.40, "first capture")
     first_available = method_odds.get_method_odds_fingerprint(
         "Alpha Fighter", "Beta Fighter", event_id="evt-1"
     )
-    write_snapshot(base_time - timedelta(minutes=2), 0.40)
+    write_snapshot(base_time - timedelta(minutes=2), 0.40, "second capture")
     unchanged = method_odds.get_method_odds_fingerprint(
         "Alpha Fighter", "Beta Fighter", event_id="evt-1"
     )
-    write_snapshot(base_time - timedelta(minutes=1), 0.55)
+    write_snapshot(base_time - timedelta(minutes=1), 0.55, "third capture")
     changed = method_odds.get_method_odds_fingerprint(
         "Alpha Fighter", "Beta Fighter", event_id="evt-1"
     )
@@ -3372,12 +3367,10 @@ def test_method_odds_alias_and_canonical_name_share_fingerprint_and_result_cache
     monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
     method_odds._method_odds_cache.clear()
     snapshot_time = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    record = _v2_method_record(
+    record = method_odds._snapshot_record(
         fighter_a="Ian Machado Garry",
         fighter_b="Opponent Fighter",
-        captured_at=snapshot_time,
-        event_id="evt-ian",
-        method_values={
+        method_odds={
             "a_ko_odds_prob": 0.40,
             "a_sub_odds_prob": np.nan,
             "a_dec_odds_prob": 0.35,
@@ -3385,7 +3378,13 @@ def test_method_odds_alias_and_canonical_name_share_fingerprint_and_result_cache
             "b_sub_odds_prob": np.nan,
             "b_dec_odds_prob": 0.45,
         },
+        source="bestfightodds",
+        captured_at=snapshot_time,
+        event_id="evt-ian",
     )
+    legacy_alias_record = dict(record)
+    legacy_alias_record["fighter_a"] = "Ian Garry"
+    legacy_alias_record["fighter_a_norm"] = "ian garry"
     _write_method_snapshot(
         tmp_path,
         snapshot_time,
@@ -3393,8 +3392,8 @@ def test_method_odds_alias_and_canonical_name_share_fingerprint_and_result_cache
             "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
             "snapshot_time": snapshot_time,
             "status": "success",
-            "record_count": 1,
-            "records": [record],
+            "record_count": 2,
+            "records": [record, legacy_alias_record],
             "sources": [],
         },
     )

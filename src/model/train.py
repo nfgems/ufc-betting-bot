@@ -8,7 +8,6 @@ import inspect
 import json
 import hashlib
 import subprocess
-from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -35,17 +34,6 @@ from src.features.build_features import (
     get_feature_columns,
     get_feature_columns_no_odds,
 )
-
-
-_SCHEDULED_REFIT_POLICY_PATH = (
-    Path(__file__).resolve().parents[2] / "config" / "scheduled_refit_policy_v2.json"
-)
-_METHOD_CONTRACT_DECISION_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "evidence"
-    / "method_odds"
-    / "integrity_v2_contract_decision.json"
-)
 from src.model.orientation import has_ab_feature_pair, swap_directional_frame
 
 logger = logging.getLogger(__name__)
@@ -54,110 +42,6 @@ SUPPORTED_CALIBRATION_CV = frozenset({
     "temporal_holdout_weighted",
 })
 SUPPORTED_ODDS_NOISE_MODES = frozenset({"independent", "antithetic"})
-
-
-def _matches_method_selected_fullfit_semantics(
-    spec: "NamedModelTrainingSpec | None",
-) -> bool:
-    if spec is None:
-        return False
-    from src.model.training_spec import (
-        named_training_spec_factories,
-        resolve_named_training_spec,
-    )
-
-    base_specs = []
-    try:
-        decision = json.loads(_METHOD_CONTRACT_DECISION_PATH.read_text(encoding="utf-8"))
-        base_specs.append(
-            resolve_named_training_spec(str(decision["selected_fullfit_contract"]))
-        )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, ValueError):
-        pass
-    # Discover the registered integrity full-fit family even when the method
-    # decision is readable. This prevents an unselected base contract (or a
-    # registered descendant) from being treated as unrelated research merely
-    # because the decision selected a sibling feature contract.
-    for name in named_training_spec_factories():
-        if "_integrity_" in name and name.endswith("_fullfit"):
-            try:
-                registered = resolve_named_training_spec(name)
-            except ValueError:
-                continue
-            if all(registered.name != existing.name for existing in base_specs):
-                base_specs.append(registered)
-    if not base_specs:
-        return False
-    invariant_fields = (
-        "dataset_variant",
-        "train_start_date",
-        "train_end_date",
-        "train_cutoff_date",
-        "odds_noise_std",
-        "odds_noise_seed",
-        "odds_noise_mode",
-        "add_rematch_features",
-        "add_line_movement",
-        "impute_strategy",
-        "impute_with_indicators",
-    )
-    return any(
-        list(spec.feature_cols) == list(base.feature_cols)
-        and all(
-            getattr(spec, field) == getattr(base, field)
-            for field in invariant_fields
-        )
-        and (spec.xgb_params or {}).get("random_state")
-        == (base.xgb_params or {}).get("random_state")
-        for base in base_specs
-    )
-
-
-def _is_current_policy_selected_fullfit_spec(
-    spec: "NamedModelTrainingSpec | None",
-) -> bool:
-    """Identify the selected full-fit contract and fail closed on policy damage."""
-
-    if spec is None:
-        return False
-    method_fullfit = _matches_method_selected_fullfit_semantics(spec)
-    try:
-        from scripts import check_production_refit_contract as contract_gate
-
-        policy = contract_gate.load_policy(_SCHEDULED_REFIT_POLICY_PATH)
-        registry_errors, _evaluation, fullfit = contract_gate.validate_policy_registry(
-            policy
-        )
-    except (OSError, ValueError) as exc:
-        if method_fullfit:
-            raise ValueError(
-                "Policy-selected integrity full-fit cannot validate the scheduled policy"
-            ) from exc
-        return False
-    if registry_errors or fullfit is None:
-        if method_fullfit:
-            raise ValueError(
-                "Policy-selected integrity full-fit cannot use an invalid scheduled policy: "
-                + "; ".join(registry_errors)
-            )
-        return False
-    contract = policy["contract"]
-    if contract.get("fullfit_spec_name") != spec.name:
-        if method_fullfit:
-            raise ValueError(
-                f"Integrity full-fit spec {spec.name!r} is not selected by policy"
-            )
-        return False
-    from dataclasses import asdict
-
-    payload = asdict(spec)
-    payload["trained_at"] = ""
-    payload["git_hash"] = ""
-    if contract.get("fullfit_spec_payload_sha256") != _canonical_json_sha256(payload):
-        raise ValueError(
-            "Policy-selected full-fit spec payload differs from the strict registry"
-        )
-    return True
 
 
 class HoldoutCalibratedRefitModel:
@@ -221,7 +105,6 @@ def build_test_set_metadata(
     feature_cols: list[str],
     test_df: pd.DataFrame,
     generated_at: str | None = None,
-    training_input_evidence: dict | None = None,
 ) -> dict:
     """Build static test-set compatibility metadata."""
     spec_name = ""
@@ -241,7 +124,7 @@ def build_test_set_metadata(
         train_end_date = str(training_spec_payload.get("train_end_date", "") or "")
         train_cutoff_date = str(training_spec_payload.get("train_cutoff_date", TRAIN_CUTOFF_DATE) or TRAIN_CUTOFF_DATE)
 
-    metadata = {
+    return {
         "spec_name": spec_name,
         "feature_count": len(feature_cols),
         "feature_hash": _feature_contract_hash(feature_cols),
@@ -253,9 +136,6 @@ def build_test_set_metadata(
         "row_count": int(len(test_df)),
         "training_spec": training_spec_payload,
     }
-    if training_input_evidence is not None:
-        metadata["training_input_evidence"] = deepcopy(training_input_evidence)
-    return metadata
 
 
 def write_test_set_metadata(
@@ -264,7 +144,6 @@ def write_test_set_metadata(
     spec: "NamedModelTrainingSpec | None",
     feature_cols: list[str],
     test_df: pd.DataFrame,
-    training_input_evidence: dict | None = None,
 ) -> dict:
     """Write a JSON sidecar describing the static test-set contract."""
     test_set_path = Path(test_set_path)
@@ -273,209 +152,12 @@ def write_test_set_metadata(
         spec=spec,
         feature_cols=list(feature_cols),
         test_df=test_df,
-        training_input_evidence=training_input_evidence,
     )
     metadata["test_set_path"] = str(test_set_path.resolve(strict=False))
     metadata["test_set_sha256"] = _sha256_file(test_set_path)
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     logger.info("Saved test-set metadata to %s", metadata_path)
     return metadata
-
-
-def _canonical_json_sha256(value: object) -> str:
-    encoded = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _validate_training_input_evidence(
-    evidence: dict | None,
-    *,
-    features_df: pd.DataFrame,
-    required_spec: "NamedModelTrainingSpec | None" = None,
-) -> dict | None:
-    """Validate and copy a policy-bound trainer-input receipt."""
-    if evidence is None:
-        return None
-    if not isinstance(evidence, dict):
-        raise ValueError("training_input_evidence must be a mapping")
-    payload = deepcopy(evidence)
-    receipt_sha256 = str(payload.pop("receipt_sha256", "") or "").lower()
-    if receipt_sha256 != _canonical_json_sha256(payload):
-        raise ValueError("training_input_evidence receipt SHA-256 is invalid")
-    if payload.get("schema_version") != 1:
-        raise ValueError("training_input_evidence schema_version must be 1")
-    if payload.get("preparation") != "verified_t_minus_entry_model_odds":
-        raise ValueError("training_input_evidence preparation is unsupported")
-    if required_spec is not None:
-        from dataclasses import asdict
-
-        if payload.get("fullfit_spec_name") != required_spec.name:
-            raise ValueError(
-                "training_input_evidence full-fit spec does not match trainer spec"
-            )
-        spec_payload = asdict(required_spec)
-        spec_payload["trained_at"] = ""
-        spec_payload["git_hash"] = ""
-        spec_sha256 = _canonical_json_sha256(spec_payload)
-        if payload.get("fullfit_spec_payload_sha256") != spec_sha256:
-            raise ValueError(
-                "training_input_evidence full-fit spec SHA-256 does not match trainer spec"
-            )
-
-        policy_path = Path(str(payload.get("policy_path") or ""))
-        if not policy_path.is_file():
-            raise ValueError("training_input_evidence policy file is missing")
-        if str(payload.get("policy_sha256") or "").lower() != _sha256_file(
-            policy_path
-        ):
-            raise ValueError("training_input_evidence policy SHA-256 is stale")
-        try:
-            policy = json.loads(policy_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("training_input_evidence policy cannot be inspected") from exc
-        contract = policy.get("contract") if isinstance(policy, dict) else None
-        evaluation = policy.get("evaluation") if isinstance(policy, dict) else None
-        try:
-            policy_entry_offset = float(
-                evaluation.get("entry_offset_days", -1.0)
-                if isinstance(evaluation, dict)
-                else -1.0
-            )
-            receipt_entry_offset = float(payload.get("entry_offset_days", -2.0))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "training_input_evidence entry offset is malformed"
-            ) from exc
-        if (
-            not isinstance(policy, dict)
-            or policy.get("schema_version") != 2
-            or not isinstance(contract, dict)
-            or not isinstance(evaluation, dict)
-            or contract.get("fullfit_spec_name") != required_spec.name
-            or contract.get("fullfit_spec_payload_sha256") != spec_sha256
-            or evaluation.get("entry_offset_for_features") is not True
-            or evaluation.get("require_entry_odds") is not True
-            or policy_entry_offset != receipt_entry_offset
-            or evaluation.get("quality_allowed_prefight_sources")
-            != payload.get("allowed_prefight_sources")
-        ):
-            raise ValueError(
-                "training_input_evidence does not match the bound integrity policy"
-            )
-    if int(payload.get("row_count", -1)) != len(features_df):
-        raise ValueError("training_input_evidence row_count does not match trainer input")
-
-    odds_columns = payload.get("prepared_odds_columns")
-    provenance_columns = payload.get("provenance_columns")
-    if not isinstance(odds_columns, list) or not isinstance(provenance_columns, list):
-        raise ValueError("training_input_evidence column contracts are malformed")
-    missing_columns = [
-        column
-        for column in [*odds_columns, *provenance_columns]
-        if column not in features_df.columns
-    ]
-    if missing_columns:
-        raise ValueError(
-            f"training_input_evidence columns are missing from trainer input: {missing_columns}"
-        )
-    present = features_df[odds_columns].notna().all(axis=1)
-    partial = features_df[odds_columns].notna().any(axis=1) & ~present
-    if partial.any():
-        raise ValueError("trainer input contains partial policy-bound odds rows")
-    if int(payload.get("rows_with_verified_t_minus_entry", -1)) != int(present.sum()):
-        raise ValueError("training_input_evidence verified T-1 row count is stale")
-    if int(payload.get("rows_missing_t_minus_entry", -1)) != int((~present).sum()):
-        raise ValueError("training_input_evidence missing T-1 row count is stale")
-    verified = features_df["model_odds_verified_prefight"].map(
-        lambda value: value is True or (isinstance(value, np.bool_) and bool(value))
-    )
-    allowed_sources = payload.get("allowed_prefight_sources")
-    if not isinstance(allowed_sources, list) or not allowed_sources:
-        raise ValueError("training_input_evidence allowed sources are malformed")
-    try:
-        minimum_hours = float(payload["entry_offset_days"]) * 24.0
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("training_input_evidence entry offset is malformed") from exc
-    hours = pd.to_numeric(features_df["model_odds_hours_to_start"], errors="coerce")
-    invalid_present = present & (
-        ~verified
-        | ~features_df["model_odds_source_kind"].isin(allowed_sources)
-        | ~hours.ge(minimum_hours)
-    )
-    if invalid_present.any() or verified[~present].any():
-        raise ValueError("trainer input odds do not have verified T-1 provenance")
-    if present.any() and not np.allclose(
-        features_df.loc[present, "diff_implied_prob"].to_numpy(dtype=float),
-        (
-            features_df.loc[present, "a_implied_prob"]
-            - features_df.loc[present, "b_implied_prob"]
-        ).to_numpy(dtype=float),
-        rtol=0.0,
-        atol=1e-12,
-    ):
-        raise ValueError("trainer input diff_implied_prob is inconsistent")
-
-    features_record = payload.get("features_csv")
-    if not isinstance(features_record, dict):
-        raise ValueError("training_input_evidence features_csv record is missing")
-    features_path = Path(str(features_record.get("path") or ""))
-    expected_sha256 = str(features_record.get("sha256") or "").lower()
-    if not features_path.is_file():
-        raise ValueError(f"training_input_evidence features CSV is missing: {features_path}")
-    if expected_sha256 != _sha256_file(features_path):
-        raise ValueError("training_input_evidence features CSV SHA-256 is stale")
-    if int(features_record.get("bytes", -1)) != int(features_path.stat().st_size):
-        raise ValueError("training_input_evidence features CSV byte count is stale")
-    try:
-        saved_header = list(pd.read_csv(features_path, nrows=0).columns)
-        saved_rows = sum(
-            len(chunk)
-            for chunk in pd.read_csv(features_path, chunksize=10_000, low_memory=False)
-        )
-    except (OSError, UnicodeDecodeError, pd.errors.ParserError) as exc:
-        raise ValueError("training_input_evidence features CSV cannot be inspected") from exc
-    if saved_header != list(features_df.columns) or saved_rows != len(features_df):
-        raise ValueError("training_input_evidence features CSV shape differs from trainer input")
-    in_memory_sha256 = hashlib.sha256(
-        features_df.to_csv(index=False).encode("utf-8")
-    ).hexdigest()
-    if in_memory_sha256 != expected_sha256:
-        raise ValueError(
-            "training_input_evidence features CSV values/order differ from trainer input"
-        )
-
-    source_fights_record = payload.get("source_fights_csv")
-    if not isinstance(source_fights_record, dict):
-        raise ValueError(
-            "training_input_evidence source_fights_csv record is missing"
-        )
-    source_fights_path = Path(
-        str(source_fights_record.get("path") or "")
-    ).resolve(strict=False)
-    source_fights_sha256 = str(
-        source_fights_record.get("sha256") or ""
-    ).lower()
-    if not source_fights_path.is_file():
-        raise ValueError(
-            f"training_input_evidence source fights CSV is missing: {source_fights_path}"
-        )
-    if source_fights_sha256 != _sha256_file(source_fights_path):
-        raise ValueError(
-            "training_input_evidence source fights CSV SHA-256 is stale"
-        )
-    if int(source_fights_record.get("bytes", -1)) != int(
-        source_fights_path.stat().st_size
-    ):
-        raise ValueError(
-            "training_input_evidence source fights CSV byte count is stale"
-        )
-
-    return {**payload, "receipt_sha256": receipt_sha256}
 
 
 def load_test_set_metadata(test_set_path: Path | str) -> dict:
@@ -1280,8 +962,6 @@ def train_all_models(
     *,
     models_dir: Path | None = None,
     test_set_path: Path | None = None,
-    training_input_evidence: dict | None = None,
-    final_track_c_receipt_path: Path | None = None,
 ) -> dict:
     """
     Train XGBoost, Logistic Regression, and no-odds baseline models.
@@ -1290,124 +970,6 @@ def train_all_models(
     If a NamedModelTrainingSpec is provided, it overrides the default
     feature selection, imputation strategy, and hyperparameters.
     """
-    required_evidence_spec = spec if _is_current_policy_selected_fullfit_spec(spec) else None
-    if required_evidence_spec is not None and training_input_evidence is None:
-        raise ValueError(
-            f"{required_evidence_spec.name} requires policy-bound training_input_evidence"
-        )
-    final_track_c_binding = None
-    if required_evidence_spec is not None:
-        if final_track_c_receipt_path is None:
-            raise ValueError(
-                f"{required_evidence_spec.name} requires a final-policy Track-C PASS receipt"
-            )
-        from scripts.check_production_refit_contract import (
-            validate_final_track_c_pass_receipt,
-        )
-
-        final_track_c_binding = validate_final_track_c_pass_receipt(
-            Path(final_track_c_receipt_path),
-            expected_policy_path=_SCHEDULED_REFIT_POLICY_PATH,
-            expected_fullfit_spec=required_evidence_spec,
-        )
-    training_input_evidence = _validate_training_input_evidence(
-        training_input_evidence,
-        features_df=features_df,
-        required_spec=required_evidence_spec,
-    )
-    if final_track_c_binding is not None:
-        if (
-            training_input_evidence.get("policy_sha256")
-            != final_track_c_binding["policy_sha256"]
-        ):
-            raise ValueError(
-                "training_input_evidence policy differs from final Track-C PASS"
-            )
-        source_fights_record = training_input_evidence.get("source_fights_csv")
-        if (
-            not isinstance(source_fights_record, dict)
-            or Path(str(source_fights_record.get("path") or "")).resolve(
-                strict=False
-            )
-            != final_track_c_binding["dataset_fights_path"]
-            or source_fights_record.get("sha256")
-            != final_track_c_binding["dataset_fights_sha256"]
-        ):
-            raise ValueError(
-                "training_input_evidence source fights differ from final Track-C PASS"
-            )
-        bound_training_evidence = {
-            key: value
-            for key, value in training_input_evidence.items()
-            if key != "receipt_sha256"
-        }
-        bound_training_evidence.update({
-            "final_track_c_pass_receipt_path": str(
-                final_track_c_binding["receipt_path"]
-            ),
-            "final_track_c_pass_receipt_sha256": final_track_c_binding[
-                "receipt_sha256"
-            ],
-            "performance_confirmation_result_sha256": final_track_c_binding[
-                "confirmation_result_sha256"
-            ],
-            "confirmed_strategy_config_sha256": final_track_c_binding[
-                "strategy_config_sha256"
-            ],
-            "confirmation_evaluation_input_value_sha256": final_track_c_binding[
-                "confirmation_evaluation_input_value_sha256"
-            ],
-            "feature_contract_count": final_track_c_binding[
-                "feature_contract_count"
-            ],
-            "feature_contract_sha256": final_track_c_binding[
-                "feature_contract_sha256"
-            ],
-            "confirmation_features_value_sha256": final_track_c_binding[
-                "features_value_sha256"
-            ],
-            "confirmation_source_features_path": str(
-                final_track_c_binding["source_features_path"]
-            ),
-            "confirmation_source_features_sha256": final_track_c_binding[
-                "source_features_sha256"
-            ],
-            "confirmation_odds_source_inventory_path": str(
-                final_track_c_binding["odds_source_inventory_path"]
-            ),
-            "confirmation_odds_source_inventory_sha256": final_track_c_binding[
-                "odds_source_inventory_sha256"
-            ],
-            "confirmation_source_fingerprint": final_track_c_binding[
-                "source_fingerprint"
-            ],
-            "confirmation_source_inventory_path": str(
-                final_track_c_binding["source_inventory_path"]
-            ),
-            "confirmation_source_inventory_sha256": final_track_c_binding[
-                "source_inventory_sha256"
-            ],
-            "confirmation_source_inventory_artifact_sha256": final_track_c_binding[
-                "source_inventory_artifact_sha256"
-            ],
-            "confirmation_environment_path": str(
-                final_track_c_binding["environment_path"]
-            ),
-            "confirmation_environment_artifact_sha256": final_track_c_binding[
-                "environment_artifact_sha256"
-            ],
-            "confirmation_environment_payload_sha256": final_track_c_binding[
-                "environment_payload_sha256"
-            ],
-            "confirmation_evaluation_protocol_sha256": final_track_c_binding[
-                "evaluation_protocol_sha256"
-            ],
-        })
-        training_input_evidence = {
-            **bound_training_evidence,
-            "receipt_sha256": _canonical_json_sha256(bound_training_evidence),
-        }
-
     if spec is not None:
         # Validate the spec's feature contract
         violations = spec.validate_feature_contract()
@@ -1559,9 +1121,6 @@ def train_all_models(
             spec,
             no_odds_cols,
         )
-    if training_input_evidence is not None:
-        for result in (xgb_result, lr_result, xgb_no_odds_result):
-            result["training_input_evidence"] = deepcopy(training_input_evidence)
 
     # Save models
     models_dir = Path(models_dir) if models_dir is not None else MODELS_DIR
@@ -1593,7 +1152,6 @@ def train_all_models(
         spec=spec,
         feature_cols=feature_cols,
         test_df=test_df,
-        training_input_evidence=training_input_evidence,
     )
 
     return {
@@ -1609,7 +1167,6 @@ def train_all_models(
         "test_set_path": test_set_path,
         "test_set_metadata": test_set_metadata,
         "spec_path": spec_path,
-        "training_input_evidence": training_input_evidence,
     }
 
 

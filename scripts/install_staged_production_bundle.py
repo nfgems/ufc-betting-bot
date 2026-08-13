@@ -393,29 +393,6 @@ def _required_rich_source_files(payload: dict[str, Any], manifest_name: str) -> 
         str(record["staged_path"])
         for record in payload["selection_evidence"]["files"]
     )
-    raw_provenance = payload.get("raw_input_provenance")
-    if isinstance(raw_provenance, dict):
-        for record in raw_provenance.get("corrected_csv_files") or []:
-            if isinstance(record, dict) and record.get("staged_path"):
-                required.add(str(record["staged_path"]))
-        lineage = raw_provenance.get("scheduled_bfo_lineage")
-        if isinstance(lineage, dict):
-            required.add(str(lineage["manifest_staged_path"]))
-            for batch in lineage.get("batches") or []:
-                for record in (batch.get("csv"), batch.get("provenance")):
-                    if isinstance(record, dict) and record.get("artifact_path"):
-                        required.add(
-                            "provenance/bfo_lineage/" + str(record["artifact_path"])
-                        )
-    if isinstance(payload.get("scheduled_refit_policy"), dict):
-        required.add("provenance/scheduled_refit_policy.json")
-    performance_evidence = payload.get("performance_evidence")
-    if isinstance(performance_evidence, dict):
-        required.update(
-            str(record["staged_path"])
-            for record in performance_evidence.get("files") or []
-            if isinstance(record, dict) and record.get("staged_path")
-        )
     normalized: set[str] = set()
     for index, raw in enumerate(sorted(required)):
         relative = _safe_relative_path(raw, label=f"rich source allowlist item {index}")

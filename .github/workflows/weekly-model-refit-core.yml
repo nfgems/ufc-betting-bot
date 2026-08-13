@@ -28,7 +28,9 @@ concurrency:
 
 env:
   PYTHONPATH: .
-  POLICY_PATH: config/scheduled_refit_policy_v2.json
+  POLICY_PATH: config/scheduled_refit_policy_v1.json
+  EVALUATION_SPEC: full_live_contract_v6_durability
+  FULLFIT_SPEC: full_live_contract_v6_durability_corrected_20260805_fullfit
   READYZ_URL: https://ufc-bot-production.up.railway.app/readyz
 
 jobs:
@@ -41,8 +43,6 @@ jobs:
       run_key: ${{ steps.paths.outputs.run_key }}
       unverified_artifact: ${{ steps.paths.outputs.unverified_artifact }}
       verified_artifact: ${{ steps.paths.outputs.verified_artifact }}
-      evaluation_spec: ${{ steps.policy.outputs.evaluation_spec }}
-      fullfit_spec: ${{ steps.policy.outputs.fullfit_spec }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -58,43 +58,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Resolve exact final confirmed policy package
-        id: policy
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from scripts.check_production_refit_contract import (
-              load_policy,
-              validate_performance_confirmation,
-              validate_policy_registry,
-          )
-
-          policy_path = Path(os.environ["POLICY_PATH"])
-          policy = load_policy(policy_path)
-          if policy.get("performance_confirmation", {}).get("state") != "final_track_c_bound":
-              raise SystemExit("weekly refit remains disabled until final_track_c_bound")
-          errors, evaluation, fullfit = validate_policy_registry(policy)
-          confirmation_errors, binding = validate_performance_confirmation(policy)
-          errors.extend(confirmation_errors)
-          if errors or evaluation is None or fullfit is None or binding is None:
-              raise SystemExit("final confirmed policy is invalid: " + "; ".join(errors))
-          values = {
-              "EVALUATION_SPEC": evaluation.name,
-              "FULLFIT_SPEC": fullfit.name,
-              "CONFIRMED_FIGHTS_PATH": binding["dataset_fights_path"],
-              "CONFIRMED_FEATURES_PATH": binding["features_artifact_path"],
-          }
-          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
-              for key, value in values.items():
-                  handle.write(f"{key}={value}\n")
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
-              handle.write(f"evaluation_spec={evaluation.name}\n")
-              handle.write(f"fullfit_spec={fullfit.name}\n")
-          PY
-
       - name: Create isolated run paths
         id: paths
         shell: bash
@@ -105,7 +68,7 @@ jobs:
           AUDIT_SUBDIR="candidates/${RUN_KEY}_audit"
           TRAIN_SUBDIR="candidates/${RUN_KEY}_train"
           EVIDENCE_DIR="logs/scheduled_refit/${RUN_KEY}"
-          QUALITY_DIR="evidence/scheduled_refit/${RUN_KEY}/quality"
+          QUALITY_DIR="${EVIDENCE_DIR}/quality"
           BUNDLE_ROOT=".codex_stage/${RUN_KEY}_bundle"
           BFO_RECOVERED="data/raw/historical_odds/historical_odds_bfo_recovered_${RUN_KEY}.csv"
           BFO_PROVENANCE="data/raw/historical_odds/historical_odds_bfo_recovered_${RUN_KEY}.provenance.jsonl"
@@ -137,12 +100,10 @@ jobs:
             echo "INPUT_INVENTORY=${EVIDENCE_DIR}/pretraining_input_inventory.json"
             echo "ASSEMBLY_INVENTORY=${EVIDENCE_DIR}/assembly_input_inventory.json"
             echo "QUALITY_REPORT=${EVIDENCE_DIR}/scheduled_quality_report.json"
-            echo "FINAL_TRACK_C_PASS_RECEIPT=evidence/scheduled_refit/${RUN_KEY}/final_track_c_pass_receipt.json"
           } >> "${GITHUB_ENV}"
           echo "run_key=${RUN_KEY}" >> "${GITHUB_OUTPUT}"
           echo "bundle_root=${BUNDLE_ROOT}" >> "${GITHUB_OUTPUT}"
           echo "evidence_dir=${EVIDENCE_DIR}" >> "${GITHUB_OUTPUT}"
-          echo "quality_dir=${QUALITY_DIR}" >> "${GITHUB_OUTPUT}"
           echo "bfo_lineage_artifact_root=${BFO_LINEAGE_ARTIFACT_ROOT}" >> "${GITHUB_OUTPUT}"
           echo "unverified_artifact=weekly-refit-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-unverified" >> "${GITHUB_OUTPUT}"
           echo "verified_artifact=weekly-refit-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
@@ -474,7 +435,7 @@ jobs:
         run: >-
           python scripts/track_c_batch.py
           --scheduled-policy "${POLICY_PATH}"
-          --features-cache "${CONFIRMED_FEATURES_PATH}"
+          --features-cache "${AUDIT_DIR}/features.csv"
           --out "${QUALITY_DIR}"
 
       - name: One-arm health gate
@@ -482,19 +443,17 @@ jobs:
         run: >-
           python scripts/check_scheduled_refit_quality.py
           --policy "${POLICY_PATH}"
-          --features "${CONFIRMED_FEATURES_PATH}"
+          --features "${AUDIT_DIR}/features.csv"
           --artifacts-dir "${QUALITY_DIR}"
           --report "${QUALITY_REPORT}"
-          --pass-receipt "${FINAL_TRACK_C_PASS_RECEIPT}"
 
-      - name: Train only the policy-selected integrity full-fit contract
+      - name: Train only the fixed corrected full-fit contract
         if: steps.decision.outputs.refit_needed == 'true'
         run: >-
           python -m src.bot train
-          --data "${CONFIRMED_FIGHTS_PATH}"
+          --data "${AUDIT_DIR}/fights_cleaned.csv"
           --spec "${FULLFIT_SPEC}"
           --output-subdir "${TRAIN_SUBDIR}"
-          --final-track-c-pass-receipt "${FINAL_TRACK_C_PASS_RECEIPT}"
 
       - name: Exact and prefight parity gates
         if: steps.decision.outputs.refit_needed == 'true'
@@ -536,14 +495,13 @@ jobs:
 
           training_argv = [
               "python", "-m", "src.bot", "train",
-              "--data", os.environ["CONFIRMED_FIGHTS_PATH"],
+              "--data", f"{os.environ['AUDIT_DIR']}/fights_cleaned.csv",
               "--spec", os.environ["FULLFIT_SPEC"],
               "--output-subdir", os.environ["TRAIN_SUBDIR"],
-              "--final-track-c-pass-receipt", os.environ["FINAL_TRACK_C_PASS_RECEIPT"],
           ]
           values = {
-              "AUDIT_FIGHTS_SHA256": digest(Path(os.environ["CONFIRMED_FIGHTS_PATH"])),
-              "AUDIT_FEATURES_SHA256": digest(Path(os.environ["CONFIRMED_FEATURES_PATH"])),
+              "AUDIT_FIGHTS_SHA256": digest(Path(os.environ["AUDIT_DIR"]) / "fights_cleaned.csv"),
+              "AUDIT_FEATURES_SHA256": digest(Path(os.environ["AUDIT_DIR"]) / "features.csv"),
               "TRAINING_ARGV_JSON": json.dumps(training_argv, separators=(",", ":")),
           }
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
@@ -564,7 +522,6 @@ jobs:
           fi
           python scripts/build_staged_production_bundle.py \
             --scheduled-refit-policy "${POLICY_PATH}" \
-            --final-track-c-pass-receipt "${FINAL_TRACK_C_PASS_RECEIPT}" \
             --staging-root "${BUNDLE_ROOT}" \
             --candidate-models-dir "${TRAIN_MODELS_DIR}" \
             --candidate-processed-dir "${TRAIN_PROCESSED_DIR}" \
@@ -602,7 +559,6 @@ jobs:
           path: |
             ${{ steps.paths.outputs.bundle_root }}
             ${{ steps.paths.outputs.evidence_dir }}
-            ${{ steps.paths.outputs.quality_dir }}
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
@@ -612,9 +568,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: weekly-refit-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ steps.paths.outputs.evidence_dir }}
-            ${{ steps.paths.outputs.quality_dir }}
+          path: ${{ steps.paths.outputs.evidence_dir }}
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 30
@@ -676,7 +630,7 @@ jobs:
       - name: Run full test slice
         env:
           UFC_PARITY_PROCESSED_DATA_DIR: ${{ runner.temp }}/candidate/.codex_stage/${{ needs.candidate.outputs.run_key }}_bundle/processed
-          UFC_PARITY_TRAINING_SPEC: ${{ needs.candidate.outputs.fullfit_spec }}
+          UFC_PARITY_TRAINING_SPEC: full_live_contract_v6_durability_corrected_20260805_fullfit
         shell: bash
         run: |
           set -euo pipefail

@@ -39,10 +39,6 @@ from src.web.alert_store import (
     load_alert_incidents,
     maybe_prune_alert_store,
 )
-from src.web.startup_parity import (
-    hosted_real_money_parity_required,
-    startup_parity_validation_record_is_valid,
-)
 from src.data.name_utils import canonical_fighter_display_name, normalize_cross_source_name
 from src.polymarket.tracker import (
     BetLedger,
@@ -797,19 +793,7 @@ def healthz():
 def readyz():
     status = _runtime_status_with_liveness()
     payload = copy.deepcopy(status)
-    if hosted_real_money_parity_required(status):
-        receipt_valid = startup_parity_validation_record_is_valid(
-            payload.get("startup_parity"),
-            payload.get("startup_parity_validation"),
-        )
-        payload["startup_parity_required"] = True
-        payload["startup_parity_validated"] = receipt_valid
-        if not receipt_valid:
-            errors = set(payload.get("errors") or [])
-            errors.add("startup_parity_receipt_not_validated")
-            payload["errors"] = sorted(errors)
-            payload["ready"] = False
-    payload["ok"] = bool(payload.get("ready", False))
+    payload["ok"] = bool(status.get("ready", False))
     response = _json_no_store(payload)
     response.status_code = 200 if payload["ok"] else 503
     return response

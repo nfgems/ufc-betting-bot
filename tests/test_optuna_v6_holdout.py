@@ -41,15 +41,10 @@ def test_split_selection_and_holdout_frames_separates_outer_holdout():
         }
     )
 
-    confirmation_start = pd.Timestamp("2025-03-01")
-    selection_df, holdout_df = optuna_v6.split_selection_and_holdout_frames(
-        features_df,
-        confirmation_start=confirmation_start,
-    )
+    selection_df, holdout_df = optuna_v6.split_selection_and_holdout_frames(features_df)
 
     assert selection_df["event_date"].max() < optuna_v6.OUTER_HOLDOUT_START
     assert holdout_df["event_date"].min() >= optuna_v6.OUTER_HOLDOUT_START
-    assert holdout_df["event_date"].max() < confirmation_start
 
 
 def test_objective_receives_only_pre_holdout_selection_frame(monkeypatch):
@@ -60,17 +55,11 @@ def test_objective_receives_only_pre_holdout_selection_frame(monkeypatch):
             "feature": [0.1, 0.2],
         }
     )
-    selection_df, _holdout_df = optuna_v6.split_selection_and_holdout_frames(
-        full_features_df,
-        confirmation_start=pd.Timestamp("2025-03-01"),
-    )
+    selection_df, _holdout_df = optuna_v6.split_selection_and_holdout_frames(full_features_df)
     trial = _FakeTrial()
 
     def fake_generate_variant_fold_predictions(features_df, variant, **kwargs):
         assert features_df["event_date"].max() < optuna_v6.OUTER_HOLDOUT_START
-        assert kwargs["evaluation_partition"] == "selection"
-        assert kwargs["confirmation_fold_count"] == 2
-        assert kwargs["allow_all_folds"] is False
         prediction_dates = pd.date_range("2022-01-01", periods=120, freq="7D")
         return [
             (
@@ -126,23 +115,12 @@ def test_outer_holdout_evaluation_trains_only_on_pre_2025_rows(monkeypatch):
 
     monkeypatch.setattr(optuna_v6, "train_xgboost", fake_train_xgboost)
     monkeypatch.setattr(optuna_v6, "predict_batch", fake_predict_batch)
-    monkeypatch.setattr(
-        optuna_v6,
-        "_preflight_scored_selection_rows",
-        lambda _frame: None,
-    )
 
-    confirmation_start = pd.Timestamp("2025-03-01")
-    predictions = optuna_v6._train_then_predict_outer_holdout(
-        features_df,
-        variant,
-        confirmation_start=confirmation_start,
-    )
+    predictions = optuna_v6._train_then_predict_outer_holdout(features_df, variant)
 
     assert captured["train_max_date"] < optuna_v6.OUTER_HOLDOUT_START
     assert captured["holdout_min_date"] >= optuna_v6.OUTER_HOLDOUT_START
     assert predictions["event_date"].min() >= optuna_v6.OUTER_HOLDOUT_START
-    assert predictions["event_date"].max() < confirmation_start
 
 
 def test_outer_holdout_evaluation_falls_back_when_timeseries_calibration_degenerates(monkeypatch):
@@ -184,17 +162,8 @@ def test_outer_holdout_evaluation_falls_back_when_timeseries_calibration_degener
 
     monkeypatch.setattr(optuna_v6, "train_xgboost", fake_train_xgboost)
     monkeypatch.setattr(optuna_v6, "predict_batch", fake_predict_batch)
-    monkeypatch.setattr(
-        optuna_v6,
-        "_preflight_scored_selection_rows",
-        lambda _frame: None,
-    )
 
-    predictions = optuna_v6._train_then_predict_outer_holdout(
-        features_df,
-        variant,
-        confirmation_start=pd.Timestamp("2025-03-01"),
-    )
+    predictions = optuna_v6._train_then_predict_outer_holdout(features_df, variant)
 
     assert len(calls) >= 2
     assert calls[0]["calibration_cv"] == "timeseries_5fold"

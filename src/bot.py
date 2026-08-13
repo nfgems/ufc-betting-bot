@@ -82,7 +82,6 @@ from src.config import (
     LIVE_DATA_QUALITY_RETRY_SECONDS,
 )
 from src.live_control import assert_real_trading_allowed
-from src.data.event_context import coerce_nullable_bool, coerce_scheduled_rounds
 from src.prediction_history import (
     PREDICTION_HISTORY_FILENAME,
     archive_prediction_payload,
@@ -112,23 +111,6 @@ install_alert_handler(LOGS_DIR)
 
 logger = logging.getLogger(__name__)
 
-_SCHEDULED_REFIT_POLICY_V2_PATH = (
-    Path(__file__).resolve().parent.parent / "config" / "scheduled_refit_policy_v2.json"
-)
-_TRAINING_ODDS_COLUMNS = (
-    "a_implied_prob",
-    "b_implied_prob",
-    "diff_implied_prob",
-)
-_TRAINING_ODDS_PROVENANCE_COLUMNS = (
-    "model_odds_source_kind",
-    "model_odds_source_file",
-    "model_odds_observed_at",
-    "model_odds_commence_time",
-    "model_odds_hours_to_start",
-    "model_odds_verified_prefight",
-)
-
 _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
 _LIVE_LOOKUP_FALLBACK_WINDOW_DAYS = 30
 _LIVE_RECENT_MATCHUP_FALLBACK_BLOCK_DAYS = 30
@@ -145,9 +127,7 @@ _COMPLETED_EVENT_DATES_CACHE_TTL_SECONDS = 3600.0
 _LAST_GOOD_COMPLETED_UFC_EVENT_DATES: tuple[float, set[date]] | None = None
 # Bump whenever inference/cache semantics change incompatibly. Version 1 also
 # defines the pre-versioned promoted cache contract for one-time migration.
-# Version 2 preserves unknown event context instead of coercing it to a
-# plausible-looking non-title three-round bout.
-_LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION = 2
+_LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION = 1
 _ACTIONABLE_PREDICTION_CACHE_MAX_AGE = timedelta(minutes=20)
 _ACTIONABLE_LINE_FEATURE_COLS = frozenset(
     {
@@ -279,8 +259,7 @@ def _resolve_runtime_bundle_summary(
             load_production_bundle,
             validate_production_bundle,
         )
-    except Exception as exc:
-        logger.warning("Production bundle runtime validation is unavailable: %s", exc)
+    except Exception:
         return None
 
     if not is_hosted_runtime():
@@ -735,238 +714,6 @@ def _load_training_dataframe(*, data_path: Path | None, spec):
     legacy_df = load_kaggle_dataset(RAW_DATA_DIR / "ufc-master.csv")
     all_variants = build_training_dataset_variants(legacy_df=legacy_df)
     return all_variants[dataset_variant].copy()
-
-
-def _canonical_json_sha256(value: object) -> str:
-    encoded = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _is_policy_bound_integrity_fullfit(spec) -> bool:
-    from src.model.train import _is_current_policy_selected_fullfit_spec
-
-    return _is_current_policy_selected_fullfit_spec(spec)
-
-
-def _load_policy_bound_fullfit_odds_config(
-    spec,
-    *,
-    policy_path: Path | None = None,
-) -> dict | None:
-    """Resolve the fixed honest-odds policy for an integrity full-fit spec.
-
-    Other training contracts keep their existing preprocessing. The exact
-    policy-selected full-fit (including an arbitrarily named registered
-    performance descendant) fails closed unless the policy selects its exact
-    payload and requires verified T-1 odds for model inputs.
-    """
-    if not _is_policy_bound_integrity_fullfit(spec):
-        from src.model.train import _matches_method_selected_fullfit_semantics
-
-        if _matches_method_selected_fullfit_semantics(spec):
-            raise ValueError(
-                f"Integrity full-fit spec {getattr(spec, 'name', '')!r} is not "
-                "selected by policy"
-            )
-        return None
-
-    from dataclasses import asdict
-
-    path = Path(policy_path or _SCHEDULED_REFIT_POLICY_V2_PATH)
-    try:
-        raw = path.read_bytes()
-        policy = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"Policy-bound full-fit training requires a readable policy: {path}"
-        ) from exc
-    if not isinstance(policy, dict) or policy.get("schema_version") != 2:
-        raise ValueError("Policy-bound full-fit training requires scheduled policy schema_version 2")
-
-    contract = policy.get("contract")
-    evaluation = policy.get("evaluation")
-    if not isinstance(contract, dict) or not isinstance(evaluation, dict):
-        raise ValueError("Policy-bound full-fit training policy sections are malformed")
-
-    spec_name = str(getattr(spec, "name", "") or "")
-    selected_name = str(contract.get("fullfit_spec_name") or "")
-    if spec_name != selected_name:
-        raise ValueError(
-            f"Integrity full-fit spec {spec_name!r} is not selected by policy "
-            f"{policy.get('policy_id')!r}; selected={selected_name!r}"
-        )
-
-    spec_payload = asdict(spec)
-    # These are fit receipts, not registered contract fields. A caller may
-    # legitimately pass an artifact-derived spec whose fit metadata is set.
-    spec_payload["trained_at"] = ""
-    spec_payload["git_hash"] = ""
-    actual_spec_sha256 = _canonical_json_sha256(spec_payload)
-    expected_spec_sha256 = str(contract.get("fullfit_spec_payload_sha256") or "").lower()
-    if actual_spec_sha256 != expected_spec_sha256:
-        raise ValueError(
-            "Policy-bound full-fit training spec payload does not match the selected policy"
-        )
-
-    entry_offset_days = evaluation.get("entry_offset_days")
-    try:
-        entry_offset_days = float(entry_offset_days)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Policy-bound full-fit entry_offset_days must be numeric") from exc
-    if not math.isfinite(entry_offset_days) or entry_offset_days <= 0.0:
-        raise ValueError("Policy-bound full-fit entry_offset_days must be finite and positive")
-    if evaluation.get("entry_offset_for_features") is not True:
-        raise ValueError("Policy-bound full-fit requires entry_offset_for_features=true")
-    if evaluation.get("require_entry_odds") is not True:
-        raise ValueError("Policy-bound full-fit requires require_entry_odds=true")
-
-    allowed_sources = evaluation.get("quality_allowed_prefight_sources")
-    if not isinstance(allowed_sources, list) or not allowed_sources or any(
-        not isinstance(source, str) or not source for source in allowed_sources
-    ):
-        raise ValueError("Policy-bound full-fit allowed pre-fight sources are malformed")
-
-    project_root = Path(__file__).resolve().parent.parent
-    try:
-        policy_path_label = path.resolve(strict=False).relative_to(project_root).as_posix()
-    except ValueError:
-        policy_path_label = str(path.resolve(strict=False))
-
-    return {
-        "schema_version": 1,
-        "preparation": "verified_t_minus_entry_model_odds",
-        "policy_id": str(policy.get("policy_id") or ""),
-        "policy_path": policy_path_label,
-        "policy_sha256": hashlib.sha256(raw).hexdigest(),
-        "fullfit_spec_name": spec_name,
-        "fullfit_spec_payload_sha256": expected_spec_sha256,
-        "entry_offset_days": entry_offset_days,
-        "entry_offset_for_features": True,
-        "require_entry_odds": True,
-        "allowed_prefight_sources": list(allowed_sources),
-    }
-
-
-def _prepare_policy_bound_fullfit_training_features(
-    features_df,
-    *,
-    spec,
-    policy_path: Path | None = None,
-):
-    """Apply evaluation's verified T-1 role selection to a full-fit matrix."""
-    policy = _load_policy_bound_fullfit_odds_config(spec, policy_path=policy_path)
-    if policy is None:
-        return features_df, None
-
-    import numpy as np
-    import pandas as pd
-
-    from src.strategy.backtest import _prepare_evaluation_odds
-
-    prepared = _prepare_evaluation_odds(
-        features_df,
-        use_historical_odds=True,
-        entry_offset_days=policy["entry_offset_days"],
-        entry_offset_for_features=policy["entry_offset_for_features"],
-        require_entry_odds=policy["require_entry_odds"],
-    )
-    required_columns = (*_TRAINING_ODDS_COLUMNS, *_TRAINING_ODDS_PROVENANCE_COLUMNS)
-    missing_columns = [column for column in required_columns if column not in prepared.columns]
-    if missing_columns:
-        raise ValueError(
-            "Policy-bound full-fit preparation omitted odds evidence columns: "
-            f"{missing_columns}"
-        )
-
-    odds_present = prepared[list(_TRAINING_ODDS_COLUMNS)].notna()
-    partial_rows = odds_present.any(axis=1) & ~odds_present.all(axis=1)
-    if partial_rows.any():
-        raise ValueError("Policy-bound full-fit preparation produced partial implied-probability rows")
-    populated = odds_present.all(axis=1)
-    verified = prepared["model_odds_verified_prefight"].map(
-        lambda value: value is True or (isinstance(value, np.bool_) and bool(value))
-    )
-    allowed = prepared["model_odds_source_kind"].isin(policy["allowed_prefight_sources"])
-    minimum_hours = float(policy["entry_offset_days"]) * 24.0
-    hours = pd.to_numeric(prepared["model_odds_hours_to_start"], errors="coerce")
-    invalid_populated = populated & (~verified | ~allowed | ~hours.ge(minimum_hours))
-    if invalid_populated.any() or verified[~populated].any():
-        raise ValueError(
-            "Policy-bound full-fit preparation produced model odds without allowed, "
-            "verified T-1 provenance"
-        )
-
-    expected_diff = prepared["a_implied_prob"] - prepared["b_implied_prob"]
-    if populated.any() and not np.allclose(
-        prepared.loc[populated, "diff_implied_prob"].to_numpy(dtype=float),
-        expected_diff.loc[populated].to_numpy(dtype=float),
-        rtol=0.0,
-        atol=1e-12,
-    ):
-        raise ValueError("Policy-bound full-fit diff_implied_prob is inconsistent")
-
-    evidence = {
-        **policy,
-        "row_count": int(len(prepared)),
-        "rows_with_verified_t_minus_entry": int(populated.sum()),
-        "rows_missing_t_minus_entry": int((~populated).sum()),
-        "prepared_odds_columns": list(_TRAINING_ODDS_COLUMNS),
-        "provenance_columns": list(_TRAINING_ODDS_PROVENANCE_COLUMNS),
-    }
-    logger.info(
-        "Policy-bound full-fit odds prepared from verified T-%s roles for %d/%d rows",
-        policy["entry_offset_days"],
-        int(populated.sum()),
-        len(prepared),
-    )
-    return prepared, evidence
-
-
-def _bind_training_features_evidence(
-    evidence: dict | None,
-    features_path: Path,
-    *,
-    source_fights_path: Path | None = None,
-) -> dict | None:
-    """Bind a policy preparation receipt to exact source and trainer inputs."""
-    if evidence is None:
-        return None
-    path = Path(features_path).resolve(strict=False)
-    if not path.is_file():
-        raise RuntimeError(f"Prepared training features were not saved: {path}")
-    bound = dict(evidence)
-    bound["features_csv"] = {
-        "path": str(path),
-        "sha256": _file_sha256(path),
-        "bytes": int(path.stat().st_size),
-    }
-    if source_fights_path is None:
-        raise RuntimeError(
-            "Policy-bound training evidence requires the exact source fights CSV"
-        )
-    fights_path = Path(source_fights_path).resolve(strict=False)
-    if not fights_path.is_file():
-        raise RuntimeError(f"Training source fights were not found: {fights_path}")
-    bound["source_fights_csv"] = {
-        "path": str(fights_path),
-        "sha256": _file_sha256(fights_path),
-        "bytes": int(fights_path.stat().st_size),
-    }
-    bound["receipt_sha256"] = _canonical_json_sha256(bound)
-    return bound
 
 
 def _coerce_live_fight_count(value) -> int | None:
@@ -1542,10 +1289,8 @@ def _prediction_event_context_snapshot(fight: dict | object, event_context: dict
             "card_date": card_date,
             "weight_class": str(event_context.get("weight_class", "") or ""),
             "num_rounds": event_context.get("num_rounds"),
-            "is_title_bout": event_context.get("is_title_bout"),
+            "is_title_bout": bool(event_context.get("is_title_bout")),
             "is_empty_arena": event_context.get("is_empty_arena"),
-            "fighter_a_id": event_context.get("fighter_a_id"),
-            "fighter_b_id": event_context.get("fighter_b_id"),
         }
     )
 
@@ -1734,14 +1479,7 @@ def _prediction_needs_refresh(
         return True, "missing event context snapshot"
     if not isinstance(current_event_context_snapshot, dict):
         return True, "missing current event context snapshot"
-    for field in (
-        "weight_class",
-        "num_rounds",
-        "is_title_bout",
-        "is_empty_arena",
-        "fighter_a_id",
-        "fighter_b_id",
-    ):
+    for field in ("weight_class", "num_rounds", "is_title_bout", "is_empty_arena"):
         if cached_event_context.get(field) != current_event_context_snapshot.get(field):
             return True, f"event context changed: {field}"
 
@@ -2937,30 +2675,17 @@ def _resolve_live_event_context(
         best = candidates[0]
         weight_class = _normalize_live_weight_class(best.get("weight_class"))
         if weight_class is not None:
-            best_a_key = _canonicalize_live_fighter_name(best.get("fighter_a", ""))
-            best_b_key = _canonicalize_live_fighter_name(best.get("fighter_b", ""))
-            requested_a_key = _canonicalize_live_fighter_name(fighter_a)
-            requested_b_key = _canonicalize_live_fighter_name(fighter_b)
-            reversed_orientation = bool(
-                best_a_key == requested_b_key and best_b_key == requested_a_key
-            )
-            fighter_a_id = best.get(
-                "fighter_b_id" if reversed_orientation else "fighter_a_id"
-            )
-            fighter_b_id = best.get(
-                "fighter_a_id" if reversed_orientation else "fighter_b_id"
-            )
-            is_title_bout = coerce_nullable_bool(best.get("is_title_bout"))
-            is_empty_arena = coerce_nullable_bool(best.get("is_empty_arena"))
-            num_rounds = coerce_scheduled_rounds(best.get("num_rounds"))
+            is_title_bout = bool(best.get("is_title_bout", False))
+            try:
+                num_rounds = int(best.get("num_rounds"))
+            except (TypeError, ValueError):
+                num_rounds = 5 if (bool(best.get("is_main_event", False)) or is_title_bout) else 3
             event_date = best.get("event_date", "")
             return {
                 "weight_class": weight_class,
                 "is_title_bout": is_title_bout,
-                "is_empty_arena": is_empty_arena,
+                "is_empty_arena": best.get("is_empty_arena"),
                 "num_rounds": num_rounds,
-                "fighter_a_id": fighter_a_id,
-                "fighter_b_id": fighter_b_id,
                 "event_date": event_date,
                 "card_date": _canonical_card_date(
                     best.get("card_date") or event_date
@@ -2994,11 +2719,9 @@ def _resolve_live_event_context(
             )
             return {
                 "weight_class": inferred_wc,
-                "is_title_bout": None,
-                "is_empty_arena": None,
-                "num_rounds": None,
-                "fighter_a_id": None,
-                "fighter_b_id": None,
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
             }
 
     inferred_lookup_wc = _infer_weight_class_from_near_term_ufc_lookup(
@@ -3018,11 +2741,9 @@ def _resolve_live_event_context(
         )
         return {
             "weight_class": inferred_lookup_wc,
-            "is_title_bout": None,
-            "is_empty_arena": None,
-            "num_rounds": None,
-            "fighter_a_id": None,
-            "fighter_b_id": None,
+            "is_title_bout": False,
+            "is_empty_arena": False,
+            "num_rounds": 3,
         }
 
     return None
@@ -3047,10 +2768,7 @@ def cmd_train(args):
     """Load data, build features, and train models."""
     from src.data.kaggle_loader import save_processed
     from src.features.build_features import build_features, save_features
-    from src.model.train import (
-        _is_current_policy_selected_fullfit_spec,
-        train_all_models,
-    )
+    from src.model.train import train_all_models
 
     cli_spec_name = getattr(args, "spec", None)
     spec = getattr(args, "training_spec", None)
@@ -3058,25 +2776,6 @@ def cmd_train(args):
         spec = _resolve_named_training_spec_arg(cli_spec_name)
     spec = spec or _default_training_spec()
     logger.info("Using training spec: %s", spec.name)
-
-    final_track_c_receipt = getattr(args, "final_track_c_pass_receipt", None)
-    policy_selected_fullfit = _is_current_policy_selected_fullfit_spec(spec)
-    final_track_c_binding = None
-    if policy_selected_fullfit:
-        if final_track_c_receipt is None:
-            raise ValueError(
-                "Policy-selected full-fit training requires "
-                "--final-track-c-pass-receipt before reading or writing training data"
-            )
-        from scripts.check_production_refit_contract import (
-            validate_final_track_c_pass_receipt,
-        )
-
-        final_track_c_binding = validate_final_track_c_pass_receipt(
-            Path(final_track_c_receipt),
-            expected_policy_path=_SCHEDULED_REFIT_POLICY_V2_PATH,
-            expected_fullfit_spec=spec,
-        )
 
     output_subdir = getattr(args, "output_subdir", None)
     processed_output_dir = (PROCESSED_DATA_DIR / output_subdir) if output_subdir else PROCESSED_DATA_DIR
@@ -3086,28 +2785,6 @@ def cmd_train(args):
     # Step 1: Load data
     logger.info("Loading data...")
     filepath = Path(args.data) if args.data else None
-    if policy_selected_fullfit:
-        if filepath is None:
-            raise ValueError(
-                "Policy-selected full-fit training requires --data to name the "
-                "exact fights artifact bound by the final Track-C PASS"
-            )
-        try:
-            resolved_fights_path = filepath.resolve(strict=True)
-        except OSError as exc:
-            raise ValueError(
-                f"Policy-selected source fights artifact is missing: {filepath}"
-            ) from exc
-        if (
-            resolved_fights_path != final_track_c_binding["dataset_fights_path"]
-            or _file_sha256(resolved_fights_path)
-            != final_track_c_binding["dataset_fights_sha256"]
-        ):
-            raise ValueError(
-                "Training --data does not match the exact fights artifact bound by "
-                "the final Track-C PASS"
-            )
-        filepath = resolved_fights_path
     fights_df = _load_training_dataframe(data_path=filepath, spec=spec)
     save_processed(
         fights_df,
@@ -3117,23 +2794,9 @@ def cmd_train(args):
     # Step 2: Build features
     logger.info("Building features...")
     features_df = build_features(fights_df)
-    features_df, training_input_evidence = _prepare_policy_bound_fullfit_training_features(
+    save_features(
         features_df,
-        spec=spec,
-    )
-    features_filename = (
-        Path(output_subdir) / "features.csv" if output_subdir else Path("features.csv")
-    )
-    save_features(features_df, filename=features_filename)
-    features_path = (
-        features_filename
-        if features_filename.is_absolute()
-        else PROCESSED_DATA_DIR / features_filename
-    )
-    training_input_evidence = _bind_training_features_evidence(
-        training_input_evidence,
-        features_path,
-        source_fights_path=filepath,
+        filename=(Path(output_subdir) / "features.csv") if output_subdir else "features.csv",
     )
 
     # Step 3: Train models
@@ -3143,10 +2806,6 @@ def cmd_train(args):
         train_kwargs["models_dir"] = models_output_dir
     if test_set_path is not None:
         train_kwargs["test_set_path"] = test_set_path
-    if training_input_evidence is not None:
-        train_kwargs["training_input_evidence"] = training_input_evidence
-    if policy_selected_fullfit:
-        train_kwargs["final_track_c_receipt_path"] = Path(final_track_c_receipt)
     results = train_all_models(features_df, spec=spec, **train_kwargs)
 
     logger.info(
@@ -3458,10 +3117,7 @@ def cmd_predict(args):
     from src.model.predict import predict_fight
     from src.model.train import load_model
     from src.strategy.value import compute_independent_blend_probs, _passes_filters
-    from src.data.fighter_lookup import (
-        AmbiguousFighterIdentityError,
-        build_fight_features,
-    )
+    from src.data.fighter_lookup import build_fight_features
     from src.data.line_tracker import detect_injury_or_cancellation
     from src.config import MIN_FIGHTER_FIGHTS
 
@@ -3549,29 +3205,23 @@ def cmd_predict(args):
             "b_implied_prob": market_b,
             "diff_implied_prob": market_a - market_b,
         }
-        try:
-            feature_payload = build_fight_features(
-                fighter_a,
-                fighter_b,
-                odds_features=odds_features,
-                weight_class=event_context["weight_class"],
-                is_title_bout=event_context["is_title_bout"],
-                is_empty_arena=event_context.get("is_empty_arena"),
-                num_rounds=event_context["num_rounds"],
-                event_id=fight.get("event_id"),
-                commence_time=fight.get("commence_time"),
-                prefer_live_refresh=True,
-                training_spec=inference_spec,
-                processed_data_dir=runtime_processed_data_dir,
-                include_provenance=True,
-                fighter_a_lookup_name=lookup_fighter_a,
-                fighter_b_lookup_name=lookup_fighter_b,
-                fighter_a_id=event_context.get("fighter_a_id"),
-                fighter_b_id=event_context.get("fighter_b_id"),
-            )
-        except AmbiguousFighterIdentityError as exc:
-            logger.warning("Skipping unresolved fighter identity for %s vs %s: %s", fighter_a, fighter_b, exc)
-            continue
+        feature_payload = build_fight_features(
+            fighter_a,
+            fighter_b,
+            odds_features=odds_features,
+            weight_class=event_context["weight_class"],
+            is_title_bout=event_context["is_title_bout"],
+            is_empty_arena=event_context.get("is_empty_arena"),
+            num_rounds=event_context["num_rounds"],
+            event_id=fight.get("event_id"),
+            commence_time=fight.get("commence_time"),
+            prefer_live_refresh=True,
+            training_spec=inference_spec,
+            processed_data_dir=runtime_processed_data_dir,
+            include_provenance=True,
+            fighter_a_lookup_name=lookup_fighter_a,
+            fighter_b_lookup_name=lookup_fighter_b,
+        )
         if isinstance(feature_payload, tuple) and len(feature_payload) == 2:
             features, lookup_provenance = feature_payload
         else:
@@ -4203,7 +3853,7 @@ def cmd_duo_live(args):
             return {"status": "error", "reason": str(exc)}
 
     from src.data.odds_client import OddsClient
-    from src.model.predict import _build_batch_matrix, predict_fight
+    from src.model.predict import predict_fight
     from src.model.train import load_model
     from src.polymarket.markets import (
         GammaEventsUnavailableError,
@@ -4218,10 +3868,7 @@ def cmd_duo_live(args):
         run_duo_traders,
     )
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
-    from src.data.fighter_lookup import (
-        AmbiguousFighterIdentityError,
-        build_fight_features,
-    )
+    from src.data.fighter_lookup import build_fight_features
     from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
     import pandas as pd
 
@@ -4237,61 +3884,6 @@ def cmd_duo_live(args):
             progress_callback(message)
         except Exception as exc:
             logger.debug("Live betting progress callback failed: %s", exc)
-
-    _report_progress("Cycle active: loading model artifacts")
-    ensure_model_fresh(args.model)
-    model_result = load_model(args.model)
-    inference_spec = _training_spec_from_model_result(model_result)
-    no_odds_model_arg = _resolve_no_odds_model_arg(args.model)
-    try:
-        no_odds_result = load_model(no_odds_model_arg) if no_odds_model_arg is not None else None
-    except FileNotFoundError:
-        no_odds_result = None
-    runtime_bundle_summary = _resolve_runtime_bundle_summary(
-        model_result=model_result,
-        no_odds_result=no_odds_result,
-    )
-    confirmed_strategy = (
-        runtime_bundle_summary.get("confirmed_strategy")
-        if isinstance(runtime_bundle_summary, dict)
-        else None
-    )
-    runtime_strategy_config = (
-        confirmed_strategy.get("strategy_config")
-        if isinstance(confirmed_strategy, dict)
-        else None
-    )
-    runtime_shared_constants = (
-        confirmed_strategy.get("shared_constants")
-        if isinstance(confirmed_strategy, dict)
-        else None
-    )
-    if not dry_run and runtime_strategy_config is None:
-        reason = (
-            "Real-money live execution requires an installed final-v2 "
-            "confirmed strategy"
-        )
-        logger.error(reason)
-        return {"status": "error", "reason": reason, "total_orders": 0}
-
-    requested_min_edge = getattr(args, "min_edge", None)
-    if runtime_strategy_config is not None:
-        runtime_min_edge = float(runtime_strategy_config["s_min_edge"])
-        if (
-            not dry_run
-            and requested_min_edge is not None
-            and float(requested_min_edge) != runtime_min_edge
-        ):
-            reason = (
-                "Real-money live --min-edge override differs from the immutable "
-                f"confirmed strategy ({requested_min_edge} != {runtime_min_edge})"
-            )
-            logger.error(reason)
-            return {"status": "error", "reason": reason, "total_orders": 0}
-    else:
-        runtime_min_edge = float(
-            MIN_EDGE_THRESHOLD if requested_min_edge is None else requested_min_edge
-        )
 
     supplied_clob = getattr(args, "clob_client", None)
     clob = None if dry_run else (supplied_clob or ClobClientWrapper())
@@ -4310,6 +3902,19 @@ def cmd_duo_live(args):
                 "Cycle active: legacy G cleanup degraded; S/C execution continues"
             )
 
+    _report_progress("Cycle active: loading model artifacts")
+    ensure_model_fresh(args.model)
+    model_result = load_model(args.model)
+    inference_spec = _training_spec_from_model_result(model_result)
+    no_odds_model_arg = _resolve_no_odds_model_arg(args.model)
+    try:
+        no_odds_result = load_model(no_odds_model_arg) if no_odds_model_arg is not None else None
+    except FileNotFoundError:
+        no_odds_result = None
+    runtime_bundle_summary = _resolve_runtime_bundle_summary(
+        model_result=model_result,
+        no_odds_result=no_odds_result,
+    )
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
@@ -4321,6 +3926,7 @@ def cmd_duo_live(args):
 
     # Extract feature cols/medians and global importance for cache enrichment
     _feat_cols = model_result["feature_cols"]
+    _col_medians = model_result["col_medians"]
     _global_importance = sorted(
         model_result.get("feature_importance", {}).items(),
         key=lambda x: x[1], reverse=True,
@@ -4582,9 +4188,6 @@ def cmd_duo_live(args):
                 raise
     except GammaEventsUnavailableError as e:
         reason = f"polymarket_gamma_events_unavailable: {e}"
-        # The exhausted fetch in markets.py owns the incident-bearing warning.
-        # This cycle-level message remains useful context without multiplying
-        # the same alert in aggregation.
         logger.info("Live cycle degraded: %s", reason)
         cancellation_summary = cancel_duo_open_limit_orders(
             clob=clob,
@@ -4767,12 +4370,10 @@ def cmd_duo_live(args):
                 markets=markets,
                 clob=clob,
                 dry_run=dry_run,
-                min_edge=runtime_min_edge,
+                min_edge=args.min_edge,
                 event_title=event_title,
                 legacy_g_maintenance=legacy_g_maintenance,
                 run_model_tracker=False,
-                strategy_config=runtime_strategy_config,
-                confirmed_shared_constants=runtime_shared_constants,
                 progress_callback=_report_progress,
             )
         except OpenOrderReservationUnavailableError as exc:
@@ -4952,34 +4553,24 @@ def cmd_duo_live(args):
                 refresh_reason,
             )
 
-        try:
-            feature_payload = build_fight_features(
-                fighter_a,
-                fighter_b,
-                odds_features=odds_features,
-                weight_class=event_context["weight_class"],
-                is_title_bout=event_context["is_title_bout"],
-                is_empty_arena=event_context.get("is_empty_arena"),
-                num_rounds=event_context["num_rounds"],
-                event_id=fight.get("event_id"),
-                commence_time=fight.get("commence_time"),
-                prefer_live_refresh=True,
-                training_spec=inference_spec,
-                processed_data_dir=runtime_processed_data_dir,
-                include_provenance=True,
-                fighter_a_lookup_name=lookup_fighter_a,
-                fighter_b_lookup_name=lookup_fighter_b,
-                force_fighter_refresh=force_fighter_refresh,
-                fighter_a_id=event_context.get("fighter_a_id"),
-                fighter_b_id=event_context.get("fighter_b_id"),
-            )
-        except AmbiguousFighterIdentityError as exc:
-            _log_live_fight_skip_once(
-                fight,
-                f"unresolved fighter identity: {exc}",
-                force_warning=True,
-            )
-            continue
+        feature_payload = build_fight_features(
+            fighter_a,
+            fighter_b,
+            odds_features=odds_features,
+            weight_class=event_context["weight_class"],
+            is_title_bout=event_context["is_title_bout"],
+            is_empty_arena=event_context.get("is_empty_arena"),
+            num_rounds=event_context["num_rounds"],
+            event_id=fight.get("event_id"),
+            commence_time=fight.get("commence_time"),
+            prefer_live_refresh=True,
+            training_spec=inference_spec,
+            processed_data_dir=runtime_processed_data_dir,
+            include_provenance=True,
+            fighter_a_lookup_name=lookup_fighter_a,
+            fighter_b_lookup_name=lookup_fighter_b,
+            force_fighter_refresh=force_fighter_refresh,
+        )
         if isinstance(feature_payload, tuple) and len(feature_payload) == 2:
             features, lookup_provenance = feature_payload
         else:
@@ -5075,14 +4666,35 @@ def cmd_duo_live(args):
         )
 
         # --- Compute SHAP values for this fight ---
-        # Explain the exact matrix materialized for inference. Keeping this in
-        # one helper prevents display-only SHAP values from silently applying a
-        # different missing-value policy than the scored model.
+        # Reconstruct the same feature vector that predict_fight() uses,
+        # including _missing indicator columns.
         fight_shap_values = []
         shap_explainer, shap_base_value = _ensure_shap_state()
         if shap_explainer is not None:
             try:
-                X = _build_batch_matrix(pd.DataFrame([features]), model_result)
+                import numpy as np
+
+                _base_cols = [c for c in _feat_cols if not c.endswith("_missing")]
+                _missing_cols = [c for c in _feat_cols if c.endswith("_missing")]
+
+                base_values = [features.get(col, np.nan) for col in _base_cols]
+                X_base = np.array([base_values])
+
+                # Generate missing indicators (1 if NaN, 0 otherwise)
+                indicators = [float(np.isnan(X_base[0, i]))
+                              for i, col in enumerate(_base_cols)
+                              if f"{col}_missing" in _missing_cols]
+
+                # Fill NaNs with training medians
+                for i in range(X_base.shape[1]):
+                    if np.isnan(X_base[0, i]):
+                        X_base[0, i] = _col_medians[i] if i < len(_col_medians) and not np.isnan(_col_medians[i]) else 0.0
+
+                # Combine base + indicators (same as predict_fight)
+                if indicators:
+                    X = np.column_stack([X_base, np.array([indicators])])
+                else:
+                    X = X_base
 
                 sv = shap_explainer.shap_values(X)
                 # Handle both list (binary) and array output
@@ -5344,11 +4956,9 @@ def cmd_duo_live(args):
                 markets=markets,
                 clob=clob,
                 dry_run=dry_run,
-                min_edge=runtime_min_edge,
+                min_edge=args.min_edge,
                 event_title=event_title,
                 legacy_g_maintenance=legacy_g_maintenance,
-                strategy_config=runtime_strategy_config,
-                confirmed_shared_constants=runtime_shared_constants,
                 progress_callback=_report_progress,
             )
             ufc_results = {
@@ -5408,15 +5018,6 @@ def main():
         type=str,
         default=None,
         help="Write processed/test/model artifacts under a subdirectory instead of the canonical promoted paths",
-    )
-    train_parser.add_argument(
-        "--final-track-c-pass-receipt",
-        type=Path,
-        default=None,
-        help=(
-            "Durable final-policy Track-C PASS receipt required for the exact "
-            "policy-selected full-fit contract"
-        ),
     )
 
     # Evaluate command
@@ -5505,15 +5106,7 @@ def main():
     live_parser.add_argument("--real", action="store_true",
                              help="Run with real money (requires explicit arming env vars)")
     live_parser.add_argument("--model", type=str, default="xgboost")
-    live_parser.add_argument(
-        "--min-edge",
-        type=float,
-        default=None,
-        help=(
-            "Override the legacy live edge threshold. Confirmed production "
-            "bundles reject a differing real-money override."
-        ),
-    )
+    live_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
 
     btc5m_parser = subparsers.add_parser(
         "btc5m",

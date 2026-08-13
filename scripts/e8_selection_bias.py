@@ -15,7 +15,7 @@ anchor is a single pre-registered config, so its numbers are not subject to
 selection bias — the gap applies to candidate selection).
 
 Usage:
-    python scripts/e8_selection_bias.py --preds-cache logs/fold_predictions_selection_v1.pkl
+    python scripts/e8_selection_bias.py --preds-cache logs/fold_predictions_baseline.pkl
 """
 
 import argparse
@@ -32,13 +32,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.strategy.duo_trader_sweep import (
     _evaluate_config,
     _generate_walk_forward_predictions,
-    _preflight_cached_selection_predictions,
     _production_sweep_config,
-    _selection_prediction_cache_payload,
-    _selection_predictions_from_cache_payload,
     build_sweep_configs,
 )
-from src.strategy.model_lab import DEFAULT_CONFIRMATION_FOLD_COUNT
 
 logger = logging.getLogger("e8_selection_bias")
 
@@ -60,7 +56,7 @@ def _fold_metrics(fold_predictions, config, bet_start_date="2022-01-01"):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--preds-cache", default="logs/fold_predictions_selection_v1.pkl")
+    parser.add_argument("--preds-cache", default="logs/fold_predictions_baseline.pkl")
     parser.add_argument("--variant", default="baseline")
     parser.add_argument("--min-train-folds", type=int, default=4)
     parser.add_argument("--out", default="logs/e8_selection_bias.csv")
@@ -71,27 +67,14 @@ def main() -> int:
     cache_path = Path(args.preds_cache)
     if cache_path.exists():
         with cache_path.open("rb") as fh:
-            fold_predictions = _selection_predictions_from_cache_payload(
-                pickle.load(fh)
-            )
+            fold_predictions = pickle.load(fh)
         logger.info("Loaded cached fold predictions (%d folds)", len(fold_predictions))
     else:
-        fold_predictions, fold_manifest = _generate_walk_forward_predictions(
-            variant_name=args.variant,
-            evaluation_partition="selection",
-            confirmation_fold_count=DEFAULT_CONFIRMATION_FOLD_COUNT,
-            return_fold_manifest=True,
-            allow_all_folds=False,
-        )
-        cache_payload = _selection_prediction_cache_payload(
-            fold_predictions,
-            fold_manifest,
-        )
+        fold_predictions = _generate_walk_forward_predictions(variant_name=args.variant)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with cache_path.open("wb") as fh:
-            pickle.dump(cache_payload, fh)
+            pickle.dump(fold_predictions, fh)
 
-    _preflight_cached_selection_predictions(fold_predictions)
     configs = build_sweep_configs(variant_name=args.variant, include_production_controls=False)
     production = _production_sweep_config(
         variant_name=args.variant, name="production_controls", is_baseline=True,

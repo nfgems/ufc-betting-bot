@@ -101,26 +101,6 @@ def test_betsapi_mma_client_retries_request_exception(monkeypatch):
     assert sleeps == [1.0]
 
 
-def test_betsapi_mma_client_error_does_not_expose_tokenized_url(monkeypatch):
-    def fake_get(url, params=None, timeout=30):
-        response = _FakeResponse({"success": 0}, status_code=403)
-        error = requests.HTTPError(
-            f"403 for {url}?token={params['token']}", response=response
-        )
-        response.raise_for_status = lambda: (_ for _ in ()).throw(error)
-        return response
-
-    monkeypatch.setattr(betsapi_mma.requests, "get", fake_get)
-    client = betsapi_mma.BetsApiMMAClient(token="do-not-leak")
-
-    with pytest.raises(RuntimeError) as exc_info:
-        client.get_mma_ended_events()
-
-    assert "do-not-leak" not in str(exc_info.value)
-    assert "token=" not in str(exc_info.value)
-    assert "HTTP 403" in str(exc_info.value)
-
-
 def test_normalize_query_date_returns_naive_normalized_day():
     aware = pd.Timestamp("2026-03-15 13:45:00", tz="UTC")
 

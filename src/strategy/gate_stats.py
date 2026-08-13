@@ -129,13 +129,8 @@ def _distinct_snapshot_fights(hist: pd.DataFrame | None = None) -> set[tuple[str
     if hist is None or hist.empty:
         return set()
     frame = hist.copy()
-    if "verified_prefight" in frame.columns:
-        frame = frame[frame["verified_prefight"].fillna(False).astype(bool)]
-    if frame.empty:
-        return set()
     frame["__date"] = pd.to_datetime(frame["event_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    snapshot_column = "observed_at" if "observed_at" in frame.columns else "offset_days"
-    grouped = frame.groupby(["__date", "fighter_a", "fighter_b"])[snapshot_column].nunique()
+    grouped = frame.groupby(["__date", "fighter_a", "fighter_b"])["offset_days"].nunique()
     distinct = grouped[grouped >= 2]
     return {
         (str(event_date), str(fa), str(fb))

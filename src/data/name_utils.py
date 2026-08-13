@@ -8,20 +8,6 @@ import re
 import unicodedata
 
 
-_UFCSTATS_ID_RE = re.compile(r"(?:fighter-details/)?([0-9a-f]{16})(?:\b|$)", re.IGNORECASE)
-
-
-def normalize_ufcstats_id(value: object) -> str | None:
-    """Return a bare UFCStats fighter slug from either a slug or profile URL."""
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.casefold() in {"nan", "none", "nat", "<na>"}:
-        return None
-    match = _UFCSTATS_ID_RE.search(text)
-    return match.group(1).lower() if match else None
-
-
 # Small, source-reviewed identity set used only where name-keyed historical
 # data would otherwise split or contaminate these exact fighters. This is not
 # a suffix rule: only the spellings listed in ``tracked_names`` are joined.
@@ -294,107 +280,6 @@ def canonical_fighter_name_key(value: object) -> str:
     if legacy_key in _REVIEWED_LEGACY_BASE_KEYS:
         return normalize_person_name(value)
     return legacy_key
-
-
-# These are the collision groups present in the checked-in UFCStats fighter
-# inventory.  The inventory loader re-derives the set at runtime; this small
-# fallback keeps live lookup fail-closed if that optional artifact is absent.
-_KNOWN_COLLIDING_FIGHTER_NAMES = (
-    "Anthony Johnson",
-    "Bruno Silva",
-    "Daniel Roberts",
-    "Jean Silva",
-    "Joey Gomez",
-    "Lance Gibson",
-    "Mike Davis",
-    "Michael McDonald",
-    "Bobby Sanchez",
-    "Tommy Petersen",
-    "Victor Valenzuela",
-)
-KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS = frozenset(
-    canonical_fighter_name_key(name) for name in _KNOWN_COLLIDING_FIGHTER_NAMES
-)
-
-# Only current-roster identities that cannot be selected safely by name alone.
-# Historical identities are recovered from fight participant URLs instead of
-# being guessed from these current mappings.
-CURRENT_UFCSTATS_ID_OVERRIDES: dict[str, str] = {
-    normalize_person_name("Jean Silva"): "52ef95b5860fb28c",
-    normalize_person_name("Mike Davis"): "fb3e61720be4690c",
-    normalize_person_name("Victor Valenzuela"): "078695e385ec2f57",
-}
-
-
-def derive_ambiguous_fighter_name_keys(
-    rows,
-    *,
-    name_field: str = "name",
-    id_field: str = "fighter_id",
-) -> frozenset[str]:
-    """Derive canonical name keys that map to more than one UFCStats ID.
-
-    ``rows`` may contain dictionaries, pandas named-tuples, or ordinary
-    objects.  Keeping this helper pandas-free lets lookup code use it with the
-    lightweight records it already loads.
-    """
-    ids_by_name: dict[str, set[str]] = {}
-    for row in rows:
-        if isinstance(row, dict):
-            name = row.get(name_field)
-            raw_id = row.get(id_field)
-        else:
-            name = getattr(row, name_field, None)
-            raw_id = getattr(row, id_field, None)
-        fighter_id = normalize_ufcstats_id(raw_id)
-        name_key = canonical_fighter_name_key(name)
-        if name_key and fighter_id:
-            ids_by_name.setdefault(name_key, set()).add(fighter_id)
-    return frozenset(key for key, ids in ids_by_name.items() if len(ids) > 1)
-
-
-def fighter_identity_key(
-    fighter_name: object,
-    fighter_id: object = None,
-    *,
-    ambiguous_name_keys: frozenset[str] | set[str] | None = None,
-) -> str | None:
-    """Return the minimal stateful-history key for one fighter.
-
-    Most fighters retain the project's conservative exact-name identity.  A
-    stable UFCStats ID is required only for known collision groups, while the
-    existing reviewed alias identities continue to share their reviewed ID.
-    """
-    reviewed_id = reviewed_fighter_identity_id(fighter_name)
-    if reviewed_id is not None:
-        return f"ufcstats:{reviewed_id}"
-
-    exact_key = normalize_person_name(fighter_name)
-    if not exact_key:
-        return None
-
-    collision_keys = (
-        KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
-        if ambiguous_name_keys is None
-        else ambiguous_name_keys
-    )
-    if canonical_fighter_name_key(fighter_name) in collision_keys:
-        normalized_id = normalize_ufcstats_id(fighter_id)
-        return f"ufcstats:{normalized_id}" if normalized_id else None
-    return f"name:{exact_key}"
-
-
-def fighter_identity_is_ambiguous(
-    fighter_name: object,
-    *,
-    ambiguous_name_keys: frozenset[str] | set[str] | None = None,
-) -> bool:
-    collision_keys = (
-        KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
-        if ambiguous_name_keys is None
-        else ambiguous_name_keys
-    )
-    return canonical_fighter_name_key(fighter_name) in collision_keys
 
 
 def canonical_fighter_display_name(value: object) -> str:

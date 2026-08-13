@@ -39,22 +39,6 @@ REQUEST_DELAY = 1.5  # seconds between requests
 BACKFILL_KEY_COLUMNS = ["event_date", "fighter_a", "fighter_b", "offset_days"]
 MAX_EQUAL_ODDS_OVERROUND = 1.20
 
-_LINE_HISTORY_CACHE: tuple[tuple, pd.DataFrame] | None = None
-_ALL_ODDS_CACHE: tuple[tuple, pd.DataFrame] | None = None
-_ROLE_CACHE: dict[tuple, pd.DataFrame] = {}
-
-
-def _path_set_signature(paths: list[Path]) -> tuple:
-    """Cheap in-process cache key that changes when any source file changes."""
-    records = []
-    for path in paths:
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        records.append((path.name, stat.st_size, stat.st_mtime_ns))
-    return tuple(records)
-
 
 def _normalize_backfill_event_date(value) -> str:
     if pd.isna(value):
@@ -379,165 +363,8 @@ def load_historical_odds() -> pd.DataFrame:
 _CANONICAL_ODDS_COLS = [
     "event_date", "fighter_a", "fighter_b", "query_date", "offset_days",
     "a_fair_prob", "b_fair_prob", "a_decimal_odds", "b_decimal_odds",
-    "num_bookmakers", "source_kind", "source_file", "observed_at",
-    "commence_time", "hours_to_start", "verified_prefight",
+    "num_bookmakers",
 ]
-
-VERIFIED_PREFIGHT_SOURCE_KINDS = frozenset({"odds_api", "line_history"})
-
-
-def _stamp_odds_provenance(
-    frame: pd.DataFrame,
-    *,
-    source_kind: str,
-    source_file: str,
-) -> pd.DataFrame:
-    """Attach row-level source/timing evidence without upgrading legacy data.
-
-    Only the Odds API historical endpoint and persisted live line-history
-    snapshots can be treated as verified pre-fight observations. BFO rows and
-    the old pre-2022 overlay remain useful as closing/reference prices, but
-    their historical ``offset_days`` labels are not trusted as provenance.
-    """
-    result = frame.copy()
-    result["source_kind"] = source_kind
-    if source_file or "source_file" not in result.columns:
-        result["source_file"] = source_file
-
-    if source_kind == "line_history":
-        observed = pd.to_datetime(
-            result.get("snapshot_time", pd.Series(pd.NaT, index=result.index)),
-            errors="coerce",
-            utc=True,
-        )
-        commence = pd.to_datetime(
-            result.get("commence_time", pd.Series(pd.NaT, index=result.index)),
-            errors="coerce",
-            utc=True,
-        )
-        hours = (commence - observed).dt.total_seconds() / 3600.0
-        result["observed_at"] = observed
-        result["commence_time"] = commence
-        result["hours_to_start"] = hours
-        result["verified_prefight"] = observed.notna() & commence.notna() & (hours > 0.0)
-        return result
-
-    observed = pd.to_datetime(
-        result.get("query_date", pd.Series(pd.NaT, index=result.index)),
-        errors="coerce",
-        utc=True,
-    )
-    result["observed_at"] = observed
-    if source_kind == "odds_api":
-        offsets = pd.to_numeric(
-            result.get("offset_days", pd.Series(np.nan, index=result.index)),
-            errors="coerce",
-        )
-        result["hours_to_start"] = offsets * 24.0
-        result["verified_prefight"] = offsets.notna() & (offsets > 0.0)
-    else:
-        # The legacy/BFO query date and offset fields were reconstructed and
-        # do not prove when a price was observable.
-        result["hours_to_start"] = 0.0
-        result["verified_prefight"] = False
-    return result
-
-
-def load_line_history_odds(line_history_dir: Optional[Path] = None) -> pd.DataFrame:
-    """Read persisted ``odds_*.csv`` snapshots into the canonical odds shape.
-
-    This is intentionally a small importer rather than a second collector. It
-    trusts the snapshot and commence timestamps written by ``line_tracker``,
-    rejects post-start/malformed rows, and averages bookmakers per fight and
-    snapshot exactly as the historical loader expects.
-    """
-    if line_history_dir is None:
-        from src.data.line_tracker import LINE_HISTORY_DIR
-
-        line_history_dir = LINE_HISTORY_DIR
-
-    global _LINE_HISTORY_CACHE
-
-    paths = sorted(Path(line_history_dir).glob("odds_*.csv"))
-    signature = (str(Path(line_history_dir).resolve(strict=False)), _path_set_signature(paths))
-    if _LINE_HISTORY_CACHE is not None and _LINE_HISTORY_CACHE[0] == signature:
-        return _LINE_HISTORY_CACHE[1].copy()
-
-    parts: list[pd.DataFrame] = []
-    for path in paths:
-        try:
-            raw = pd.read_csv(path)
-        except (OSError, pd.errors.ParserError) as exc:
-            logger.warning("Failed to load line-history snapshot %s: %s", path.name, exc)
-            continue
-        required = {"fighter_a", "fighter_b", "commence_time", "snapshot_time"}
-        if raw.empty or not required.issubset(raw.columns):
-            continue
-        raw = raw.copy()
-        if "a_decimal_odds" not in raw.columns and "a_odds" in raw.columns:
-            raw["a_decimal_odds"] = raw["a_odds"]
-        if "b_decimal_odds" not in raw.columns and "b_odds" in raw.columns:
-            raw["b_decimal_odds"] = raw["b_odds"]
-        for side in ("a", "b"):
-            fair_col = f"{side}_fair_prob"
-            implied_col = f"{side}_implied_prob"
-            decimal_col = f"{side}_decimal_odds"
-            if fair_col not in raw.columns:
-                if implied_col in raw.columns:
-                    raw[fair_col] = pd.to_numeric(raw[implied_col], errors="coerce")
-                elif decimal_col in raw.columns:
-                    raw[fair_col] = 1.0 / pd.to_numeric(raw[decimal_col], errors="coerce")
-
-        a_prob = pd.to_numeric(raw.get("a_fair_prob"), errors="coerce")
-        b_prob = pd.to_numeric(raw.get("b_fair_prob"), errors="coerce")
-        total = a_prob + b_prob
-        valid_total = total.notna() & (total > 0.0)
-        raw.loc[valid_total, "a_fair_prob"] = a_prob[valid_total] / total[valid_total]
-        raw.loc[valid_total, "b_fair_prob"] = b_prob[valid_total] / total[valid_total]
-        raw["source_file"] = path.name
-        parts.append(raw)
-
-    if not parts:
-        empty = pd.DataFrame(columns=_CANONICAL_ODDS_COLS)
-        empty.attrs["odds_snapshot_key"] = signature
-        _LINE_HISTORY_CACHE = (signature, empty)
-        return empty.copy()
-
-    combined = pd.concat(parts, ignore_index=True)
-    combined = _drop_invalid_moneyline_rows(combined)
-    combined = _stamp_odds_provenance(
-        combined,
-        source_kind="line_history",
-        source_file="",
-    )
-    combined = combined[combined["verified_prefight"]].copy()
-    # UFC historical tables use the North-American broadcast/card date. Late
-    # Saturday fights often commence after midnight UTC, so a raw UTC date
-    # would miss the same fight by one day.
-    combined["event_date"] = pd.to_datetime(
-        combined["commence_time"], errors="coerce", utc=True
-    ).dt.tz_convert("America/New_York").dt.strftime("%Y-%m-%d")
-    combined["query_date"] = pd.to_datetime(
-        combined["snapshot_time"], errors="coerce", utc=True
-    ).dt.strftime("%Y-%m-%d")
-    combined["offset_days"] = combined["hours_to_start"] / 24.0
-
-    group_cols = [
-        "event_date", "fighter_a", "fighter_b", "snapshot_time",
-        "commence_time", "query_date", "offset_days", "source_kind",
-        "source_file", "observed_at", "hours_to_start", "verified_prefight",
-    ]
-    aggregate = {
-        "a_fair_prob": "mean",
-        "b_fair_prob": "mean",
-        "a_decimal_odds": "mean",
-        "b_decimal_odds": "mean",
-    }
-    result = combined.groupby(group_cols, dropna=False, as_index=False).agg(aggregate)
-    result["num_bookmakers"] = combined.groupby(group_cols, dropna=False).size().values
-    result.attrs["odds_snapshot_key"] = signature
-    _LINE_HISTORY_CACHE = (signature, result)
-    return result.copy()
 
 
 def _drop_invalid_moneyline_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -584,82 +411,55 @@ def load_all_historical_odds() -> pd.DataFrame:
       2. historical_odds_bfo.csv                   (BFO scrapes)
       3. historical_odds_bfo_recovered_*.csv        (BFO recovery batches)
       4. historical_odds.csv                        (The Odds API backfill)
-      5. line_history/odds_*.csv                    (timestamped live snapshots)
 
-    Rows carry source and observation-time evidence. Exact duplicate
-    observations are resolved in the order above; role selection later uses
-    only verified Odds API/line-history rows for model inputs and fills.
+    Higher-numbered sources overwrite lower when the same
+    (event_date, fighter_a_norm, fighter_b_norm, offset_days) key appears
+    in multiple files.  This means the primary Odds API file wins over BFO,
+    and BFO wins over legacy — matching data quality expectations.
 
     Returns a DataFrame with at least the canonical columns:
         event_date, fighter_a, fighter_b, query_date, offset_days,
         a_fair_prob, b_fair_prob, a_decimal_odds, b_decimal_odds,
         num_bookmakers
     """
-    global _ALL_ODDS_CACHE
-
-    pre2022_path = BACKFILL_DIR / "historical_odds_pre2022_from_cleaned.csv"
-    bfo_path = BACKFILL_DIR / "historical_odds_bfo.csv"
-    recovery_paths = sorted(BACKFILL_DIR.glob("historical_odds_bfo_recovered_*.csv"))
-    primary_path = BACKFILL_DIR / "historical_odds.csv"
-    source_paths = [pre2022_path, bfo_path, *recovery_paths, primary_path]
-    # Keep the companion archive scoped to the same raw-data root. Tests and
-    # offline rebuilds monkeypatch BACKFILL_DIR to an isolated snapshot; using
-    # the module-global line tracker path here would leak unrelated live rows.
-    line_history = load_line_history_odds(BACKFILL_DIR.parent / "line_history")
-    cache_key = (
-        str(BACKFILL_DIR.resolve(strict=False)),
-        _path_set_signature(source_paths),
-        line_history.attrs.get("odds_snapshot_key"),
-    )
-    if _ALL_ODDS_CACHE is not None and _ALL_ODDS_CACHE[0] == cache_key:
-        return _ALL_ODDS_CACHE[1].copy()
-
     parts: list[pd.DataFrame] = []
 
-    def append_source(path: Path, source_kind: str) -> None:
-        try:
-            loaded = pd.read_csv(path)
-        except Exception as exc:
-            logger.warning("Failed to load %s odds %s: %s", source_kind, path.name, exc)
-            return
-        parts.append(
-            _stamp_odds_provenance(
-                loaded,
-                source_kind=source_kind,
-                source_file=path.name,
-            )
-        )
-
     # 1. Pre-2022 legacy
+    pre2022_path = BACKFILL_DIR / "historical_odds_pre2022_from_cleaned.csv"
     if pre2022_path.exists():
-        append_source(pre2022_path, "legacy_pre2022")
+        try:
+            parts.append(pd.read_csv(pre2022_path))
+        except Exception as exc:
+            logger.warning("Failed to load pre-2022 odds: %s", exc)
 
     # 2. BFO scrapes (named exactly historical_odds_bfo.csv)
+    bfo_path = BACKFILL_DIR / "historical_odds_bfo.csv"
     if bfo_path.exists():
-        append_source(bfo_path, "bfo")
+        try:
+            parts.append(pd.read_csv(bfo_path))
+        except Exception as exc:
+            logger.warning("Failed to load BFO odds: %s", exc)
 
     # 3. BFO recovery batches (any file matching historical_odds_bfo_recovered_*.csv)
-    for recovery_path in recovery_paths:
-        append_source(recovery_path, "bfo")
+    for recovery_path in sorted(BACKFILL_DIR.glob("historical_odds_bfo_recovered_*.csv")):
+        try:
+            parts.append(pd.read_csv(recovery_path))
+        except Exception as exc:
+            logger.warning("Failed to load BFO recovery %s: %s", recovery_path.name, exc)
 
     # 4. Primary Odds API backfill (highest priority)
+    primary_path = BACKFILL_DIR / "historical_odds.csv"
     if primary_path.exists():
-        append_source(primary_path, "odds_api")
-
-    # Runtime line history is the most precise source because it records both
-    # observation and scheduled start timestamps. Its absence is normal in
-    # development/CI and does not make the historical loader unusable.
-    if not line_history.empty:
-        parts.append(line_history)
+        try:
+            parts.append(pd.read_csv(primary_path))
+        except Exception as exc:
+            logger.warning("Failed to load primary historical odds: %s", exc)
 
     if not parts:
         logger.warning(
             "No historical odds files found in %s. Run backfill first.", BACKFILL_DIR
         )
-        empty = pd.DataFrame(columns=_CANONICAL_ODDS_COLS)
-        empty.attrs["odds_snapshot_key"] = cache_key
-        _ALL_ODDS_CACHE = (cache_key, empty)
-        return empty.copy()
+        return pd.DataFrame(columns=_CANONICAL_ODDS_COLS)
 
     combined = pd.concat(parts, ignore_index=True)
 
@@ -673,13 +473,11 @@ def load_all_historical_odds() -> pd.DataFrame:
     combined["_key_date"] = combined["event_date"].apply(_normalize_backfill_event_date)
     combined["_key_a"] = combined["fighter_a"].apply(_normalize_backfill_name)
     combined["_key_b"] = combined["fighter_b"].apply(_normalize_backfill_name)
-    combined["_key_observed"] = pd.to_datetime(
-        combined["observed_at"], errors="coerce", utc=True
-    ).astype(str)
+    combined["_key_offset"] = pd.to_numeric(combined["offset_days"], errors="coerce").fillna(0).astype(int)
     combined = combined.drop_duplicates(
-        subset=["_key_date", "_key_a", "_key_b", "_key_observed"], keep="last"
+        subset=["_key_date", "_key_a", "_key_b", "_key_offset"], keep="last"
     )
-    combined = combined.drop(columns=["_key_date", "_key_a", "_key_b", "_key_observed"])
+    combined = combined.drop(columns=["_key_date", "_key_a", "_key_b", "_key_offset"])
 
     n_fights = combined.groupby(
         [combined["event_date"].astype(str).str[:10], "fighter_a", "fighter_b"]
@@ -689,230 +487,7 @@ def load_all_historical_odds() -> pd.DataFrame:
         len(combined), n_fights, len(parts),
     )
 
-    combined.attrs["odds_snapshot_key"] = cache_key
-    _ALL_ODDS_CACHE = (cache_key, combined)
-    return combined.copy()
-
-
-def build_historical_odds_roles(
-    historical_df: pd.DataFrame,
-    *,
-    entry_offset_days: float | None = 1.0,
-) -> pd.DataFrame:
-    """Select honest opening/entry/closing rows for each fight.
-
-    Opening and entry are restricted to verified pre-fight observations;
-    offset-zero/reference rows can only supply closing/CLV metadata. Entry is
-    the closest observation at least ``entry_offset_days`` before start.
-    """
-    if historical_df is None or historical_df.empty:
-        return pd.DataFrame()
-
-    snapshot_key = historical_df.attrs.get("odds_snapshot_key")
-    role_cache_key = (
-        snapshot_key,
-        None if entry_offset_days is None else float(entry_offset_days),
-    )
-    if snapshot_key is not None and role_cache_key in _ROLE_CACHE:
-        return _ROLE_CACHE[role_cache_key].copy()
-
-    working = historical_df.copy()
-    if "source_kind" not in working.columns:
-        working["source_kind"] = "odds_api"
-    if "source_file" not in working.columns:
-        working["source_file"] = "unknown"
-    offsets = pd.to_numeric(working.get("offset_days"), errors="coerce")
-    if "hours_to_start" not in working.columns:
-        working["hours_to_start"] = offsets * 24.0
-    else:
-        working["hours_to_start"] = pd.to_numeric(
-            working["hours_to_start"], errors="coerce"
-        )
-    if "observed_at" not in working.columns:
-        working["observed_at"] = pd.to_datetime(
-            working.get("query_date"), errors="coerce", utc=True
-        )
-    working["observed_at"] = pd.to_datetime(
-        working["observed_at"], errors="coerce", utc=True
-    )
-    working["commence_time"] = pd.to_datetime(
-        working.get(
-            "commence_time",
-            pd.Series(pd.NaT, index=working.index),
-        ),
-        errors="coerce",
-        utc=True,
-    )
-    if "verified_prefight" not in working.columns:
-        working["verified_prefight"] = (
-            working["source_kind"].isin(VERIFIED_PREFIGHT_SOURCE_KINDS)
-            & working["hours_to_start"].notna()
-            & (working["hours_to_start"] > 0.0)
-        )
-    else:
-        working["verified_prefight"] = working["verified_prefight"].fillna(False).astype(bool)
-
-    for column in ("a_fair_prob", "b_fair_prob", "a_decimal_odds", "b_decimal_odds"):
-        working[column] = pd.to_numeric(working.get(column), errors="coerce")
-    working = working[
-        working["a_fair_prob"].between(0.0, 1.0, inclusive="both")
-        & working["b_fair_prob"].between(0.0, 1.0, inclusive="both")
-        & working["a_decimal_odds"].gt(1.0)
-        & working["b_decimal_odds"].gt(1.0)
-    ].copy()
-    if working.empty:
-        return pd.DataFrame()
-
-    working["_event_date_key"] = working["event_date"].apply(_normalize_backfill_event_date)
-    working["_pair_key"] = working.apply(
-        lambda row: _backfill_pair_key(row.get("fighter_a", ""), row.get("fighter_b", "")),
-        axis=1,
-    )
-    role_rows: list[dict] = []
-    minimum_entry_hours = (
-        None if entry_offset_days is None else float(entry_offset_days) * 24.0
-    )
-
-    def select_row(group: pd.DataFrame, role: str) -> pd.Series | None:
-        if role == "closing":
-            eligible = group[group["hours_to_start"].notna() & (group["hours_to_start"] >= 0.0)]
-            ascending = True
-        elif role == "opening":
-            eligible = group[group["verified_prefight"] & (group["hours_to_start"] > 0.0)]
-            ascending = False
-        else:
-            if minimum_entry_hours is None:
-                return None
-            eligible = group[
-                group["verified_prefight"]
-                & (group["hours_to_start"] >= minimum_entry_hours)
-            ]
-            ascending = True
-        if eligible.empty:
-            return None
-        return eligible.sort_values(
-            ["hours_to_start", "observed_at", "source_file"],
-            ascending=[ascending, not ascending, True],
-            kind="stable",
-        ).iloc[0]
-
-    for (event_key, pair_key), raw_group in working.groupby(
-        ["_event_date_key", "_pair_key"], dropna=False
-    ):
-        display = raw_group.iloc[0]
-        group = _reorient_backfill_group(
-            raw_group,
-            str(display["fighter_a"]),
-            str(display["fighter_b"]),
-        )
-        output = {
-            "event_date": event_key,
-            "fighter_a": str(display["fighter_a"]),
-            "fighter_b": str(display["fighter_b"]),
-            "_pair_key": pair_key,
-        }
-        for role in ("opening", "entry", "closing"):
-            output.update(
-                {
-                    f"{role}_prob_a": np.nan,
-                    f"{role}_prob_b": np.nan,
-                    f"{role}_odds_a": np.nan,
-                    f"{role}_odds_b": np.nan,
-                    f"{role}_source_kind": "",
-                    f"{role}_source_file": "",
-                    f"{role}_observed_at": pd.NaT,
-                    f"{role}_commence_time": pd.NaT,
-                    f"{role}_hours_to_start": np.nan,
-                    f"{role}_verified_prefight": False,
-                }
-            )
-        output["entry_offset_actual"] = np.nan
-        for role in ("opening", "entry", "closing"):
-            selected = select_row(group, role)
-            if selected is None:
-                continue
-            output.update(
-                {
-                    f"{role}_prob_a": selected["a_fair_prob"],
-                    f"{role}_prob_b": selected["b_fair_prob"],
-                    f"{role}_odds_a": selected["a_decimal_odds"],
-                    f"{role}_odds_b": selected["b_decimal_odds"],
-                    f"{role}_source_kind": selected["source_kind"],
-                    f"{role}_source_file": selected["source_file"],
-                    f"{role}_observed_at": selected["observed_at"],
-                    f"{role}_commence_time": selected["commence_time"],
-                    f"{role}_hours_to_start": selected["hours_to_start"],
-                    f"{role}_verified_prefight": bool(selected["verified_prefight"]),
-                }
-            )
-            if role == "entry":
-                output["entry_offset_actual"] = float(selected["hours_to_start"]) / 24.0
-        role_rows.append(output)
-    result = pd.DataFrame(role_rows)
-    if snapshot_key is not None:
-        if len(_ROLE_CACHE) >= 4:
-            _ROLE_CACHE.clear()
-        _ROLE_CACHE[role_cache_key] = result
-    return result.copy()
-
-
-def merge_historical_odds_roles(
-    fights: pd.DataFrame,
-    historical_df: Optional[pd.DataFrame] = None,
-    *,
-    entry_offset_days: float | None = 1.0,
-) -> pd.DataFrame:
-    """Merge selected roles onto fights and orient prices to each fight row."""
-    result = fights.copy()
-    if historical_df is None:
-        historical_df = load_all_historical_odds()
-    roles = build_historical_odds_roles(
-        historical_df,
-        entry_offset_days=entry_offset_days,
-    )
-    if roles.empty or not {"event_date", "fighter_a", "fighter_b"}.issubset(result.columns):
-        return result
-
-    result["_odds_event_date"] = result["event_date"].apply(_normalize_backfill_event_date)
-    result["_odds_pair_key"] = result.apply(
-        lambda row: _backfill_pair_key(row.get("fighter_a", ""), row.get("fighter_b", "")),
-        axis=1,
-    )
-    roles = roles.rename(
-        columns={
-            "event_date": "_odds_event_date",
-            "fighter_a": "_odds_source_fighter_a",
-            "fighter_b": "_odds_source_fighter_b",
-            "_pair_key": "_odds_pair_key",
-        }
-    )
-    merged = result.merge(
-        roles,
-        on=["_odds_event_date", "_odds_pair_key"],
-        how="left",
-        validate="many_to_one",
-    )
-    reverse = (
-        merged["_odds_source_fighter_a"].notna()
-        & (merged["fighter_a"].apply(_normalize_backfill_name)
-           == merged["_odds_source_fighter_b"].apply(_normalize_backfill_name))
-    )
-    for role in ("opening", "entry", "closing"):
-        for value in ("prob", "odds"):
-            left = f"{role}_{value}_a"
-            right = f"{role}_{value}_b"
-            if left not in merged.columns or right not in merged.columns:
-                continue
-            left_values = merged.loc[reverse, left].copy()
-            merged.loc[reverse, left] = merged.loc[reverse, right].values
-            merged.loc[reverse, right] = left_values.values
-    return merged.drop(
-        columns=[
-            "_odds_event_date", "_odds_pair_key",
-            "_odds_source_fighter_a", "_odds_source_fighter_b",
-        ],
-        errors="ignore",
-    )
+    return combined
 
 
 def get_fight_odds_timeline(
@@ -962,10 +537,6 @@ def compute_line_movement_from_backfill(historical_df: pd.DataFrame) -> pd.DataF
         return pd.DataFrame()
 
     working = historical_df.copy()
-    if "verified_prefight" in working.columns:
-        working = working[working["verified_prefight"].fillna(False).astype(bool)]
-    if working.empty:
-        return pd.DataFrame()
     working["_event_date_key"] = working["event_date"].apply(_normalize_backfill_event_date)
     working["_pair_key"] = working.apply(
         lambda row: _backfill_pair_key(row.get("fighter_a", ""), row.get("fighter_b", "")),

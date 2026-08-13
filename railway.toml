@@ -8,4 +8,4 @@ restartPolicyMaxRetries = 5
 # Railway sets $PORT automatically. Gate activation on full runtime readiness,
 # including model artifacts and the hosted background loops.
 healthcheckPath = "/readyz"
-healthcheckTimeout = 600
+healthcheckTimeout = 300

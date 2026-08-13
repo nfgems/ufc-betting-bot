@@ -38,13 +38,9 @@ from src.config import (
 from src.strategy.duo_trader_sweep import (
     _evaluate_config,
     _generate_walk_forward_predictions,
-    _preflight_cached_selection_predictions,
-    _selection_prediction_cache_payload,
-    _selection_predictions_from_cache_payload,
     _summary_row_from_result,
     build_sweep_configs,
 )
-from src.strategy.model_lab import DEFAULT_CONFIRMATION_FOLD_COUNT
 
 logger = logging.getLogger("e5_conviction_sweep")
 
@@ -53,7 +49,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="logs/e5_conviction_sweep.csv")
     parser.add_argument("--variant", default="baseline")
-    parser.add_argument("--preds-cache", default="logs/fold_predictions_selection_v1.pkl",
+    parser.add_argument("--preds-cache", default="logs/fold_predictions_baseline.pkl",
                         help="Pickle path for fold predictions (reused by other sweep diagnostics)")
     parser.add_argument("--execution-mode", choices=["legacy", "realistic"], default="legacy")
     args = parser.parse_args()
@@ -68,27 +64,14 @@ def main() -> int:
     if cache_path.exists():
         logger.info("Loading cached fold predictions from %s", cache_path)
         with cache_path.open("rb") as fh:
-            fold_predictions = _selection_predictions_from_cache_payload(
-                pickle.load(fh)
-            )
+            fold_predictions = pickle.load(fh)
     else:
         logger.info("Generating shared walk-forward fold predictions (variant=%s)...", args.variant)
-        fold_predictions, fold_manifest = _generate_walk_forward_predictions(
-            variant_name=args.variant,
-            evaluation_partition="selection",
-            confirmation_fold_count=DEFAULT_CONFIRMATION_FOLD_COUNT,
-            return_fold_manifest=True,
-            allow_all_folds=False,
-        )
-        cache_payload = _selection_prediction_cache_payload(
-            fold_predictions,
-            fold_manifest,
-        )
+        fold_predictions = _generate_walk_forward_predictions(variant_name=args.variant)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with cache_path.open("wb") as fh:
-            pickle.dump(cache_payload, fh)
+            pickle.dump(fold_predictions, fh)
         logger.info("Cached fold predictions to %s", cache_path)
-    _preflight_cached_selection_predictions(fold_predictions)
     n_rows = sum(len(p) for _, p in fold_predictions)
     logger.info("Fold predictions ready: %d folds, %d fight rows", len(fold_predictions), n_rows)
 

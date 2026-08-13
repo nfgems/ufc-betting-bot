@@ -77,7 +77,6 @@ _UPSTREAM_CACHE_LOCK = threading.RLock()
 _UPSTREAM_FETCH_LOCK = threading.Lock()
 _UFCSTATS_SESSION: requests.Session | None = None
 _UFCSTATS_FETCH_LOCK = threading.Lock()
-_ACTIVE_ROSTER_ID_CACHE: tuple[int, dict[str, str]] | None = None
 UPCOMING_EVENT_CARD_REQUEST_DELAY_SECONDS = 1.5
 _UPCOMING_EVENT_CARDS_LOCK = threading.Lock()
 _UPCOMING_EVENT_CARDS_CACHE: tuple[
@@ -731,49 +730,6 @@ def _extract_ufc_com_corner_name(fight, selector: str) -> str:
     return re.sub(r"\s+", " ", name_el.get_text(" ", strip=True)).strip()
 
 
-def _extract_ufc_com_corner_athlete_url(fight, selector: str) -> str | None:
-    name_el = fight.select_one(f".c-listing-fight__names-row {selector}") or fight.select_one(selector)
-    if name_el is None:
-        return None
-    link = name_el if name_el.name == "a" and name_el.get("href") else name_el.select_one("a[href]")
-    href = str(link.get("href") or "").strip() if link is not None else ""
-    return urljoin(UFC_COM_BASE_URL, href) if href else None
-
-
-def _active_roster_ids_by_athlete_url() -> dict[str, str]:
-    """Resolve UFC.com athlete URLs through the existing reviewed roster CSV."""
-    global _ACTIVE_ROSTER_ID_CACHE
-    from src.data.name_utils import CURRENT_UFCSTATS_ID_OVERRIDES, normalize_person_name
-    from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH
-
-    try:
-        mtime_ns = OFFICIAL_ACTIVE_ROSTER_PATH.stat().st_mtime_ns
-    except OSError:
-        return {}
-    if _ACTIVE_ROSTER_ID_CACHE is not None and _ACTIVE_ROSTER_ID_CACHE[0] == mtime_ns:
-        return _ACTIVE_ROSTER_ID_CACHE[1]
-    try:
-        roster = pd.read_csv(
-            OFFICIAL_ACTIVE_ROSTER_PATH,
-            usecols=["official_name", "official_athlete_url", "ufcstats_url"],
-        )
-    except (OSError, ValueError):
-        return {}
-    resolved: dict[str, str] = {}
-    for row in roster.to_dict("records"):
-        athlete_path = urlparse(str(row.get("official_athlete_url") or "")).path.rstrip("/").casefold()
-        if not athlete_path:
-            continue
-        reviewed_id = CURRENT_UFCSTATS_ID_OVERRIDES.get(
-            normalize_person_name(row.get("official_name"))
-        )
-        fighter_id = reviewed_id or _ufcstats_fighter_id(row.get("ufcstats_url"))
-        if fighter_id:
-            resolved[athlete_path] = fighter_id
-    _ACTIVE_ROSTER_ID_CACHE = (mtime_ns, resolved)
-    return resolved
-
-
 def _extract_ufc_com_weight_class(fight) -> str:
     class_el = (
         fight.select_one(".c-listing-fight__class--desktop .c-listing-fight__class-text")
@@ -782,19 +738,6 @@ def _extract_ufc_com_weight_class(fight) -> str:
     if class_el is None:
         return ""
     return re.sub(r"\s+", " ", class_el.get_text(" ", strip=True)).strip()
-
-
-def _observed_num_rounds(value: object) -> int | None:
-    """Return a round count only when the source states one explicitly."""
-    match = re.search(r"\b([1-9])\s*(?:rounds?|rds?)\b", str(value or ""), re.I)
-    return int(match.group(1)) if match else None
-
-
-def _ufcstats_fighter_id(value: object) -> str | None:
-    """Extract the stable UFCStats slug without resolving a fighter by name."""
-    path = urlparse(str(value or "")).path.rstrip("/")
-    match = re.search(r"/fighter-details/([0-9a-f]+)$", path, re.I)
-    return match.group(1).casefold() if match else None
 
 
 def _normalized_web_resource_identity(url: object) -> tuple[str, str]:
@@ -913,7 +856,6 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
     event_location = _extract_ufc_com_event_location(soup)
     fights = []
     fight_blocks = soup.select(".c-listing-fight")
-    roster_ids = _active_roster_ids_by_athlete_url()
 
     for fight in fight_blocks:
         fighter_a = _extract_ufc_com_corner_name(fight, ".c-listing-fight__corner-name--red")
@@ -924,19 +866,10 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
         weight_class = _extract_ufc_com_weight_class(fight)
         row_text = fight.get_text(" ", strip=True).lower()
         is_main_event = len(fights) == 0
-        has_title_marker = (
+        is_title_bout = (
             "title bout" in row_text
             or "championship" in row_text
             or "interim" in row_text
-        )
-        # UFC.com does not expose an affirmative "non-title" field. Absence of
-        # title copy is therefore unknown, not an observed false value.
-        is_title_bout = True if has_title_marker else None
-        fighter_a_url = _extract_ufc_com_corner_athlete_url(
-            fight, ".c-listing-fight__corner-name--red"
-        )
-        fighter_b_url = _extract_ufc_com_corner_athlete_url(
-            fight, ".c-listing-fight__corner-name--blue"
         )
         fights.append(
             {
@@ -945,15 +878,7 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
                 "weight_class": weight_class,
                 "is_main_event": is_main_event,
                 "is_title_bout": is_title_bout,
-                "num_rounds": _observed_num_rounds(row_text),
-                "fighter_a_id": roster_ids.get(
-                    urlparse(fighter_a_url).path.rstrip("/").casefold()
-                ) if fighter_a_url else None,
-                "fighter_b_id": roster_ids.get(
-                    urlparse(fighter_b_url).path.rstrip("/").casefold()
-                ) if fighter_b_url else None,
-                "fighter_a_athlete_url": fighter_a_url,
-                "fighter_b_athlete_url": fighter_b_url,
+                "num_rounds": 5 if (is_main_event or is_title_bout) else 3,
                 "location": event_location,
             }
         )
@@ -1026,7 +951,7 @@ def scrape_event_card(event_url: str) -> list[dict]:
         row_text = row.get_text(" ", strip=True).lower()
         row_html = str(row).lower()
         is_main_event = len(fights) == 0  # First fight listed is usually main
-        has_title_marker = bool(
+        is_title_bout = bool(
             row.select_one("img[src*='belt']")
             or "title bout" in row_text
             or "title bout" in row_html
@@ -1035,8 +960,7 @@ def scrape_event_card(event_url: str) -> list[dict]:
             or "interim" in row_text
             or "interim" in row_html
         )
-        is_title_bout = True if has_title_marker else None
-        num_rounds = _observed_num_rounds(row_text)
+        num_rounds = 5 if (is_main_event or is_title_bout) else 3
 
         fights.append({
             "fighter_a": fighter_a,
@@ -1045,8 +969,6 @@ def scrape_event_card(event_url: str) -> list[dict]:
             "is_main_event": is_main_event,
             "is_title_bout": is_title_bout,
             "num_rounds": num_rounds,
-            "fighter_a_id": _ufcstats_fighter_id(fighters[0].get("href")),
-            "fighter_b_id": _ufcstats_fighter_id(fighters[1].get("href")),
             "location": event_location,
         })
 
@@ -1099,14 +1021,17 @@ def _event_fight_contexts(event: dict, card: list[dict]) -> list[dict]:
                 "fighter_b": fight.get("fighter_b", ""),
                 "weight_class": fight.get("weight_class", ""),
                 "is_main_event": bool(fight.get("is_main_event", False)),
-                "is_title_bout": fight.get("is_title_bout"),
+                "is_title_bout": bool(fight.get("is_title_bout", False)),
                 "is_empty_arena": infer_empty_arena(
                     event_title=event.get("title", ""),
                     location=fight.get("location", ""),
                 ),
-                "num_rounds": fight.get("num_rounds"),
-                "fighter_a_id": fight.get("fighter_a_id"),
-                "fighter_b_id": fight.get("fighter_b_id"),
+                "num_rounds": int(
+                    fight.get(
+                        "num_rounds",
+                        5 if (fight.get("is_main_event") or fight.get("is_title_bout")) else 3,
+                    )
+                ),
             }
         )
     return contexts

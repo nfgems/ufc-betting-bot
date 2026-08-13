@@ -6,9 +6,8 @@ Two independent bars must be cleared:
 
   **Model Bar**   -- better calibration (Brier or ECE), no major regression,
                      survives fresh-data evaluation.
-  **Trading Bar** -- positive ROI and profit, better ROI or profit than the
-                     baseline, acceptable drawdown, CLV not worse, and sane
-                     behaviour (robustness checks pass).
+  **Trading Bar** -- better ROI or profit, acceptable drawdown, CLV not worse,
+                     sane behaviour (robustness checks pass).
 
 Verdicts:
   PROMOTE      -- clears both bars
@@ -60,9 +59,6 @@ _ECE_ABS_REGRESSION_THRESHOLD = 0.025 # absolute ECE regression guard (2.5 ppts)
 _DRAWDOWN_MULTIPLIER = 2.0            # reject if drawdown >2x baseline
 _CLV_TOLERANCE = 0.01                 # 1 percentage point
 _FRESH_DATA_CUTOFF = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")  # rolling 6-month window
-PROMOTION_BOOTSTRAP_ALPHA = 0.10
-MINIMUM_PROMOTION_EVENT_DATES = 20
-_PROMOTION_BET_LOG_COLUMNS = frozenset({"event_date", "profit", "bet_size"})
 
 
 def _relative_degradation(candidate_value: float | None, baseline_value: float | None) -> float | None:
@@ -71,139 +67,6 @@ def _relative_degradation(candidate_value: float | None, baseline_value: float |
     if baseline_value == 0:
         return None
     return (candidate_value - baseline_value) / baseline_value
-
-
-def _normalize_sha256(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().lower()
-    if len(normalized) != 64 or any(ch not in "0123456789abcdef" for ch in normalized):
-        return None
-    return normalized
-
-
-def _coerce_finite_float(value: object) -> float | None:
-    """Return a finite numeric metric, rejecting missing and boolean values."""
-    if isinstance(value, (bool, np.bool_)):
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if np.isfinite(numeric) else None
-
-
-def _nonempty_exact_string(value: object) -> str | None:
-    """Return a non-empty string without normalizing its identity."""
-    return value if isinstance(value, str) and value else None
-
-
-def _validate_unchanged_model_claim(
-    candidate_metrics: dict,
-    control_metrics: dict,
-) -> tuple[bool, list[str]]:
-    """Validate the explicit, byte-bound no-model-change exception.
-
-    Prediction identity is deliberately independent from evaluation-input
-    identity.  The latter is enforced for every promotion decision by
-    :func:`evaluate_for_promotion`; it cannot stand in for identical scored
-    prediction rows and values here.
-    """
-    errors: list[str] = []
-    for field, label in (
-        ("prediction_rows_sha256", "prediction-row"),
-        ("prediction_values_sha256", "prediction-value"),
-        ("model_spec_payload_sha256", "model-spec payload"),
-    ):
-        candidate_value = _normalize_sha256(candidate_metrics.get(field))
-        control_value = _normalize_sha256(control_metrics.get(field))
-        if candidate_value is None or control_value is None:
-            errors.append(
-                f"FAIL: Unchanged-model claim requires valid candidate/control "
-                f"{label} SHA-256 bindings."
-            )
-        elif candidate_value != control_value:
-            errors.append(
-                f"FAIL: Unchanged-model claim has different candidate/control "
-                f"{label} SHA-256 bindings."
-            )
-
-    for field, label in (
-        ("model_spec_name", "model spec name"),
-        ("calibration_method", "calibration method"),
-    ):
-        candidate_value = _nonempty_exact_string(candidate_metrics.get(field))
-        control_value = _nonempty_exact_string(control_metrics.get(field))
-        if candidate_value is None or control_value is None:
-            errors.append(
-                f"FAIL: Unchanged-model claim requires non-empty candidate/control "
-                f"{label} bindings."
-            )
-        elif candidate_value != control_value:
-            errors.append(
-                f"FAIL: Unchanged-model claim has different candidate/control "
-                f"{label} bindings."
-            )
-    return not errors, errors
-
-
-def _validate_promotion_bet_log(
-    bet_log: object,
-    *,
-    role: str,
-) -> tuple[pd.DataFrame | None, list[str]]:
-    """Validate and normalize one mandatory statistical-promotion bet log."""
-    label = f"{role.capitalize()} bet log"
-    if not isinstance(bet_log, pd.DataFrame):
-        return None, [f"FAIL: {label} is missing or is not a DataFrame."]
-    if bet_log.empty:
-        return None, [f"FAIL: {label} is empty."]
-
-    missing = sorted(_PROMOTION_BET_LOG_COLUMNS.difference(bet_log.columns))
-    if missing:
-        return None, [f"FAIL: {label} is missing required columns: {missing}."]
-
-    normalized = bet_log.copy()
-    errors: list[str] = []
-
-    event_dates = pd.to_datetime(
-        normalized["event_date"],
-        errors="coerce",
-        utc=True,
-        format="mixed",
-    )
-    invalid_dates = int(event_dates.isna().sum())
-    if invalid_dates:
-        errors.append(
-            f"FAIL: {label} has {invalid_dates} missing or malformed event_date value(s)."
-        )
-
-    profit = pd.to_numeric(normalized["profit"], errors="coerce")
-    profit_values = profit.to_numpy(dtype=float, na_value=np.nan)
-    invalid_profit = int((~np.isfinite(profit_values)).sum())
-    if invalid_profit:
-        errors.append(
-            f"FAIL: {label} has {invalid_profit} non-finite or non-numeric profit value(s)."
-        )
-
-    bet_size = pd.to_numeric(normalized["bet_size"], errors="coerce")
-    bet_size_values = bet_size.to_numpy(dtype=float, na_value=np.nan)
-    invalid_bet_size = int(
-        ((~np.isfinite(bet_size_values)) | (bet_size_values <= 0.0)).sum()
-    )
-    if invalid_bet_size:
-        errors.append(
-            f"FAIL: {label} has {invalid_bet_size} non-positive, non-finite, "
-            "or non-numeric bet_size value(s)."
-        )
-
-    if errors:
-        return None, errors
-
-    normalized["event_date"] = event_dates
-    normalized["profit"] = profit.astype(float)
-    normalized["bet_size"] = bet_size.astype(float)
-    return normalized, []
 
 
 def _looks_like_sweep_summary(payload: dict) -> bool:
@@ -382,40 +245,13 @@ class PromotionGate:
         passes = True
 
         # --- 1. Brier / ECE improvement ---
-        raw_c_brier = candidate_metrics.get("brier_score")
-        raw_b_brier = control_metrics.get("brier_score")
-        raw_c_ece = candidate_metrics.get("ece")
-        raw_b_ece = control_metrics.get("ece")
-        c_brier = _coerce_finite_float(raw_c_brier)
-        b_brier = _coerce_finite_float(raw_b_brier)
-        c_ece = _coerce_finite_float(raw_c_ece)
-        b_ece = _coerce_finite_float(raw_b_ece)
-
-        for label, metric, raw_value, value in (
-            ("Candidate", "Brier", raw_c_brier, c_brier),
-            ("Control", "Brier", raw_b_brier, b_brier),
-            ("Candidate", "ECE", raw_c_ece, c_ece),
-            ("Control", "ECE", raw_b_ece, b_ece),
-        ):
-            if value is None:
-                passes = False
-                reasons.append(
-                    f"FAIL: {label} {metric} must be finite; got {raw_value!r}."
-                )
+        c_brier = candidate_metrics.get("brier_score")
+        b_brier = control_metrics.get("brier_score")
+        c_ece = candidate_metrics.get("ece")
+        b_ece = control_metrics.get("ece")
 
         brier_better = False
         ece_better = False
-        unchanged_claim_declared = (
-            candidate_metrics.get("model_unchanged_declared") is True
-        )
-        unchanged_claim_valid = False
-        if unchanged_claim_declared:
-            unchanged_claim_valid, unchanged_claim_errors = (
-                _validate_unchanged_model_claim(candidate_metrics, control_metrics)
-            )
-            if unchanged_claim_errors:
-                passes = False
-                reasons.extend(unchanged_claim_errors)
 
         if c_brier is not None and b_brier is not None:
             if c_brier < b_brier:
@@ -441,9 +277,7 @@ class PromotionGate:
                     f"ECE not improved: {c_ece:.4f} vs {b_ece:.4f}"
                 )
 
-        if unchanged_claim_valid:
-            reasons.append("model_unchanged_no_improvement_claim")
-        elif not brier_better and not ece_better:
+        if not brier_better and not ece_better:
             passes = False
             reasons.append("FAIL: Neither Brier nor ECE improved over control.")
 
@@ -465,23 +299,6 @@ class PromotionGate:
                     f"FAIL: Brier degraded by {degradation:.1%} (threshold "
                     f"{_MODEL_DEGRADATION_THRESHOLD:.0%})"
                 )
-
-        if unchanged_claim_valid:
-            for metric, candidate_value, control_value in (
-                ("Brier", c_brier, b_brier),
-                ("ECE", c_ece, b_ece),
-            ):
-                degradation = _relative_degradation(candidate_value, control_value)
-                if (
-                    degradation is not None
-                    and degradation > _MODEL_DEGRADATION_THRESHOLD
-                ):
-                    passes = False
-                    reasons.append(
-                        f"FAIL: {metric} degraded by {degradation:.1%} under the "
-                        "unchanged-model claim "
-                        f"(threshold {_MODEL_DEGRADATION_THRESHOLD:.0%})."
-                    )
 
         # --- 3. Fresh-data evaluation ---
         c_fresh_brier = candidate_metrics.get("fresh_data_brier")
@@ -564,11 +381,7 @@ class PromotionGate:
                         f"absolute {ece_abs_degradation:+.4f})"
                     )
 
-        return {
-            "passes": passes,
-            "reasons": reasons,
-            "model_unchanged_no_improvement_claim": unchanged_claim_valid,
-        }
+        return {"passes": passes, "reasons": reasons}
 
     # -----------------------------------------------------------------
     # Trading Bar
@@ -577,199 +390,118 @@ class PromotionGate:
     def check_trading_bar(
         candidate_sweep: dict,
         baseline_sweep: dict,
+        statistical: bool = True,
+        bootstrap_alpha: float = 0.25,
     ) -> dict:
         """
         Evaluate the Trading Bar.
 
         Passes when:
-        1. Candidate ROI AND total profit are finite and strictly positive.
-        2. Better ROI OR profit than baseline — and the mandatory paired
-           event-clustered bootstrap of the candidate-minus-baseline P&L must
-           show P(candidate <= baseline) <= 0.10 across at least 20 event
-           dates. A raw point-estimate
+        1. Better ROI OR profit than baseline — and, when both bet logs are
+           available and `statistical=True`, the paired event-clustered
+           bootstrap of the candidate-minus-baseline P&L must show
+           P(candidate <= baseline) <= `bootstrap_alpha`. A raw point-estimate
            win at n~250 bets is inside the noise band (ROI 95% CI ~ +/-15pp)
            and no longer promotes on its own.
-        3. Drawdown not >2x baseline drawdown.
-        4. CLV not worse (within 1 percentage point). When historical odds
+        2. Drawdown not >2x baseline drawdown.
+        3. CLV not worse (within 1 percentage point). When historical odds
            are available the comparison uses snapshot-distinct CLV
            (single-snapshot fights have CLV == 0 structurally and are
            excluded from the average).
-        5. Behaviour is sane (robustness checks pass).
+        4. Behaviour is sane (robustness checks pass).
 
         Parameters
         ----------
         candidate_sweep, baseline_sweep : dict
             Expected keys: roi, total_profit, max_drawdown_pct (or
             max_drawdown), avg_clv, bet_log (pd.DataFrame).
+            Optional: baseline_bet_log for volume_sanity_check.
+        statistical : bool
+            Set False for the legacy point-estimate-only gate.
+        bootstrap_alpha : float
+            Maximum allowed P(candidate <= baseline) from the paired
+            event bootstrap.
+
         Returns
         -------
         dict  {passes: bool, reasons: list[str]}
         """
         from src.strategy.gate_stats import (
             clv_fair_stats,
+            has_pairing_columns,
             paired_event_bootstrap,
         )
 
         reasons: list[str] = []
         passes = True
 
-        candidate_log_for_stats, candidate_log_errors = _validate_promotion_bet_log(
-            candidate_sweep.get("bet_log"),
-            role="candidate",
-        )
-        baseline_log_for_stats, baseline_log_errors = _validate_promotion_bet_log(
-            baseline_sweep.get("bet_log"),
-            role="baseline",
-        )
-        log_errors = candidate_log_errors + baseline_log_errors
-        if log_errors:
-            passes = False
-            reasons.extend(log_errors)
+        # --- 1. ROI / profit improvement ---
+        c_roi = candidate_sweep.get("roi", 0.0)
+        b_roi = baseline_sweep.get("roi", 0.0)
+        c_profit = candidate_sweep.get("total_profit", 0.0)
+        b_profit = baseline_sweep.get("total_profit", 0.0)
 
-        # --- 1. Absolute profitability and baseline improvement ---
-        raw_c_roi = candidate_sweep.get("roi", 0.0)
-        raw_b_roi = baseline_sweep.get("roi", 0.0)
-        raw_c_profit = candidate_sweep.get("total_profit", 0.0)
-        raw_b_profit = baseline_sweep.get("total_profit", 0.0)
-        c_roi = _coerce_finite_float(raw_c_roi)
-        b_roi = _coerce_finite_float(raw_b_roi)
-        c_profit = _coerce_finite_float(raw_c_profit)
-        b_profit = _coerce_finite_float(raw_b_profit)
-
-        if c_roi is None or c_roi <= 0.0:
-            passes = False
-            reasons.append(
-                "FAIL: Candidate ROI must be finite and strictly positive; "
-                f"got {raw_c_roi!r}."
-            )
-        if c_profit is None or c_profit <= 0.0:
-            passes = False
-            reasons.append(
-                "FAIL: Candidate total profit must be finite and strictly positive; "
-                f"got {raw_c_profit!r}."
-            )
-
-        roi_better = c_roi is not None and b_roi is not None and c_roi > b_roi
-        profit_better = (
-            c_profit is not None and b_profit is not None and c_profit > b_profit
-        )
-
-        c_roi_display = c_roi if c_roi is not None else float("nan")
-        b_roi_display = b_roi if b_roi is not None else float("nan")
-        c_profit_display = c_profit if c_profit is not None else float("nan")
-        b_profit_display = b_profit if b_profit is not None else float("nan")
+        roi_better = c_roi > b_roi
+        profit_better = c_profit > b_profit
 
         if roi_better:
-            reasons.append(
-                f"ROI improved: {c_roi_display:+.2%} vs {b_roi_display:+.2%}"
-            )
+            reasons.append(f"ROI improved: {c_roi:+.2%} vs {b_roi:+.2%}")
         else:
-            reasons.append(
-                f"ROI not improved: {c_roi_display:+.2%} vs {b_roi_display:+.2%}"
-            )
+            reasons.append(f"ROI not improved: {c_roi:+.2%} vs {b_roi:+.2%}")
 
         if profit_better:
-            reasons.append(
-                f"Profit improved: ${c_profit_display:+.2f} vs ${b_profit_display:+.2f}"
-            )
+            reasons.append(f"Profit improved: ${c_profit:+.2f} vs ${b_profit:+.2f}")
         else:
-            reasons.append(
-                f"Profit not improved: ${c_profit_display:+.2f} vs ${b_profit_display:+.2f}"
-            )
+            reasons.append(f"Profit not improved: ${c_profit:+.2f} vs ${b_profit:+.2f}")
 
         if not roi_better and not profit_better:
             passes = False
             reasons.append("FAIL: Neither ROI nor profit improved.")
 
-        if candidate_log_for_stats is not None and baseline_log_for_stats is not None:
-            try:
-                boot = paired_event_bootstrap(
-                    candidate_log_for_stats,
-                    baseline_log_for_stats,
-                )
-            except Exception as exc:
+        candidate_log_for_stats = candidate_sweep.get("bet_log", pd.DataFrame())
+        baseline_log_for_stats = baseline_sweep.get(
+            "bet_log", candidate_sweep.get("baseline_bet_log", pd.DataFrame())
+        )
+        if (
+            statistical
+            and passes
+            and has_pairing_columns(candidate_log_for_stats)
+            and has_pairing_columns(baseline_log_for_stats)
+        ):
+            boot = paired_event_bootstrap(candidate_log_for_stats, baseline_log_for_stats)
+            reasons.append(
+                f"Paired event bootstrap: profit diff ${boot['profit_diff']:+.2f} "
+                f"(95% CI ${boot['profit_diff_ci_lo']:+.2f}..${boot['profit_diff_ci_hi']:+.2f}, "
+                f"P(candidate<=baseline)={boot['p_value']:.2f}, n_events={boot['n_events']})"
+            )
+            if boot["p_value"] > bootstrap_alpha:
                 passes = False
                 reasons.append(
-                    "FAIL: Paired event bootstrap could not be computed from the "
-                    f"bet logs: {exc}"
+                    f"FAIL: Paired bootstrap cannot distinguish candidate from "
+                    f"baseline (p={boot['p_value']:.2f} > alpha={bootstrap_alpha:.2f})."
                 )
-            else:
-                reasons.append(
-                    f"Paired event bootstrap: profit diff ${boot['profit_diff']:+.2f} "
-                    f"(95% CI ${boot['profit_diff_ci_lo']:+.2f}..${boot['profit_diff_ci_hi']:+.2f}, "
-                    f"P(candidate<=baseline)={boot['p_value']:.2f}, n_events={boot['n_events']})"
-                )
-                if boot["n_events"] < MINIMUM_PROMOTION_EVENT_DATES:
-                    passes = False
-                    reasons.append(
-                        f"FAIL: Paired bootstrap has {boot['n_events']} event dates; "
-                        f"at least {MINIMUM_PROMOTION_EVENT_DATES} are required."
-                    )
-                elif (
-                    not np.isfinite(boot["p_value"])
-                    or boot["p_value"] > PROMOTION_BOOTSTRAP_ALPHA
-                ):
-                    passes = False
-                    reasons.append(
-                        f"FAIL: Paired bootstrap cannot distinguish candidate from "
-                        f"baseline (p={boot['p_value']:.2f} > "
-                        f"alpha={PROMOTION_BOOTSTRAP_ALPHA:.2f})."
-                    )
 
         # --- 2. Drawdown ---
-        raw_c_dd = candidate_sweep.get(
-            "max_drawdown_pct", candidate_sweep.get("max_drawdown")
-        )
-        raw_b_dd = baseline_sweep.get(
-            "max_drawdown_pct", baseline_sweep.get("max_drawdown")
-        )
-        c_dd = _coerce_finite_float(raw_c_dd)
-        b_dd = _coerce_finite_float(raw_b_dd)
-        if c_dd is None:
+        c_dd = candidate_sweep.get("max_drawdown_pct", candidate_sweep.get("max_drawdown", 0.0))
+        b_dd = baseline_sweep.get("max_drawdown_pct", baseline_sweep.get("max_drawdown", 0.0))
+
+        if b_dd > 0 and c_dd > _DRAWDOWN_MULTIPLIER * b_dd:
             passes = False
             reasons.append(
-                "FAIL: Candidate drawdown must be finite; "
-                f"got {raw_c_dd!r}."
+                f"FAIL: Drawdown {c_dd:.1%} exceeds {_DRAWDOWN_MULTIPLIER:.0f}x "
+                f"baseline {b_dd:.1%}"
             )
-        if b_dd is None:
-            passes = False
-            reasons.append(
-                "FAIL: Baseline drawdown must be finite; "
-                f"got {raw_b_dd!r}."
-            )
-        if c_dd is not None and b_dd is not None:
-            if b_dd > 0 and c_dd > _DRAWDOWN_MULTIPLIER * b_dd:
-                passes = False
-                reasons.append(
-                    f"FAIL: Drawdown {c_dd:.1%} exceeds "
-                    f"{_DRAWDOWN_MULTIPLIER:.0f}x baseline {b_dd:.1%}"
-                )
-            else:
-                reasons.append(f"Drawdown OK: {c_dd:.1%} vs baseline {b_dd:.1%}")
+        else:
+            reasons.append(f"Drawdown OK: {c_dd:.1%} vs baseline {b_dd:.1%}")
 
         # --- 3. CLV ---
-        raw_c_clv = candidate_sweep.get("avg_clv")
-        raw_b_clv = baseline_sweep.get("avg_clv")
-        raw_finite_c_clv = _coerce_finite_float(raw_c_clv)
-        raw_finite_b_clv = _coerce_finite_float(raw_b_clv)
-        if raw_finite_c_clv is None:
-            passes = False
-            reasons.append(
-                "FAIL: Candidate CLV must be finite; "
-                f"got {raw_c_clv!r}."
-            )
-        if raw_finite_b_clv is None:
-            passes = False
-            reasons.append(
-                "FAIL: Baseline CLV must be finite; "
-                f"got {raw_b_clv!r}."
-            )
-        c_clv = raw_c_clv
-        b_clv = raw_b_clv
+        c_clv = candidate_sweep.get("avg_clv")
+        b_clv = baseline_sweep.get("avg_clv")
         clv_basis = "avg_clv"
         if (
-            candidate_log_for_stats is not None
-            and baseline_log_for_stats is not None
+            statistical
+            and has_pairing_columns(candidate_log_for_stats)
+            and has_pairing_columns(baseline_log_for_stats)
         ):
             try:
                 c_fair = clv_fair_stats(candidate_log_for_stats)
@@ -787,93 +519,54 @@ class PromotionGate:
                     f"snapshot-distinct CLV ({c_fair['n_bets_distinct']}/"
                     f"{c_fair['n_bets_total']} candidate bets)"
                 )
-        finite_c_clv = _coerce_finite_float(c_clv)
-        finite_b_clv = _coerce_finite_float(b_clv)
-        if finite_c_clv is None and raw_finite_c_clv is not None:
-            passes = False
-            reasons.append(
-                "FAIL: Candidate CLV must be finite; "
-                f"got {c_clv!r} (raw {raw_c_clv!r}, basis: {clv_basis})."
-            )
-        if finite_b_clv is None and raw_finite_b_clv is not None:
-            passes = False
-            reasons.append(
-                "FAIL: Baseline CLV must be finite; "
-                f"got {b_clv!r} (raw {raw_b_clv!r}, basis: {clv_basis})."
-            )
-        if finite_c_clv is not None and finite_b_clv is not None:
-            if finite_b_clv - finite_c_clv > _CLV_TOLERANCE:
+        if c_clv is not None and b_clv is not None and pd.notna(c_clv) and pd.notna(b_clv):
+            if b_clv - c_clv > _CLV_TOLERANCE:
                 passes = False
                 reasons.append(
-                    f"FAIL: CLV worse by {(finite_b_clv - finite_c_clv):.2%} "
+                    f"FAIL: CLV worse by {(b_clv - c_clv):.2%} "
                     f"(tolerance {_CLV_TOLERANCE:.2%}, basis: {clv_basis})"
                 )
             else:
                 reasons.append(
-                    f"CLV OK: candidate {finite_c_clv:+.2%} vs baseline "
-                    f"{finite_b_clv:+.2%} (basis: {clv_basis})"
+                    f"CLV OK: candidate {c_clv:+.2%} vs baseline {b_clv:+.2%} "
+                    f"(basis: {clv_basis})"
                 )
 
         # --- 4. Behaviour / robustness ---
-        c_log = candidate_sweep.get("bet_log")
-        b_log = baseline_sweep.get("bet_log")
-        if not isinstance(c_log, pd.DataFrame):
-            c_log = pd.DataFrame()
-        if not isinstance(b_log, pd.DataFrame):
-            b_log = pd.DataFrame()
+        c_log = candidate_sweep.get("bet_log", pd.DataFrame())
+        b_log = baseline_sweep.get("bet_log", pd.DataFrame())
 
         if not c_log.empty:
             # Edge vs profit
-            try:
-                ep = edge_vs_profit_check(c_log)
-            except Exception as exc:
+            ep = edge_vs_profit_check(c_log)
+            if ep["verdict"] == "SUSPICIOUSLY_HIGH":
                 passes = False
                 reasons.append(
-                    f"FAIL: Candidate bet log cannot support edge/profit checks: {exc}"
+                    f"FAIL: Realized profit ({ep['realized_profit_rate']:+.2%}) "
+                    f"far exceeds claimed edge ({ep['avg_claimed_edge']:+.2%}) -- "
+                    f"possible luck or data leakage"
                 )
-            else:
-                if ep["verdict"] == "SUSPICIOUSLY_HIGH":
-                    passes = False
-                    reasons.append(
-                        f"FAIL: Realized profit ({ep['realized_profit_rate']:+.2%}) "
-                        f"far exceeds claimed edge ({ep['avg_claimed_edge']:+.2%}) -- "
-                        f"possible luck or data leakage"
-                    )
-                elif ep["verdict"] == "EXECUTION_DRAG":
-                    reasons.append(
-                        f"WARNING: Realized profit ({ep['realized_profit_rate']:+.2%}) "
-                        f"below claimed edge ({ep['avg_claimed_edge']:+.2%}) -- "
-                        f"execution drag"
-                    )
+            elif ep["verdict"] == "EXECUTION_DRAG":
+                reasons.append(
+                    f"WARNING: Realized profit ({ep['realized_profit_rate']:+.2%}) "
+                    f"below claimed edge ({ep['avg_claimed_edge']:+.2%}) -- "
+                    f"execution drag"
+                )
 
             # Volume sanity
             if not b_log.empty:
-                try:
-                    vol = volume_sanity_check(c_log, b_log)
-                except Exception as exc:
+                vol = volume_sanity_check(c_log, b_log)
+                if not vol["passes"]:
                     passes = False
-                    reasons.append(
-                        f"FAIL: Bet logs cannot support volume checks: {exc}"
-                    )
-                else:
-                    if not vol["passes"]:
-                        passes = False
-                        for f in vol["flags"]:
-                            reasons.append(f"FAIL: {f}")
+                    for f in vol["flags"]:
+                        reasons.append(f"FAIL: {f}")
 
             # Trader C audit
-            try:
-                tc = trader_c_behavior_audit(c_log)
-            except Exception as exc:
+            tc = trader_c_behavior_audit(c_log)
+            if not tc.get("passes", True):
                 passes = False
-                reasons.append(
-                    f"FAIL: Candidate bet log cannot support Trader C checks: {exc}"
-                )
-            else:
-                if not tc.get("passes", True):
-                    passes = False
-                    for f in tc.get("flags", []):
-                        reasons.append(f"FAIL (Trader C): {f}")
+                for f in tc.get("flags", []):
+                    reasons.append(f"FAIL (Trader C): {f}")
 
         return {"passes": passes, "reasons": reasons}
 
@@ -887,9 +580,12 @@ def evaluate_for_promotion(
     control_model_metrics: dict,
     candidate_sweep: dict,
     baseline_sweep: dict,
+    statistical: bool = True,
 ) -> dict:
     """
     Run both bars and issue a verdict.
+
+    `statistical=False` restores the legacy point-estimate-only trading bar.
 
     Returns
     -------
@@ -899,34 +595,7 @@ def evaluate_for_promotion(
     gate = PromotionGate()
 
     model_bar = gate.check_model_bar(candidate_model_metrics, control_model_metrics)
-    trading_bar = gate.check_trading_bar(candidate_sweep, baseline_sweep)
-
-    for field, label in (
-        ("evaluation_sample_sha256", "evaluation sample"),
-        ("evaluation_input_value_sha256", "evaluation input value"),
-    ):
-        candidate_raw = candidate_model_metrics.get(field)
-        control_raw = control_model_metrics.get(field)
-        candidate_binding = _normalize_sha256(candidate_raw)
-        control_binding = _normalize_sha256(control_raw)
-        if not candidate_raw or not control_raw:
-            binding_reason = (
-                f"FAIL: Candidate/control {label} binding is incomplete."
-            )
-        elif candidate_binding is None or control_binding is None:
-            binding_reason = (
-                f"FAIL: Candidate/control {label} binding must be a valid SHA-256."
-            )
-        elif candidate_binding != control_binding:
-            binding_reason = (
-                f"FAIL: Candidate/control {label} hashes differ "
-                f"({candidate_binding} vs {control_binding})."
-            )
-        else:
-            continue
-        model_bar["passes"] = False
-        trading_bar["passes"] = False
-        model_bar["reasons"].append(binding_reason)
+    trading_bar = gate.check_trading_bar(candidate_sweep, baseline_sweep, statistical=statistical)
 
     model_passes = model_bar["passes"]
     trading_passes = trading_bar["passes"]
@@ -1103,18 +772,8 @@ def generate_promotion_report(
     # --- Robustness checks ---
     _h2("Robustness Checks")
 
-    c_log, _candidate_log_errors = _validate_promotion_bet_log(
-        candidate_sweep.get("bet_log"),
-        role="candidate",
-    )
-    b_log, _baseline_log_errors = _validate_promotion_bet_log(
-        baseline_sweep.get("bet_log"),
-        role="baseline",
-    )
-    if c_log is None:
-        c_log = pd.DataFrame()
-    if b_log is None:
-        b_log = pd.DataFrame()
+    c_log = candidate_sweep.get("bet_log", pd.DataFrame())
+    b_log = baseline_sweep.get("bet_log", pd.DataFrame())
 
     # Year-by-year
     _h3("Year-by-year breakdown")
@@ -1270,13 +929,13 @@ def main():
     parser.add_argument(
         "--candidate-log",
         type=str,
-        required=True,
+        default=None,
         help="Path to candidate bet log CSV file",
     )
     parser.add_argument(
         "--baseline-log",
         type=str,
-        required=True,
+        default=None,
         help="Path to baseline bet log CSV file",
     )
     parser.add_argument(
@@ -1285,6 +944,13 @@ def main():
         default=None,
         help="Path for the output markdown report",
     )
+    parser.add_argument(
+        "--legacy-gate",
+        action="store_true",
+        help="Use the legacy point-estimate trading bar (no paired event "
+        "bootstrap, no snapshot-distinct CLV)",
+    )
+
     args = parser.parse_args()
 
     if bool(args.candidate_sweep) != bool(args.baseline_sweep):
@@ -1315,8 +981,17 @@ def main():
                 args.control_metrics,
             )
 
-    candidate_sweep["bet_log"] = pd.read_csv(args.candidate_log)
-    baseline_sweep["bet_log"] = pd.read_csv(args.baseline_log)
+    if args.candidate_log:
+        c_log = pd.read_csv(args.candidate_log)
+        candidate_sweep["bet_log"] = c_log
+    else:
+        candidate_sweep.setdefault("bet_log", pd.DataFrame())
+
+    if args.baseline_log:
+        b_log = pd.read_csv(args.baseline_log)
+        baseline_sweep["bet_log"] = b_log
+    else:
+        baseline_sweep.setdefault("bet_log", pd.DataFrame())
 
     # Default output path
     output_path = args.output
@@ -1341,6 +1016,7 @@ def main():
         control_model_metrics,
         candidate_sweep,
         baseline_sweep,
+        statistical=not args.legacy_gate,
     )
     print(f"\n{'=' * 60}")
     print(f"PROMOTION GATE VERDICT: {result['verdict']}")

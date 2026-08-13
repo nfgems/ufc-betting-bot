@@ -1483,14 +1483,13 @@ def test_prediction_runtime_signature_versions_live_quality_gate(monkeypatch):
     ]
     assert first != changed
 
-    prior_contract_version = bot._LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION
     monkeypatch.setattr(
         bot,
         "_LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION",
-        prior_contract_version + 1,
+        bot._LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION + 1,
     )
     contract_changed = bot._prediction_runtime_signature(model_result=model_result)
-    assert contract_changed["inference_contract_version"] == prior_contract_version + 1
+    assert contract_changed["inference_contract_version"] == 2
     assert contract_changed != first
 
 
@@ -1679,7 +1678,7 @@ def test_resolve_live_event_context_uses_raw_history_when_processed_history_miss
 
         assert event_context is not None
         assert event_context["weight_class"] == "Bantamweight"
-        assert event_context["num_rounds"] is None
+        assert event_context["num_rounds"] == 3
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -1742,7 +1741,7 @@ def test_resolve_live_event_context_falls_back_to_near_term_ufc_lookup_when_hist
 
         assert event_context is not None
         assert event_context["weight_class"] == "Bantamweight"
-        assert event_context["num_rounds"] is None
+        assert event_context["num_rounds"] == 3
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -1858,7 +1857,7 @@ def test_resolve_live_event_context_uses_official_roster_for_late_debutant_addit
 
         assert event_context is not None
         assert event_context["weight_class"] == "Featherweight"
-        assert event_context["num_rounds"] is None
+        assert event_context["num_rounds"] == 3
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -2147,7 +2146,7 @@ def test_resolve_live_event_context_allows_far_future_rematch_history_fallback(
 
         assert event_context is not None
         assert event_context["weight_class"] == "Flyweight"
-        assert event_context["num_rounds"] is None
+        assert event_context["num_rounds"] == 3
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -2787,17 +2786,6 @@ def test_real_cmd_duo_live_retires_legacy_g_before_no_market_idle(monkeypatch):
         monkeypatch.setattr(bot, "archive_prediction_payload", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(
-            bot,
-            "_resolve_runtime_bundle_summary",
-            lambda **_kwargs: {
-                "processed_dir": str(temp_root / "processed"),
-                "confirmed_strategy": {
-                    "strategy_config": {"s_min_edge": 0.02},
-                    "shared_constants": {},
-                },
-            },
-        )
         monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
         monkeypatch.setattr("src.model.train.load_model", lambda _name: model_result)
         monkeypatch.setattr(
@@ -2888,13 +2876,7 @@ def test_real_cmd_duo_live_degrades_and_cancels_limits_when_gamma_is_unavailable
         monkeypatch.setattr(
             bot,
             "_resolve_runtime_bundle_summary",
-            lambda **_kwargs: {
-                "processed_dir": str(temp_root / "processed"),
-                "confirmed_strategy": {
-                    "strategy_config": {"s_min_edge": 0.02},
-                    "shared_constants": {},
-                },
-            },
+            lambda **kwargs: {"processed_dir": str(temp_root / "processed")},
         )
         monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
         monkeypatch.setattr("src.model.train.load_model", lambda _name: model_result)

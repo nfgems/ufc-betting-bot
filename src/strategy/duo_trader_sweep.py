@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -18,6 +17,7 @@ from src.config import (
     KELLY_FRACTION,
     MAX_BET_FRACTION,
     MIN_EDGE_THRESHOLD,
+    MIN_FIGHTER_FIGHTS,
     MODEL_AGREEMENT_MIN_EDGE,
     PROCESSED_DATA_DIR,
     TRAIN_CUTOFF_DATE,
@@ -32,15 +32,16 @@ from src.strategy.backtest import (
 from src.strategy.bankroll import BankrollManager
 from src.strategy.lab_stats import compute_max_drawdown
 from src.strategy.model_lab import (
-    DEFAULT_CONFIRMATION_FOLD_COUNT,
     build_variant_features,
     generate_variant_fold_predictions,
 )
 from src.strategy.model_variants import ALL_VARIANTS, apply_variant_feature_transforms
 from src.strategy.value import (
+    _passes_filters,
+    blend_probability,
     calculate_closing_line_value,
-    find_conviction_bets,
-    find_value_bets,
+    compute_independent_blend_probs,
+    dynamic_blend_weight,
     implied_prob_to_decimal_odds,
 )
 
@@ -174,22 +175,8 @@ def _generate_walk_forward_predictions(
     variant_name: str = "baseline",
     dataset_variant: str | None = None,
     feature_family: str | None = None,
-    feature_cols: list[str] | None = None,
     calibration_method: str | None = None,
-    entry_offset_days: float | None = None,
-    entry_offset_for_features: bool = False,
-    require_entry_odds: bool = False,
-    allow_closing_odds: bool = False,
-    evaluation_partition: str = "selection",
-    confirmation_fold_count: int = 2,
-    return_fold_manifest: bool = False,
-    confirmation_claim_sha256: str | None = None,
-    confirmation_claim_path: str | Path | None = None,
-    allow_all_folds: bool = False,
-) -> (
-    list[tuple[int, pd.DataFrame]]
-    | tuple[list[tuple[int, pd.DataFrame]], list[tuple[int, pd.DataFrame]]]
-):
+) -> list[tuple[int, pd.DataFrame]]:
     """Train models via walk-forward and generate predictions for all folds.
 
     Parameters
@@ -228,153 +215,14 @@ def _generate_walk_forward_predictions(
         initial_train_years=initial_train_years,
         bet_start_date=bet_start_date,
         feature_family=feature_family,
-        feature_cols=feature_cols,
-        entry_offset_days=entry_offset_days,
-        entry_offset_for_features=entry_offset_for_features,
-        require_entry_odds=require_entry_odds,
-        allow_closing_odds=allow_closing_odds,
-        evaluation_partition=evaluation_partition,
-        confirmation_fold_count=confirmation_fold_count,
-        return_fold_manifest=return_fold_manifest,
-        confirmation_claim_sha256=confirmation_claim_sha256,
-        confirmation_claim_path=confirmation_claim_path,
-        allow_all_folds=allow_all_folds,
     )
-
-    if return_fold_manifest:
-        selected_folds, fold_manifest = fold_predictions
-    else:
-        selected_folds = fold_predictions
 
     logger.info(
         "Walk-forward complete: %s folds, %s total predictions",
-        len(selected_folds),
-        sum(len(predictions) for _, predictions in selected_folds),
+        len(fold_predictions),
+        sum(len(predictions) for _, predictions in fold_predictions),
     )
     return fold_predictions
-
-
-def _selection_prediction_cache_payload(
-    fold_predictions: list[tuple[int, pd.DataFrame]],
-    fold_manifest: list[tuple[int, pd.DataFrame]],
-) -> dict:
-    """Build a self-describing cache that excludes confirmation folds."""
-    selection_fold_ids = [fold_id for fold_id, _frame in fold_predictions]
-    full_fold_ids = [fold_id for fold_id, _frame in fold_manifest]
-    if len(full_fold_ids) <= DEFAULT_CONFIRMATION_FOLD_COUNT:
-        raise ValueError("selection cache has no confirmation-fold reserve")
-    confirmation_fold_ids = full_fold_ids[-DEFAULT_CONFIRMATION_FOLD_COUNT:]
-    if selection_fold_ids != full_fold_ids[:-DEFAULT_CONFIRMATION_FOLD_COUNT]:
-        raise ValueError("selection cache does not contain exactly the selection folds")
-
-    first_confirmation = fold_manifest[-DEFAULT_CONFIRMATION_FOLD_COUNT][1]
-    if "event_date" not in first_confirmation.columns:
-        raise ValueError("selection cache confirmation boundary is invalid")
-    confirmation_dates = pd.to_datetime(
-        first_confirmation["event_date"], errors="coerce"
-    )
-    if confirmation_dates.isna().any() or confirmation_dates.empty:
-        raise ValueError("selection cache confirmation boundary is invalid")
-    payload = {
-        "schema_version": 1,
-        "evaluation_partition": "selection",
-        "reserved_confirmation_folds": DEFAULT_CONFIRMATION_FOLD_COUNT,
-        "selection_fold_ids": selection_fold_ids,
-        "confirmation_fold_ids": confirmation_fold_ids,
-        "full_fold_ids": full_fold_ids,
-        "confirmation_start": confirmation_dates.min().isoformat(),
-        "fold_predictions": fold_predictions,
-    }
-    _selection_predictions_from_cache_payload(payload)
-    return payload
-
-
-def _selection_predictions_from_cache_payload(
-    payload: object,
-) -> list[tuple[int, pd.DataFrame]]:
-    """Reject legacy or mislabeled caches before a strategy sweep can score."""
-    if not isinstance(payload, dict):
-        raise ValueError("prediction cache lacks selection-partition provenance")
-    if (
-        payload.get("schema_version") != 1
-        or payload.get("evaluation_partition") != "selection"
-        or payload.get("reserved_confirmation_folds")
-        != DEFAULT_CONFIRMATION_FOLD_COUNT
-    ):
-        raise ValueError("prediction cache is not bound to the selection partition")
-
-    fold_predictions = payload.get("fold_predictions")
-    if not isinstance(fold_predictions, list) or not fold_predictions:
-        raise ValueError("selection prediction cache is empty or malformed")
-    selection_fold_ids: list[int] = []
-    confirmation_start = pd.to_datetime(
-        payload.get("confirmation_start"), errors="coerce"
-    )
-    if pd.isna(confirmation_start):
-        raise ValueError("selection prediction cache has no confirmation boundary")
-    for item in fold_predictions:
-        if not isinstance(item, tuple) or len(item) != 2:
-            raise ValueError("selection prediction cache contains a malformed fold")
-        fold_id, frame = item
-        if isinstance(fold_id, bool) or not isinstance(fold_id, int):
-            raise ValueError("selection prediction cache fold IDs must be integers")
-        if not isinstance(frame, pd.DataFrame) or frame.empty:
-            raise ValueError("selection prediction cache contains an empty fold")
-        if "fold" not in frame.columns or "event_date" not in frame.columns:
-            raise ValueError("selection prediction cache contains a malformed fold")
-        frame_fold_ids = pd.to_numeric(frame["fold"], errors="coerce")
-        frame_dates = pd.to_datetime(frame["event_date"], errors="coerce")
-        if (
-            frame_fold_ids.isna().any()
-            or not frame_fold_ids.eq(fold_id).all()
-            or frame_dates.isna().any()
-            or not frame_dates.lt(confirmation_start).all()
-        ):
-            raise ValueError("prediction cache exposes a reserved confirmation fold")
-        selection_fold_ids.append(fold_id)
-
-    full_fold_ids = payload.get("full_fold_ids")
-    confirmation_fold_ids = payload.get("confirmation_fold_ids")
-    if (
-        selection_fold_ids != payload.get("selection_fold_ids")
-        or not isinstance(full_fold_ids, list)
-        or not isinstance(confirmation_fold_ids, list)
-        or any(
-            isinstance(fold_id, bool) or not isinstance(fold_id, int)
-            for fold_id in full_fold_ids
-        )
-        or len(full_fold_ids) <= DEFAULT_CONFIRMATION_FOLD_COUNT
-        or selection_fold_ids
-        != full_fold_ids[:-DEFAULT_CONFIRMATION_FOLD_COUNT]
-        or confirmation_fold_ids
-        != full_fold_ids[-DEFAULT_CONFIRMATION_FOLD_COUNT:]
-        or full_fold_ids != sorted(set(full_fold_ids))
-    ):
-        raise ValueError("prediction cache fold partition is inconsistent")
-    return fold_predictions
-
-
-def _preflight_cached_selection_predictions(
-    fold_predictions: list[tuple[int, pd.DataFrame]],
-) -> None:
-    from src.strategy.run_evaluation import (
-        _canonical_evaluation_fight_identities,
-        _record_global_selection_exposure,
-    )
-
-    predictions = pd.concat(
-        [frame for _fold_id, frame in fold_predictions],
-        ignore_index=True,
-    )
-    predictions["event_date"] = pd.to_datetime(
-        predictions["event_date"], errors="raise"
-    )
-    predictions = predictions[
-        predictions["event_date"] >= pd.Timestamp(TRAIN_CUTOFF_DATE)
-    ].copy()
-    _record_global_selection_exposure(
-        _canonical_evaluation_fight_identities(predictions)
-    )
 
 
 def _parse_fight_row(row) -> dict:
@@ -414,23 +262,6 @@ def _parse_fight_row(row) -> dict:
     elif not isinstance(b_fights, int):
         b_fights = None
 
-    a_org_tier = row.get("a_pre_ufc_org_tier_best")
-    b_org_tier = row.get("b_pre_ufc_org_tier_best")
-    if a_org_tier is not None:
-        try:
-            a_org_tier = float(a_org_tier)
-        except (TypeError, ValueError):
-            a_org_tier = None
-        if a_org_tier is not None and not np.isfinite(a_org_tier):
-            a_org_tier = None
-    if b_org_tier is not None:
-        try:
-            b_org_tier = float(b_org_tier)
-        except (TypeError, ValueError):
-            b_org_tier = None
-        if b_org_tier is not None and not np.isfinite(b_org_tier):
-            b_org_tier = None
-
     return {
         "model_a": model_a,
         "model_b": model_b,
@@ -445,8 +276,6 @@ def _parse_fight_row(row) -> dict:
         "closing_prob_b": closing_prob_b,
         "a_fights": a_fights,
         "b_fights": b_fights,
-        "a_org_tier": a_org_tier,
-        "b_org_tier": b_org_tier,
         "actual_winner_is_a": row["target"] == 1,
         "fighter_a": row.get("fighter_a", "A"),
         "fighter_b": row.get("fighter_b", "B"),
@@ -454,7 +283,7 @@ def _parse_fight_row(row) -> dict:
     }
 
 
-def _evaluate_single_event_config(
+def _evaluate_config(
     fold_predictions: list[tuple[int, pd.DataFrame]],
     config: SweepConfig,
     initial_bankroll: float = INITIAL_BANKROLL,
@@ -467,14 +296,13 @@ def _evaluate_single_event_config(
     `execution_mode="realistic"` prices fills with the shared backtest
     execution model (half-spread quotes, synthetic order-book walk, liquidity
     and slippage caps) and defers settlement to event boundaries so winnings
-    from one fight cannot compound into stakes on the same card. Legacy mode
-    retains frictionless pricing but uses the same no-intra-card-compounding
-    execution chronology.
+    from one fight cannot compound into stakes on the same card. The legacy
+    mode is byte-identical to the historical frictionless behavior.
     """
     execution_config = _resolve_execution_config(execution_mode, execution_config=execution_config)
     realistic = execution_config.mode == "realistic"
 
-    single_bank = BankrollManager(
+    bank = BankrollManager(
         initial_bankroll=initial_bankroll,
         kelly_fraction=KELLY_FRACTION,
         max_bet_fraction=MAX_BET_FRACTION,
@@ -488,10 +316,10 @@ def _evaluate_single_event_config(
 
     bet_start = pd.Timestamp(bet_start_date)
 
-    combined_equity = float(initial_bankroll)
+    pending_settlements: list[dict] = []
+    current_event_key: str | None = None
 
-    def _settle_pending(bank: BankrollManager, pending_settlements: list[dict]) -> None:
-        nonlocal combined_equity
+    def _settle_pending() -> None:
         nonlocal pnl_s, pnl_c
         for pending in pending_settlements:
             bank.settle_bet(pending["bet_idx"], won=pending["won"])
@@ -500,79 +328,102 @@ def _evaluate_single_event_config(
                 pnl_s += profit
             else:
                 pnl_c += profit
-            combined_equity += profit
             entry = pending["log_entry"]
             entry["profit"] = profit
-            entry["trader_bankroll_after"] = bank.total_equity
-            entry["bankroll_after"] = combined_equity
+            entry["bankroll_after"] = bank.bankroll
             bet_log.append(entry)
-            bankroll_history.append(combined_equity)
+            bankroll_history.append(bank.bankroll)
         pending_settlements.clear()
 
-    evaluation_rows: list[tuple[pd.Timestamp, int, int, pd.Series]] = []
     for fold_num, predictions in fold_predictions:
-        for row_position, (_, row) in enumerate(predictions.iterrows()):
+        for _, row in predictions.iterrows():
             fight_date = pd.Timestamp(row.get("event_date"))
-            if fight_date >= bet_start:
-                evaluation_rows.append((fight_date, int(fold_num), row_position, row))
-    evaluation_rows.sort(key=lambda item: (item[0], item[1], item[2]))
+            if fight_date < bet_start:
+                continue
 
-    def _fight_key(fight: dict) -> tuple[str, tuple[str, str]]:
-        names = tuple(
-            sorted(
-                (
-                    str(fight["fighter_a"]).strip().casefold(),
-                    str(fight["fighter_b"]).strip().casefold(),
+            if bank.is_stopped:
+                break
+
+            if realistic:
+                event_key = fight_date.normalize().strftime("%Y-%m-%d")
+                if current_event_key is not None and event_key != current_event_key:
+                    _settle_pending()
+                current_event_key = event_key
+
+            fight = _parse_fight_row(row)
+
+            if pd.isna(fight["market_a"]) or pd.isna(fight["market_b"]):
+                continue
+
+            single_bet = None
+            blend_s_a, blend_s_b = compute_independent_blend_probs(
+                fight["model_a"], fight["market_a"], fight["no_odds_a"],
+                fight["model_b"], fight["market_b"], fight["no_odds_b"],
+                base_weight=config.s_blend_weight,
+            )
+            edge_s_a = blend_s_a - fight["market_a"]
+            edge_s_b = blend_s_b - fight["market_b"]
+
+            if edge_s_a >= config.s_min_edge and edge_s_a >= edge_s_b and _passes_filters(
+                blend_s_a,
+                fight["market_a"],
+                edge_s_a,
+                fight["fighter_a"],
+                fight["no_odds_a"],
+                line_movement=fight["line_movement"],
+                line_is_sharp=fight["line_is_sharp"],
+                line_steam_move=fight["line_steam_move"],
+                bet_side="a",
+                a_num_fights=fight["a_fights"],
+                b_num_fights=fight["b_fights"],
+                edge_scaling_base=config.s_min_edge,
+                model_agreement_min_edge=config.s_model_agreement_min_edge,
+            ):
+                sizing_prob = (
+                    _estimated_best_ask(fight["market_a"], execution_config)
+                    if realistic else fight["market_a"]
                 )
-            )
-        )
-        return (pd.Timestamp(fight["event_date"]).normalize().isoformat(), names)
+                odds = implied_prob_to_decimal_odds(sizing_prob)
+                bet_size = bank.kelly_bet_size(blend_s_a, odds)
+                if bet_size > 0:
+                    single_bet = {
+                        "side": "a",
+                        "blend": blend_s_a,
+                        "market": fight["market_a"],
+                        "edge": edge_s_a,
+                        "size": bet_size,
+                    }
+            elif edge_s_b >= config.s_min_edge and _passes_filters(
+                blend_s_b,
+                fight["market_b"],
+                edge_s_b,
+                fight["fighter_b"],
+                fight["no_odds_b"],
+                line_movement=fight["line_movement"],
+                line_is_sharp=fight["line_is_sharp"],
+                line_steam_move=fight["line_steam_move"],
+                bet_side="b",
+                a_num_fights=fight["a_fights"],
+                b_num_fights=fight["b_fights"],
+                edge_scaling_base=config.s_min_edge,
+                model_agreement_min_edge=config.s_model_agreement_min_edge,
+            ):
+                sizing_prob = (
+                    _estimated_best_ask(fight["market_b"], execution_config)
+                    if realistic else fight["market_b"]
+                )
+                odds = implied_prob_to_decimal_odds(sizing_prob)
+                bet_size = bank.kelly_bet_size(blend_s_b, odds)
+                if bet_size > 0:
+                    single_bet = {
+                        "side": "b",
+                        "blend": blend_s_b,
+                        "market": fight["market_b"],
+                        "edge": edge_s_b,
+                        "size": bet_size,
+                    }
 
-    # Runtime places every Single Trader order before it creates the separately
-    # allocated Conviction Trader.  Keep that phase boundary here as a hard
-    # parity invariant; an interleaved shared bankroll changes both sizing and
-    # which fights are eligible for C.
-    single_fight_keys: set[tuple[str, tuple[str, str]]] = set()
-    pending_single: list[dict] = []
-    current_single_event: str | None = None
-    for fight_date, fold_num, _, row in evaluation_rows:
-        fold_num = int(row.get("_evaluation_fold", fold_num))
-        if single_bank.is_stopped:
-            break
-        if realistic:
-            event_key = fight_date.normalize().strftime("%Y-%m-%d")
-            if current_single_event is not None and event_key != current_single_event:
-                _settle_pending(single_bank, pending_single)
-            current_single_event = event_key
-
-        fight = _parse_fight_row(row)
-        selected_single = _select_single_candidate(row, config)
-        single_bet = None
-        if selected_single is not None:
-            side = str(selected_single["bet_side"])
-            market_prob = float(selected_single["market_prob"])
-            blend_prob = float(selected_single["blended_prob"])
-            sizing_prob = (
-                _estimated_best_ask(market_prob, execution_config)
-                if realistic
-                else market_prob
-            )
-            odds = implied_prob_to_decimal_odds(sizing_prob)
-            bet_size = single_bank.kelly_bet_size(blend_prob, odds)
-            size_multiplier = float(selected_single.get("size_multiplier", 1.0))
-            if not np.isfinite(size_multiplier) or size_multiplier <= 0:
-                size_multiplier = 1.0
-            bet_size = round(bet_size * size_multiplier, 2)
-            if bet_size > 0:
-                single_bet = {
-                    "side": side,
-                    "blend": blend_prob,
-                    "market": market_prob,
-                    "edge": float(selected_single["edge"]),
-                    "size": bet_size,
-                }
-
-        if single_bet is not None:
+            if single_bet is not None:
                 side = single_bet["side"]
                 fighter = fight["fighter_a"] if side == "a" else fight["fighter_b"]
                 stake = single_bet["size"]
@@ -586,11 +437,9 @@ def _evaluate_single_event_config(
                         continue
                     fill_price = float(fill["fill_price"])
                 odds = implied_prob_to_decimal_odds(fill_price)
-                bet_idx = len(single_bank.history)
-                placed = single_bank.place_bet(
-                    stake, fighter, odds, single_bet["blend"], fill_price
-                )
-                if not placed:
+                bet_idx = len(bank.history)
+                placed = bank.place_bet(stake, fighter, odds, single_bet["blend"], fill_price)
+                if realistic and not placed:
                     continue
                 won = fight["actual_winner_is_a"] if side == "a" else not fight["actual_winner_is_a"]
                 clv_basis = fill_price if realistic else single_bet["market"]
@@ -624,162 +473,112 @@ def _evaluate_single_event_config(
                     "won": won,
                     "fold": fold_num,
                     "clv": clv,
-                    "odds_source": row.get(
-                        "odds_source", row.get("market_source_kind", "<missing>")
-                    ),
                 }
-                pending_single.append(
-                    {"trader": "S", "bet_idx": bet_idx, "won": won, "log_entry": log_entry}
-                )
-                single_fight_keys.add(_fight_key(fight))
+                if realistic:
+                    pending_settlements.append(
+                        {"trader": "S", "bet_idx": bet_idx, "won": won, "log_entry": log_entry}
+                    )
+                else:
+                    bank.settle_bet(bet_idx, won=won)
+                    profit = bank.history[-1]["profit"]
+                    pnl_s += profit
+                    log_entry["profit"] = profit
+                    log_entry["bankroll_after"] = bank.bankroll
+                    bet_log.append(log_entry)
+                    bankroll_history.append(bank.bankroll)
+                continue
 
-    # Live allocates C from cash remaining immediately after S orders reserve
-    # their stakes, before any fight on the card settles.
-    conviction_allocation = max(0.0, single_bank.bankroll * config.c_share)
-    _settle_pending(single_bank, pending_single)
-    conviction_bank = BankrollManager(
-        initial_bankroll=conviction_allocation,
-        total_equity=conviction_allocation,
-        available_cash=conviction_allocation,
-        kelly_fraction=1.0,
-        max_bet_fraction=config.c_max_bet_fraction,
-        auto_detect_balance=False,
-    )
+            remaining = bank.bankroll
+            alloc_c = remaining * config.c_share
 
-    conviction_candidates: list[dict] = []
-    for fight_date, fold_num, row_position, row in evaluation_rows:
-        fold_num = int(row.get("_evaluation_fold", fold_num))
-        original_sequence = int(row.get("_evaluation_sequence", row_position))
-        fight = _parse_fight_row(row)
-        if (
-            pd.isna(fight["market_a"])
-            or pd.isna(fight["market_b"])
-            or _fight_key(fight) in single_fight_keys
-        ):
-            continue
-        for selected_conviction in _select_conviction_candidates(row, config):
-            side = str(selected_conviction["bet_side"])
-            model_prob = float(selected_conviction["model_prob"])
-            market_prob = float(selected_conviction["market_prob"])
-            conviction_candidates.append(
-                {
-                    "fight_date": fight_date,
-                    "fold": fold_num,
-                    "row_position": original_sequence,
-                    "row": row,
-                    "fight": fight,
+            bet_c = None
+            for side, model_prob, market_prob, no_odds_prob, fighter in [
+                ("a", fight["model_a"], fight["market_a"], fight["no_odds_a"], fight["fighter_a"]),
+                ("b", fight["model_b"], fight["market_b"], fight["no_odds_b"], fight["fighter_b"]),
+            ]:
+                edge = model_prob - market_prob
+                decimal_odds = implied_prob_to_decimal_odds(market_prob)
+                if model_prob < config.c_min_model_prob or no_odds_prob is None or no_odds_prob < config.c_min_no_odds_prob:
+                    continue
+                if edge < config.c_min_edge:
+                    continue
+                if decimal_odds > config.c_max_decimal_odds:
+                    continue
+                if fight["a_fights"] is not None and fight["a_fights"] < MIN_FIGHTER_FIGHTS:
+                    continue
+                if fight["b_fights"] is not None and fight["b_fights"] < MIN_FIGHTER_FIGHTS:
+                    continue
+                bet_c = {
                     "side": side,
                     "model_prob": model_prob,
                     "market": market_prob,
-                    "fighter": selected_conviction["bet_on"],
-                    "edge": float(selected_conviction["edge"]),
-                    "decimal_odds": float(selected_conviction["decimal_odds"]),
-                    "conviction_score": float(
-                        selected_conviction["conviction_score"]
-                    ),
+                    "fighter": fighter,
+                    "edge": edge,
+                    "decimal_odds": decimal_odds,
                 }
-            )
+                break
 
-    # Live find_conviction_bets prioritizes the highest agreement score.  Keep
-    # chronology between events, while preserving that ordering within a card.
-    conviction_candidates.sort(
-        key=lambda bet: (
-            bet["fight_date"],
-            -bet["conviction_score"],
-            bet["fold"],
-            bet["row_position"],
-        )
-    )
-    pending_conviction: list[dict] = []
-    current_conviction_event: str | None = None
-    for bet_c in conviction_candidates:
-        if conviction_bank.is_stopped:
-            break
-        if realistic:
-            event_key = bet_c["fight_date"].normalize().strftime("%Y-%m-%d")
-            if current_conviction_event is not None and event_key != current_conviction_event:
-                _settle_pending(conviction_bank, pending_conviction)
-            current_conviction_event = event_key
-        fight = bet_c["fight"]
-        row = bet_c["row"]
-        bet_size = _conviction_bet_size_param(
-            bet_c["model_prob"], conviction_bank.total_equity, config
-        )
-        if bet_size <= 0:
-            continue
-        fill_price_c = float(bet_c["market"])
-        if realistic:
-            fill = _simulate_realistic_fill(
-                row, float(bet_c["market"]), bet_size, execution_config,
-            )
-            bet_size = round(float(fill["filled_stake"]), 2)
-            if not fill["ok"] or bet_size <= 0:
-                continue
-            fill_price_c = float(fill["fill_price"])
-        odds = (
-            implied_prob_to_decimal_odds(fill_price_c)
-            if realistic
-            else bet_c["decimal_odds"]
-        )
-        bet_idx = len(conviction_bank.history)
-        placed = conviction_bank.place_bet(
-            bet_size,
-            bet_c["fighter"],
-            odds,
-            bet_c["model_prob"],
-            fill_price_c,
-        )
-        if not placed:
-            continue
-        won = (
-            fight["actual_winner_is_a"]
-            if bet_c["side"] == "a"
-            else not fight["actual_winner_is_a"]
-        )
-        clv_basis_c = fill_price_c if realistic else bet_c["market"]
-        clv = np.nan
-        if bet_c["side"] == "a" and fight["closing_prob_a"] is not None:
-            clv = calculate_closing_line_value(clv_basis_c, fight["closing_prob_a"])
-        elif bet_c["side"] == "b" and fight["closing_prob_b"] is not None:
-            clv = calculate_closing_line_value(clv_basis_c, fight["closing_prob_b"])
-        log_entry_c = {
-            "trader": "C",
-            "event_date": fight["event_date"],
-            "fighter_a": fight["fighter_a"],
-            "fighter_b": fight["fighter_b"],
-            "bet_on": bet_c["fighter"],
-            "side": bet_c["side"],
-            "bet_size": bet_size,
-            "odds": odds,
-            "decimal_odds": odds,
-            "fill_price": fill_price_c,
-            "model_prob": bet_c["model_prob"],
-            "blended_prob": np.nan,
-            "market_prob": bet_c["market"],
-            "edge": bet_c["edge"],
-            "edge_basis": "raw",
-            "blend_edge": np.nan,
-            "raw_edge": bet_c["edge"],
-            "won": won,
-            "fold": bet_c["fold"],
-            "clv": clv,
-            "conviction_score": bet_c["conviction_score"],
-            "odds_source": row.get(
-                "odds_source", row.get("market_source_kind", "<missing>")
-            ),
-        }
-        pending = {
-            "trader": "C",
-            "bet_idx": bet_idx,
-            "won": won,
-            "log_entry": log_entry_c,
-        }
-        # A live card has no resolved outcomes while its orders are being
-        # placed.  Defer every C settlement in both pricing modes so an early
-        # same-card result can never compound a later C stake.
-        pending_conviction.append(pending)
+            if bet_c is not None:
+                bet_size = _conviction_bet_size_param(bet_c["model_prob"], alloc_c, config)
+                if bet_size > 0:
+                    fill_price_c = float(bet_c["market"])
+                    if realistic:
+                        fill = _simulate_realistic_fill(
+                            row, float(bet_c["market"]), bet_size, execution_config,
+                        )
+                        bet_size = round(float(fill["filled_stake"]), 2)
+                        if not fill["ok"] or bet_size <= 0:
+                            continue
+                        fill_price_c = float(fill["fill_price"])
+                    odds = implied_prob_to_decimal_odds(fill_price_c) if realistic else bet_c["decimal_odds"]
+                    bet_idx = len(bank.history)
+                    placed = bank.place_bet(bet_size, bet_c["fighter"], odds, bet_c["model_prob"], fill_price_c)
+                    if realistic and not placed:
+                        continue
+                    won = fight["actual_winner_is_a"] if bet_c["side"] == "a" else not fight["actual_winner_is_a"]
+                    clv_basis_c = fill_price_c if realistic else bet_c["market"]
+                    clv = np.nan
+                    if bet_c["side"] == "a" and fight["closing_prob_a"] is not None:
+                        clv = calculate_closing_line_value(clv_basis_c, fight["closing_prob_a"])
+                    elif bet_c["side"] == "b" and fight["closing_prob_b"] is not None:
+                        clv = calculate_closing_line_value(clv_basis_c, fight["closing_prob_b"])
+                    log_entry_c = {
+                        "trader": "C",
+                        "event_date": fight["event_date"],
+                        "fighter_a": fight["fighter_a"],
+                        "fighter_b": fight["fighter_b"],
+                        "bet_on": bet_c["fighter"],
+                        "side": bet_c["side"],
+                        "bet_size": bet_size,
+                        "odds": odds,
+                        "decimal_odds": odds,
+                        "fill_price": fill_price_c,
+                        "model_prob": bet_c["model_prob"],
+                        "blended_prob": np.nan,
+                        "market_prob": bet_c["market"],
+                        "edge": bet_c["edge"],
+                        "edge_basis": "raw",
+                        "blend_edge": np.nan,
+                        "raw_edge": bet_c["edge"],
+                        "won": won,
+                        "fold": fold_num,
+                        "clv": clv,
+                    }
+                    if realistic:
+                        pending_settlements.append(
+                            {"trader": "C", "bet_idx": bet_idx, "won": won, "log_entry": log_entry_c}
+                        )
+                    else:
+                        bank.settle_bet(bet_idx, won=won)
+                        profit = bank.history[-1]["profit"]
+                        pnl_c += profit
+                        log_entry_c["profit"] = profit
+                        log_entry_c["bankroll_after"] = bank.bankroll
+                        bet_log.append(log_entry_c)
+                        bankroll_history.append(bank.bankroll)
+                    continue
 
-    _settle_pending(conviction_bank, pending_conviction)
+    _settle_pending()
 
     bet_log_df = pd.DataFrame(bet_log)
     bankroll_df = pd.DataFrame({"combined": bankroll_history})
@@ -830,7 +629,7 @@ def _evaluate_single_event_config(
     stats_s = _trader_stats("S")
     stats_c = _trader_stats("C")
 
-    final_bankroll = combined_equity
+    final_bankroll = bank.bankroll
     total_profit = final_bankroll - initial_bankroll
     total_bets = stats_s["total_bets"] + stats_c["total_bets"]
     total_wagered = stats_s["total_wagered"] + stats_c["total_wagered"]
@@ -871,227 +670,6 @@ def _evaluate_single_event_config(
         },
         "bet_log": bet_log_df,
         "bankroll_history": bankroll_df,
-    }
-
-
-def _select_single_candidate(row: pd.Series, config: SweepConfig) -> dict | None:
-    """Return the exact candidate selected by the live Single Trader filter.
-
-    Selection and ordering must share one implementation.  In particular, a
-    larger raw edge on one side cannot determine execution order when that
-    side fails a line, agreement, or newbie safeguard and the other side is
-    the accepted bet.
-    """
-    selected = find_value_bets(
-        pd.DataFrame([row.to_dict()]),
-        min_edge=config.s_min_edge,
-        blend_weight=config.s_blend_weight,
-        edge_scaling_base=config.s_min_edge,
-        model_agreement_min_edge=config.s_model_agreement_min_edge,
-    )
-    if isinstance(selected, tuple):
-        selected = selected[0]
-    if selected.empty:
-        return None
-    return selected.iloc[0].to_dict()
-
-
-def _select_conviction_candidates(row: pd.Series, config: SweepConfig) -> list[dict]:
-    """Return candidates selected by the live confirmed Conviction filter."""
-    selected = find_conviction_bets(
-        pd.DataFrame([row.to_dict()]),
-        require_positive_ev=False,
-        min_model_prob=config.c_min_model_prob,
-        min_no_odds_prob=config.c_min_no_odds_prob,
-        min_edge=config.c_min_edge,
-        max_decimal_odds=config.c_max_decimal_odds,
-    )
-    return [bet.to_dict() for _, bet in selected.iterrows()]
-
-
-def _evaluate_config(
-    fold_predictions: list[tuple[int, pd.DataFrame]],
-    config: SweepConfig,
-    initial_bankroll: float = INITIAL_BANKROLL,
-    bet_start_date: str = TRAIN_CUTOFF_DATE,
-    execution_mode: str = "legacy",
-    execution_config: "BacktestExecutionConfig | None" = None,
-) -> dict:
-    """Evaluate cards chronologically with live S-then-C cycle semantics.
-
-    Each live invocation receives one upcoming card: all S opportunities are
-    ordered by edge and reserve cash first, C receives its configured share of
-    the remaining cash and orders by conviction, then the card settles before
-    the next invocation.  Replaying that cycle per historical event prevents
-    later-card outcomes from affecting earlier-card C allocation.
-    """
-    rows: list[pd.DataFrame] = []
-    sequence = 0
-    for fold_num, predictions in fold_predictions:
-        frame = predictions.copy()
-        frame["_evaluation_fold"] = int(fold_num)
-        frame["_evaluation_sequence"] = np.arange(
-            sequence, sequence + len(frame), dtype=int
-        )
-        sequence += len(frame)
-        rows.append(frame)
-    if not rows:
-        rows = [pd.DataFrame(columns=["event_date", "_evaluation_fold"])]
-    combined_rows = pd.concat(rows, ignore_index=True)
-    if not combined_rows.empty:
-        combined_rows["event_date"] = pd.to_datetime(
-            combined_rows["event_date"], errors="raise"
-        )
-        combined_rows = combined_rows[
-            combined_rows["event_date"] >= pd.Timestamp(bet_start_date)
-        ].copy()
-
-    def _single_sort_edge(row: pd.Series) -> float:
-        selected = _select_single_candidate(row, config)
-        if selected is None:
-            return float("-inf")
-        return float(selected["edge"])
-
-    event_results: list[dict] = []
-    current_bankroll = float(initial_bankroll)
-    if not combined_rows.empty:
-        combined_rows["_evaluation_event"] = combined_rows[
-            "event_date"
-        ].dt.normalize()
-        for _event_date, event_frame in combined_rows.groupby(
-            "_evaluation_event", sort=True
-        ):
-            event_frame = event_frame.copy()
-            event_frame["_single_sort_edge"] = event_frame.apply(
-                _single_sort_edge, axis=1
-            )
-            event_frame = event_frame.sort_values(
-                ["_single_sort_edge", "_evaluation_sequence"],
-                ascending=[False, True],
-                kind="stable",
-            ).drop(columns=["_evaluation_event", "_single_sort_edge"])
-            event_result = _evaluate_single_event_config(
-                [(0, event_frame)],
-                config,
-                initial_bankroll=current_bankroll,
-                bet_start_date=bet_start_date,
-                execution_mode=execution_mode,
-                execution_config=execution_config,
-            )
-            current_bankroll = float(event_result["combined"]["final_bankroll"])
-            event_results.append(event_result)
-
-    bet_logs = [
-        result["bet_log"]
-        for result in event_results
-        if isinstance(result.get("bet_log"), pd.DataFrame)
-        and not result["bet_log"].empty
-    ]
-    bet_log_df = (
-        pd.concat(bet_logs, ignore_index=True) if bet_logs else pd.DataFrame()
-    )
-    bankroll_history = [float(initial_bankroll)]
-    for result in event_results:
-        # Historical source rows do not carry a complete immutable bout-order
-        # key.  Recording S settlements and then C settlements would invent an
-        # intra-card path and make drawdown depend on trader phase.  Use one
-        # aggregate end-of-card equity observation, while retaining every
-        # settled bet in the bet log for ROI/profit diagnostics.
-        if int(result["combined"].get("total_bets", 0)) > 0:
-            bankroll_history.append(float(result["combined"]["final_bankroll"]))
-
-    def _trader_stats(code: str) -> dict:
-        empty = {
-            "total_bets": 0,
-            "wins": 0,
-            "win_rate": 0,
-            "total_wagered": 0,
-            "roi": 0,
-            "avg_edge": 0,
-            "avg_bet_size": 0,
-            "avg_clv": np.nan,
-        }
-        if bet_log_df.empty:
-            return empty
-        trader_log = bet_log_df[bet_log_df["trader"] == code]
-        if trader_log.empty:
-            return empty
-        bets = len(trader_log)
-        wins = int(trader_log["won"].sum())
-        wagered = float(trader_log["bet_size"].sum())
-        profit = float(trader_log["profit"].sum())
-        return {
-            "total_bets": bets,
-            "wins": wins,
-            "win_rate": wins / bets,
-            "total_wagered": wagered,
-            "roi": profit / wagered if wagered else 0,
-            "avg_edge": float(trader_log["edge"].mean()),
-            "avg_bet_size": wagered / bets,
-            "avg_clv": (
-                float(trader_log["clv"].dropna().mean())
-                if "clv" in trader_log.columns and trader_log["clv"].notna().any()
-                else np.nan
-            ),
-        }
-
-    stats_s = _trader_stats("S")
-    stats_c = _trader_stats("C")
-    pnl_s = float(
-        bet_log_df.loc[bet_log_df.get("trader") == "S", "profit"].sum()
-    ) if not bet_log_df.empty else 0.0
-    pnl_c = float(
-        bet_log_df.loc[bet_log_df.get("trader") == "C", "profit"].sum()
-    ) if not bet_log_df.empty else 0.0
-    total_wagered = stats_s["total_wagered"] + stats_c["total_wagered"]
-    total_bets = stats_s["total_bets"] + stats_c["total_bets"]
-    total_wins = stats_s["wins"] + stats_c["wins"]
-    total_profit = current_bankroll - float(initial_bankroll)
-    drawdown = compute_max_drawdown(bankroll_history)
-    combined_clv = (
-        float(bet_log_df["clv"].dropna().mean())
-        if not bet_log_df.empty
-        and "clv" in bet_log_df.columns
-        and bet_log_df["clv"].notna().any()
-        else np.nan
-    )
-    return {
-        "config": config,
-        "model_variant": config.variant_name,
-        "mode": "duo_sweep",
-        "trader_s": {
-            "name": f"Single Trader (edge={config.s_min_edge})",
-            "final_pnl": pnl_s,
-            "stats": stats_s,
-        },
-        "trader_c": {
-            "name": (
-                f"Conviction (>={config.c_min_model_prob}/"
-                f"{config.c_min_no_odds_prob}, alloc={config.c_share})"
-            ),
-            "final_pnl": pnl_c,
-            "stats": stats_c,
-        },
-        "trader_m": None,
-        "combined": {
-            "initial_bankroll": initial_bankroll,
-            "final_bankroll": current_bankroll,
-            "total_profit": total_profit,
-            "total_wagered": total_wagered,
-            "total_bets": total_bets,
-            "wins": total_wins,
-            "win_rate": total_wins / total_bets if total_bets else 0,
-            "roi": total_profit / total_wagered if total_wagered else 0,
-            "bankroll_growth": (
-                current_bankroll / initial_bankroll if initial_bankroll else 0
-            ),
-            "max_drawdown": drawdown["max_drawdown_pct"],
-            "max_drawdown_pct": drawdown["max_drawdown_pct"],
-            "max_drawdown_duration": drawdown["max_drawdown_duration"],
-            "avg_clv": combined_clv,
-        },
-        "bet_log": bet_log_df,
-        "bankroll_history": pd.DataFrame({"combined": bankroll_history}),
     }
 
 
@@ -1311,9 +889,6 @@ def run_sweep_backtest(
     fold_predictions = _generate_walk_forward_predictions(
         bet_start_date=bet_start_date,
         variant_name=variant_name,
-        evaluation_partition="selection",
-        confirmation_fold_count=DEFAULT_CONFIRMATION_FOLD_COUNT,
-        allow_all_folds=False,
     )
 
     configs = _build_sweep_configs(variant_name=variant_name)
@@ -1368,9 +943,6 @@ def run_betsapi_challenger_sweep_comparison_with_configs(
         prediction_cache[variant_name] = _generate_walk_forward_predictions(
             bet_start_date=bet_start_date,
             variant_name=variant_name,
-            evaluation_partition="selection",
-            confirmation_fold_count=DEFAULT_CONFIRMATION_FOLD_COUNT,
-            allow_all_folds=False,
         )
 
     summary_rows = []

@@ -22,15 +22,8 @@ from src.data.kaggle_loader import (
     load_kaggle_dataset,
 )
 from src.data.name_utils import (
-    CURRENT_UFCSTATS_ID_OVERRIDES,
-    KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS,
     canonicalize_reviewed_fighter_name,
-    derive_ambiguous_fighter_name_keys,
-    fighter_identity_is_ambiguous,
-    fighter_identity_key,
-    normalize_ufcstats_id,
     normalize_person_name as _normalize_fighter_name,
-    same_person_name,
 )
 from src.data.rankings_scraper import _canonical_wc
 from src.data.ufcstats_http import DEFAULT_UFCSTATS_HEADERS, request_ufcstats
@@ -46,7 +39,6 @@ OFFICIAL_ACTIVE_ROSTER_PATH = RAW_DATA_DIR / "ufc_active_roster_official.csv"
 PULLED_FIGHT_RESULTS_PATH = RAW_DATA_DIR / "ufc-fight-results.csv"
 PULLED_FIGHT_STATS_PATH = RAW_DATA_DIR / "ufc-fight-stats.csv"
 EVENT_DATES_CACHE_PATH = RAW_DATA_DIR / "ufc-event-dates.csv"
-PIERCE_FIGHT_IDENTITIES_PATH = RAW_DATA_DIR / "github_PierceHampton.csv"
 _ROUND_SECONDS = 5 * 60
 _BOUT_SPLIT_RE = re.compile(r"\s+vs\.?\s+", flags=re.IGNORECASE)
 _LANDED_ATTEMPTED_RE = re.compile(r"(?P<landed>\d+)\s+of\s+(?P<attempted>\d+)", flags=re.IGNORECASE)
@@ -63,60 +55,6 @@ TRAINING_DATASET_VARIANTS = (
     "best_of_both_field_level",
     "best_of_both_full_history",
 )
-
-_ambiguous_name_keys_cache: tuple[float, frozenset[str]] | None = None
-
-
-def _ambiguous_name_keys() -> frozenset[str]:
-    """Derive collision groups from the existing UFCStats fighter inventory."""
-    global _ambiguous_name_keys_cache
-    try:
-        mtime = SCRAPED_FIGHTERS_PATH.stat().st_mtime
-    except OSError:
-        return KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
-    if _ambiguous_name_keys_cache is not None and _ambiguous_name_keys_cache[0] == mtime:
-        return _ambiguous_name_keys_cache[1]
-    try:
-        inventory = pd.read_csv(SCRAPED_FIGHTERS_PATH, usecols=["name", "fighter_url"])
-        resolved = derive_ambiguous_fighter_name_keys(
-            (
-                {"name": row.name, "fighter_id": row.fighter_url}
-                for row in inventory.itertuples(index=False)
-            )
-        )
-    except (OSError, ValueError) as exc:
-        logger.warning("Could not derive fighter identity collisions from %s: %s", SCRAPED_FIGHTERS_PATH, exc)
-        resolved = frozenset()
-    resolved = frozenset(set(KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS) | set(resolved))
-    _ambiguous_name_keys_cache = (mtime, resolved)
-    return resolved
-
-# Exact, bounded offline recovery for the 17 collision rows newer than (or
-# outside) the Pierce participant-URL artifact. New missing rows use the
-# explicit fight-page recovery hook below instead of adding name heuristics.
-_FIGHT_PARTICIPANT_ID_OVERRIDES: dict[tuple[str, str], str] = {
-    ("836a188a90e479a5", _normalize_fighter_name("Jean Silva")): "52ef95b5860fb28c",
-    ("fc4ab243d21b795d", _normalize_fighter_name("Lance Gibson Jr.")): "07bc580bdf3eb9c8",
-    ("668a44403a130043", _normalize_fighter_name("Bruno Silva")): "294aa73dbf37d281",
-    ("de1a3734be60e6a1", _normalize_fighter_name("Jean Silva")): "52ef95b5860fb28c",
-    ("57ff0eb2351979c4", _normalize_fighter_name("Bruno Silva")): "294aa73dbf37d281",
-    ("fc9168fd102e2e66", _normalize_fighter_name("Bruno Silva")): "294aa73dbf37d281",
-    ("2329fd5f35b6d321", _normalize_fighter_name("Jean Silva")): "9211aae062b799d6",
-    ("e0ecae31a86cc648", _normalize_fighter_name("Jean Silva")): "52ef95b5860fb28c",
-    ("49dc6ce420444a8c", _normalize_fighter_name("Victor Valenzuela")): "078695e385ec2f57",
-    ("fe7c434ced7759e5", _normalize_fighter_name("Mike Davis")): "c8661e204c66f325",
-    ("87bda6d520fe9677", _normalize_fighter_name("Mike Davis")): "fb3e61720be4690c",
-    ("8993e293a63bb5f3", _normalize_fighter_name("Tommy Petersen")): "7aabd61419f747d1",
-    ("689384b01b40ef5c", _normalize_fighter_name("Lance Gibson Jr.")): "07bc580bdf3eb9c8",
-    ("2e7f8d0ad385876d", _normalize_fighter_name("Victor Valenzuela")): "078695e385ec2f57",
-    ("20d74ed23d3e9b3a", _normalize_fighter_name("Bruno Silva")): "294aa73dbf37d281",
-    ("d0b24570ede9ca31", _normalize_fighter_name("Victor Valenzuela")): "de277a4abcfeea46",
-    ("3859314324918eeb", _normalize_fighter_name("Mike Davis")): "fb3e61720be4690c",
-    ("a815dafc89adf33b", _normalize_fighter_name("Thomas Petersen")): "764d39074a352e33",
-    ("c1ed08a1f760f9c7", _normalize_fighter_name("Thomas Petersen")): "764d39074a352e33",
-    ("0760bc02280574dd", _normalize_fighter_name("Thomas Petersen")): "764d39074a352e33",
-    ("d7070ab1b2144f8d", _normalize_fighter_name("Thomas Petersen")): "764d39074a352e33",
-}
 _LANDED_ATTEMPTED_PULL_COLUMNS = {
     "SIG.STR.": "sig_str",
     "TOTAL STR.": "total_str",
@@ -166,8 +104,6 @@ _PULLED_RATE_STAT_FIELDS = [
     "finish_threat",
 ]
 _PULLED_PREFERRED_FIELDS = {
-    "fighter_a_id",
-    "fighter_b_id",
     "event_name",
     "location",
     "weight_class",
@@ -1101,45 +1037,16 @@ def build_pulled_all_plus_legacy_market_training_dataset(
     overlay_fields = sorted(
         column for column in _PULLED_ALL_LEGACY_MARKET_OVERLAY_FIELDS if column in legacy_keyed.columns
     )
-    legacy_overlay = legacy_keyed[
-        ["fight_key", "fighter_a", "fighter_b", *overlay_fields]
-    ].copy()
+    legacy_overlay = legacy_keyed[["fight_key", *overlay_fields]].copy()
     legacy_overlay = legacy_overlay.dropna(subset=["fight_key"]).drop_duplicates(
         subset="fight_key",
         keep="first",
     )
     legacy_overlay = legacy_overlay.rename(
-        columns={
-            "fighter_a": "__legacy_fighter_a",
-            "fighter_b": "__legacy_fighter_b",
-            **{column: f"{column}__legacy_overlay" for column in overlay_fields},
-        }
+        columns={column: f"{column}__legacy_overlay" for column in overlay_fields}
     )
 
     merged = pulled_keyed.merge(legacy_overlay, on="fight_key", how="left")
-    direct_mask = (
-        merged["__legacy_fighter_a"].notna()
-        & (merged["fighter_a"].apply(_normalize_fighter_name) == merged["__legacy_fighter_a"].apply(_normalize_fighter_name))
-        & (merged["fighter_b"].apply(_normalize_fighter_name) == merged["__legacy_fighter_b"].apply(_normalize_fighter_name))
-    )
-    reverse_mask = (
-        merged["__legacy_fighter_a"].notna()
-        & (merged["fighter_a"].apply(_normalize_fighter_name) == merged["__legacy_fighter_b"].apply(_normalize_fighter_name))
-        & (merged["fighter_b"].apply(_normalize_fighter_name) == merged["__legacy_fighter_a"].apply(_normalize_fighter_name))
-    )
-    invalid_mask = merged["__legacy_fighter_a"].notna() & ~(direct_mask | reverse_mask)
-    for column in overlay_fields:
-        overlay_column = f"{column}__legacy_overlay"
-        merged.loc[invalid_mask, overlay_column] = np.nan
-    for root in ("odds", "wc_rank", "pfp_rank", "ko_odds", "sub_odds", "dec_odds"):
-        left = f"a_{root}__legacy_overlay"
-        right = f"b_{root}__legacy_overlay"
-        if left not in merged.columns or right not in merged.columns:
-            continue
-        left_values = merged.loc[reverse_mask, left].copy()
-        right_values = merged.loc[reverse_mask, right].copy()
-        merged.loc[reverse_mask, left] = right_values
-        merged.loc[reverse_mask, right] = left_values
     for column in overlay_fields:
         overlay_column = f"{column}__legacy_overlay"
         if column in merged.columns:
@@ -1147,11 +1054,7 @@ def build_pulled_all_plus_legacy_market_training_dataset(
         else:
             merged[column] = merged[overlay_column]
 
-    drop_columns = [
-        "__legacy_fighter_a",
-        "__legacy_fighter_b",
-        *[f"{column}__legacy_overlay" for column in overlay_fields],
-    ]
+    drop_columns = [f"{column}__legacy_overlay" for column in overlay_fields]
     return merged.drop(columns=["fight_key", *drop_columns], errors="ignore")
 
 
@@ -1541,126 +1444,6 @@ def _normalize_name(value) -> str:
     return re.sub(r"\s+", " ", text).casefold()
 
 
-def _fight_details_id(value: object) -> str | None:
-    text = "" if value is None or pd.isna(value) else str(value)
-    match = re.search(r"fight-details/([0-9a-f]{16})", text, flags=re.IGNORECASE)
-    return match.group(1).lower() if match else None
-
-
-def _load_pierce_fight_identity_lookup(
-    path: Path = PIERCE_FIGHT_IDENTITIES_PATH,
-) -> dict[str, dict[str, str]]:
-    """Return fight-URL participant IDs from the existing Pierce artifact."""
-    if not Path(path).exists():
-        return {}
-    usecols = ["fight_url", "f_1_name", "f_1_url", "f_2_name", "f_2_url"]
-    try:
-        source = pd.read_csv(path, usecols=usecols)
-    except (OSError, ValueError) as exc:
-        logger.warning("Could not load fight participant identities from %s: %s", path, exc)
-        return {}
-    lookup: dict[str, dict[str, str]] = {}
-    for row in source.itertuples(index=False):
-        fight_id = _fight_details_id(row.fight_url)
-        if not fight_id:
-            continue
-        participants: dict[str, str] = {}
-        for name, url in ((row.f_1_name, row.f_1_url), (row.f_2_name, row.f_2_url)):
-            fighter_id = normalize_ufcstats_id(url)
-            name_key = _normalize_fighter_name(name)
-            if name_key and fighter_id:
-                participants[name_key] = fighter_id
-        if participants:
-            lookup[fight_id] = participants
-    return lookup
-
-
-def _attach_local_fighter_ids(scraped_df: pd.DataFrame) -> pd.DataFrame:
-    """Attach nullable participant IDs from row URLs, Pierce, and bounded fixes."""
-    frame = scraped_df.copy()
-    pierce = _load_pierce_fight_identity_lookup()
-    for side in ("a", "b"):
-        id_col = f"fighter_{side}_id"
-        url_candidates = [
-            f"fighter_{side}_url",
-            f"{side}_fighter_url",
-            f"fighter_{side}_ufcstats_url",
-        ]
-        if id_col not in frame.columns:
-            frame[id_col] = None
-        for index, row in frame.iterrows():
-            resolved = normalize_ufcstats_id(row.get(id_col))
-            if not resolved:
-                for url_col in url_candidates:
-                    resolved = normalize_ufcstats_id(row.get(url_col))
-                    if resolved:
-                        break
-            fight_id = _fight_details_id(row.get("fight_url") or row.get("URL"))
-            fighter_name = row.get(f"fighter_{side}")
-            name_key = _normalize_fighter_name(fighter_name)
-            if not resolved and fight_id:
-                resolved = pierce.get(fight_id, {}).get(name_key)
-            if not resolved and fight_id:
-                resolved = _FIGHT_PARTICIPANT_ID_OVERRIDES.get((fight_id, name_key))
-            frame.at[index, id_col] = resolved
-    return frame
-
-
-def recover_fighter_ids_from_fight_pages(
-    scraped_df: pd.DataFrame,
-    *,
-    max_requests: int = 25,
-) -> pd.DataFrame:
-    """Resolve only missing collision identities from their exact fight pages.
-
-    This is an explicit recovery hook, not part of ordinary feature building.
-    It is bounded and never guesses from a name-only fighter index.
-    """
-    frame = _attach_local_fighter_ids(scraped_df)
-    requests_used = 0
-    ambiguous_name_keys = _ambiguous_name_keys()
-    for index, row in frame.iterrows():
-        missing_sides = [
-            side
-            for side in ("a", "b")
-            if fighter_identity_is_ambiguous(
-                row.get(f"fighter_{side}"), ambiguous_name_keys=ambiguous_name_keys
-            )
-            and not normalize_ufcstats_id(row.get(f"fighter_{side}_id"))
-        ]
-        if not missing_sides:
-            continue
-        if requests_used >= max_requests:
-            break
-        fight_url = str(row.get("fight_url") or row.get("URL") or "").strip()
-        if not _fight_details_id(fight_url):
-            continue
-        requests_used += 1
-        try:
-            soup = _get_ufcstats_soup(fight_url)
-        except requests.RequestException as exc:
-            logger.warning("Failed identity recovery from %s: %s", fight_url, exc)
-            continue
-        participants: list[tuple[str, str]] = []
-        seen_ids: set[str] = set()
-        for link in soup.select("a[href*='fighter-details']"):
-            fighter_id = normalize_ufcstats_id(link.get("href"))
-            fighter_name = _clean_text(link.get_text(" ", strip=True))
-            if fighter_id and fighter_id not in seen_ids:
-                seen_ids.add(fighter_id)
-                participants.append((fighter_name, fighter_id))
-        for side in missing_sides:
-            wanted = row.get(f"fighter_{side}")
-            exact = [fid for name, fid in participants if _normalize_fighter_name(name) == _normalize_fighter_name(wanted)]
-            if len(exact) == 1:
-                frame.at[index, f"fighter_{side}_id"] = exact[0]
-                continue
-            matched = [fid for name, fid in participants if same_person_name(wanted, name)]
-            if len(matched) == 1:
-                frame.at[index, f"fighter_{side}_id"] = matched[0]
-    return frame
-
-
 def _scraped_fights_to_training_rows(
     scraped_df: pd.DataFrame,
     *,
@@ -1668,9 +1451,7 @@ def _scraped_fights_to_training_rows(
 ) -> pd.DataFrame:
     """Convert raw scrape output into the normalized training schema."""
     fighter_lookup = fighter_lookup or {}
-    scraped_df = _attach_local_fighter_ids(scraped_df)
     rows: list[dict] = []
-    ambiguous_name_keys = _ambiguous_name_keys()
 
     for _, row in scraped_df.iterrows():
         event_date = pd.to_datetime(row.get("event_date"), errors="coerce", format="mixed")
@@ -1678,15 +1459,6 @@ def _scraped_fights_to_training_rows(
         fighter_b = row.get("fighter_b")
         if pd.isna(event_date) or pd.isna(fighter_a) or pd.isna(fighter_b):
             continue
-        fighter_a_id = normalize_ufcstats_id(row.get("fighter_a_id"))
-        fighter_b_id = normalize_ufcstats_id(row.get("fighter_b_id"))
-        for name, fighter_id in ((fighter_a, fighter_a_id), (fighter_b, fighter_b_id)):
-            if fighter_identity_key(
-                name, fighter_id, ambiguous_name_keys=ambiguous_name_keys
-            ) is None:
-                raise ValueError(
-                    f"unresolved ambiguous fighter identity for {name} on {event_date.date()}"
-                )
 
         weight_class, title_bout = _parse_weight_class(row.get("weight_class"))
         finish_round = _safe_int(row.get("round"))
@@ -1704,10 +1476,8 @@ def _scraped_fights_to_training_rows(
             "method": row.get("method"),
             "fighter_a": fighter_a,
             "fighter_b": fighter_b,
-            "fighter_a_id": fighter_a_id,
-            "fighter_b_id": fighter_b_id,
             "target": 1 if row.get("winner") == fighter_a else (0 if row.get("winner") == fighter_b else np.nan),
-            "title_bout": float(title_bout) if title_bout is not None else np.nan,
+            "title_bout": int(title_bout),
             "num_rounds": _infer_num_rounds(
                 title_bout=title_bout,
                 finish_round=finish_round,
@@ -1724,33 +1494,17 @@ def _scraped_fights_to_training_rows(
         }
         training_row.update(_extract_rate_features(row, fight_minutes=fight_minutes, prefix="a_", opp_prefix="b_"))
         training_row.update(_extract_rate_features(row, fight_minutes=fight_minutes, prefix="b_", opp_prefix="a_"))
-        training_row.update(
-            _extract_fighter_attributes(
-                fighter_a,
-                event_date,
-                fighter_lookup,
-                prefix="a_",
-                fighter_id=fighter_a_id,
-            )
-        )
-        training_row.update(
-            _extract_fighter_attributes(
-                fighter_b,
-                event_date,
-                fighter_lookup,
-                prefix="b_",
-                fighter_id=fighter_b_id,
-            )
-        )
+        training_row.update(_extract_fighter_attributes(fighter_a, event_date, fighter_lookup, prefix="a_"))
+        training_row.update(_extract_fighter_attributes(fighter_b, event_date, fighter_lookup, prefix="b_"))
         rows.append(training_row)
 
     return pd.DataFrame(rows)
 
 
-def _parse_weight_class(value) -> tuple[str | None, bool | None]:
+def _parse_weight_class(value) -> tuple[str | None, bool]:
     raw = "" if value is None or pd.isna(value) else str(value).strip()
     if not raw:
-        return None, None
+        return None, False
     title_bout = "title bout" in raw.casefold()
     cleaned = re.sub(r"title bout", "", raw, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bbout\b", "", cleaned, flags=re.IGNORECASE)
@@ -1797,7 +1551,7 @@ def _parse_scheduled_rounds(value) -> int | None:
 
 def _infer_num_rounds(
     *,
-    title_bout: bool | None,
+    title_bout: bool,
     finish_round: int | None,
     method,
     scheduled_rounds: int | None = None,
@@ -2228,35 +1982,13 @@ def _load_scraped_fighter_lookup(
 ) -> dict[str, dict]:
     """Load optional fighter profile data for static attributes like height and reach."""
     lookup: dict[str, dict] = {}
-    ambiguous_name_keys = _ambiguous_name_keys()
 
     def _merge_profile_row(row: pd.Series | dict) -> None:
         name_key = _normalize_name(row.get("name"))
         if not name_key:
             return
-        fighter_id = next(
-            (
-                candidate
-                for candidate in (
-                    normalize_ufcstats_id(row.get("fighter_id")),
-                    normalize_ufcstats_id(row.get("fighter_url")),
-                    normalize_ufcstats_id(row.get("ufcstats_url")),
-                )
-                if candidate
-            ),
-            None,
-        )
-        if fighter_identity_is_ambiguous(
-            row.get("name"), ambiguous_name_keys=ambiguous_name_keys
-        ) and not fighter_id:
-            return
         dob = pd.to_datetime(row.get("dob"), errors="coerce", format="mixed")
-        primary_key = f"ufcstats:{fighter_id}" if fighter_id else name_key
-        profile = lookup.setdefault(primary_key, _empty_profile_lookup_row())
-        if not fighter_identity_is_ambiguous(
-            row.get("name"), ambiguous_name_keys=ambiguous_name_keys
-        ):
-            lookup.setdefault(name_key, profile)
+        profile = lookup.setdefault(name_key, _empty_profile_lookup_row())
         merged_fields = {
             "height": _coerce_profile_height_cm(row.get("height")),
             "reach": _coerce_profile_reach_cm(row.get("reach")),
@@ -2416,18 +2148,8 @@ def _extract_fighter_attributes(
     fighter_lookup: dict[str, dict],
     *,
     prefix: str,
-    fighter_id: object = None,
 ) -> dict:
-    normalized_id = normalize_ufcstats_id(fighter_id)
-    profile = (
-        fighter_lookup.get(f"ufcstats:{normalized_id}")
-        if normalized_id
-        else None
-    )
-    if profile is None and not fighter_identity_is_ambiguous(
-        fighter_name, ambiguous_name_keys=_ambiguous_name_keys()
-    ):
-        profile = fighter_lookup.get(_normalize_name(fighter_name))
+    profile = fighter_lookup.get(_normalize_name(fighter_name))
     if not profile:
         return {}
 
@@ -2749,25 +2471,40 @@ def _aggregate_pulled_stats(stats_df: pd.DataFrame) -> dict[tuple[str, str, str]
                 lambda value: pd.Series(_parse_landed_attempted(value))
             )
         else:
-            frame[landed_col] = np.nan
-            frame[attempted_col] = np.nan
+            frame[landed_col] = 0.0
+            frame[attempted_col] = 0.0
 
-    frame["kd"] = frame.get("KD", pd.Series(np.nan, index=frame.index)).apply(_safe_number_or_nan)
-    frame["sub_att"] = frame.get("SUB.ATT", pd.Series(np.nan, index=frame.index)).apply(_safe_number_or_nan)
-    frame["rev"] = frame.get("REV.", pd.Series(np.nan, index=frame.index)).apply(_safe_number_or_nan)
-    frame["ctrl_seconds"] = frame.get("CTRL", pd.Series(np.nan, index=frame.index)).apply(_safe_clock_seconds)
+    frame["kd"] = frame["KD"].apply(_safe_number_or_zero)
+    frame["sub_att"] = frame["SUB.ATT"].apply(_safe_number_or_zero)
+    frame["rev"] = frame["REV."].apply(_safe_number_or_zero)
+    frame["ctrl_seconds"] = frame["CTRL"].apply(_safe_clock_seconds)
 
-    aggregate_columns = [
-        "kd", "sig_str_landed", "sig_str_attempted", "total_str_landed",
-        "total_str_attempted", "td_landed", "td_attempted", "sub_att", "rev",
-        "ctrl_seconds", "head_landed", "head_attempted", "body_landed",
-        "body_attempted", "leg_landed", "leg_attempted", "distance_landed",
-        "distance_attempted", "clinch_landed", "clinch_attempted",
-        "ground_landed", "ground_attempted",
-    ]
     grouped = (
-        frame.groupby(["__event_key", "__bout_key", "__fighter_key"], dropna=False)[aggregate_columns]
-        .sum(min_count=1)
+        frame.groupby(["__event_key", "__bout_key", "__fighter_key"], dropna=False)
+        .agg(
+            kd=("kd", "sum"),
+            sig_str_landed=("sig_str_landed", "sum"),
+            sig_str_attempted=("sig_str_attempted", "sum"),
+            total_str_landed=("total_str_landed", "sum"),
+            total_str_attempted=("total_str_attempted", "sum"),
+            td_landed=("td_landed", "sum"),
+            td_attempted=("td_attempted", "sum"),
+            sub_att=("sub_att", "sum"),
+            rev=("rev", "sum"),
+            ctrl_seconds=("ctrl_seconds", "sum"),
+            head_landed=("head_landed", "sum"),
+            head_attempted=("head_attempted", "sum"),
+            body_landed=("body_landed", "sum"),
+            body_attempted=("body_attempted", "sum"),
+            leg_landed=("leg_landed", "sum"),
+            leg_attempted=("leg_attempted", "sum"),
+            distance_landed=("distance_landed", "sum"),
+            distance_attempted=("distance_attempted", "sum"),
+            clinch_landed=("clinch_landed", "sum"),
+            clinch_attempted=("clinch_attempted", "sum"),
+            ground_landed=("ground_landed", "sum"),
+            ground_attempted=("ground_attempted", "sum"),
+        )
         .reset_index()
     )
 
@@ -2866,20 +2603,20 @@ def _parse_landed_attempted(value) -> tuple[float, float]:
         return float(match.group("landed")), float(match.group("attempted"))
     numeric = _safe_float(text)
     if numeric is None or np.isnan(numeric):
-        return np.nan, np.nan
+        return 0.0, 0.0
     return float(numeric), float(numeric)
 
 
-def _safe_number_or_nan(value) -> float:
+def _safe_number_or_zero(value) -> float:
     numeric = _safe_float(value)
     if numeric is None or np.isnan(numeric):
-        return np.nan
+        return 0.0
     return float(numeric)
 
 
 def _safe_clock_seconds(value) -> float:
     seconds = _clock_to_seconds(value)
-    return float(seconds) if seconds is not None and not pd.isna(seconds) else np.nan
+    return float(seconds) if seconds is not None and not pd.isna(seconds) else 0.0
 
 
 def _seconds_to_clock(value) -> str | None:

@@ -859,11 +859,7 @@ def test_pre_ufc_loader_quarantines_only_proven_ambiguous_identities(tmp_path):
     loaded = build_features_module._load_pre_ufc_supplement(supplement_path)
 
     assert ambiguous_names.isdisjoint(set(loaded["fighter"]))
-    # The checked-in fighter inventory contains distinct Lance Gibson and
-    # Lance Gibson Jr. UFCStats IDs, so name-only supplement rows now fail
-    # closed for this proven collision as well.
-    assert "Lance Gibson Jr." not in set(loaded["fighter"])
-    assert "Negative Control" in set(loaded["fighter"])
+    assert "Lance Gibson Jr." in set(loaded["fighter"])
 
 
 def test_build_features_pre_ufc_history_is_strictly_debut_bounded_and_nan_safe(
@@ -1207,8 +1203,6 @@ def test_full_live_contract_v4_unexpected_train_split_null_columns_do_not_expand
         "a_stance_enc", "b_stance_enc", "same_stance",
         # Context features
         "num_rounds_feat", "weight_class_enc",
-        # Debut weight-class movement has no prior class to compare against.
-        "a_wc_move", "b_wc_move", "diff_wc_move",
         # Style interaction edges propagate NaN from missing ko/sub/defense stats
         "a_striker_edge", "b_striker_edge", "diff_striker_edge",
         "a_grappler_edge", "b_grappler_edge", "diff_grappler_edge",

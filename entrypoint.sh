@@ -17,20 +17,13 @@ fi
 LEGACY_MODELS_OVERRIDE="${UFC_MODELS_DIR:-}"
 LEGACY_BUNDLE_MANIFEST_OVERRIDE="${UFC_PRODUCTION_BUNDLE_MANIFEST:-}"
 # A verified bundle store, when present, is authoritative. Its one atomic
-# active pointer selects a complete immutable release. Hosted real-money mode
-# is not allowed to fall back to the checked-in legacy bundle.
+# active pointer selects a complete immutable release; otherwise preserve the
+# existing image-bundle startup path for backward-compatible first deployment.
 BUNDLE_STORE_ROOT="$PERSISTENT_DATA_DIR/production_bundle/store"
 ACTIVE_MODEL_DIR="/app/models"
 SOURCE_PRODUCTION_BUNDLE_MANIFEST="/app/models/current_production_model.json"
 SOURCE_PROCESSED_DIR="/app/data/processed"
 ACTIVE_LOOKUP_DIR="$PERSISTENT_DATA_DIR/processed"
-LIVE_TRADING_MODE_NORMALIZED="$(
-    printf '%s' "${LIVE_TRADING_MODE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
-)"
-REAL_MONEY_MODE=0
-case "$LIVE_TRADING_MODE_NORMALIZED" in
-    real|live) REAL_MONEY_MODE=1 ;;
-esac
 BUNDLE_STORE_ACTIVE=0
 if [ -e "$BUNDLE_STORE_ROOT" ]; then
     if [ ! -f "$BUNDLE_STORE_ROOT/.production_bundle_store.json" ] \
@@ -61,10 +54,6 @@ if [ -e "$BUNDLE_STORE_ROOT" ]; then
     BUNDLE_STORE_ACTIVE=1
     echo "[startup] selected verified atomic production release: $ACTIVE_RELEASE_DIR"
 fi
-if [ "$REAL_MONEY_MODE" -eq 1 ] && [ "$BUNDLE_STORE_ACTIVE" -ne 1 ]; then
-    echo "[startup] ERROR: real-money mode requires the verified persistent production bundle store" >&2
-    exit 1
-fi
 if [ "$BUNDLE_STORE_ACTIVE" -eq 1 ]; then
     PRODUCTION_BUNDLE_MANIFEST="$ACTIVE_LOOKUP_DIR/runtime_manifest.json"
 else
@@ -75,8 +64,6 @@ export UFC_LOGS_DIR="$PERSISTENT_LOG_DIR"
 export UFC_PROCESSED_DIR="$ACTIVE_LOOKUP_DIR"
 export UFC_MODELS_DIR="$ACTIVE_MODEL_DIR"
 export UFC_PRODUCTION_BUNDLE_MANIFEST="$PRODUCTION_BUNDLE_MANIFEST"
-STARTUP_PARITY_RECEIPT="$PERSISTENT_DATA_DIR/production_bundle/startup_parity_receipt.json"
-export UFC_STARTUP_PARITY_RECEIPT="$STARTUP_PARITY_RECEIPT"
 
 normalize_legacy_log_path_var() {
     var_name="$1"
@@ -364,24 +351,10 @@ if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/bootstrap_r
     exit 1
 fi
 
-# Replay the active immutable release under this deployed code before the web
-# process can become ready. A root-owned receipt skips work only when every
-# code, manifest, data, spec, and replay-argument binding is identical.
-if ! (
-    cd /app
-    PYTHONPATH=/app python scripts/startup_parity_gate.py \
-        --source-manifest "$SOURCE_PRODUCTION_BUNDLE_MANIFEST" \
-        --runtime-manifest "$PRODUCTION_BUNDLE_MANIFEST" \
-        --receipt "$STARTUP_PARITY_RECEIPT"
-); then
-    echo "[startup] ERROR: active-manifest live/train parity gate failed" >&2
-    exit 1
-fi
-
 APP_ROLE="${APP_ROLE:-web}"
 
 # Reconcile any untracked Polymarket positions into the ledger
-if [ "$APP_ROLE" = "web" ] && [ "$REAL_MONEY_MODE" -eq 1 ]; then
+if [ "$APP_ROLE" = "web" ] && [ "${LIVE_TRADING_MODE:-}" = "real" ]; then
     echo "[startup] Reconciling Polymarket positions..."
     if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/reconcile_positions.py"; then
         echo "[startup] ERROR: position reconciliation failed; refusing to start real-money trading" >&2

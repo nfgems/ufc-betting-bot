@@ -16,7 +16,6 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 import numpy as np
 import requests
@@ -60,14 +59,7 @@ BFO_LATEST_URL = "https://www.bestfightodds.com/"
 METHOD_ODDS_SNAPSHOT_DIR = RAW_DATA_DIR / "method_odds"
 METHOD_ODDS_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
-SNAPSHOT_SCHEMA_VERSION = 2
-BFO_PARSER_CONTRACT = "bestfightodds_exact_matchup_v2"
-_BFO_SNAPSHOT_SOURCE_CONTRACTS = {
-    "bestfightodds": {"bestfightodds.com"},
-    "bestfightodds_recovery": {"bestfightodds.com"},
-    "wayback_bestfightodds_recovery": {"web.archive.org"},
-    "bestfightodds_v1_revalidated": {"bestfightodds.com", "web.archive.org"},
-}
+SNAPSHOT_SCHEMA_VERSION = 1
 _method_odds_snapshot_prune_lock = threading.Lock()
 _last_method_odds_snapshot_prune_monotonic = 0.0
 
@@ -475,51 +467,6 @@ def _load_snapshot(path: Path) -> Optional[dict]:
     return data
 
 
-def _record_has_v2_provenance(record: object) -> bool:
-    """Require auditable source identity before a v2 record reaches inference."""
-    if not isinstance(record, dict):
-        return False
-    fighter_a = str(record.get("fighter_a", "") or "").strip()
-    fighter_b = str(record.get("fighter_b", "") or "").strip()
-    if not fighter_a or not fighter_b:
-        return False
-    if str(record.get("fighter_a_norm", "") or "") != _normalize_name(fighter_a):
-        return False
-    if str(record.get("fighter_b_norm", "") or "") != _normalize_name(fighter_b):
-        return False
-    if _parse_datetime_like(record.get("captured_at")) is None:
-        return False
-    if _parse_datetime_like(record.get("commence_time")) is None:
-        return False
-
-    source = str(record.get("source", "") or "").strip()
-    allowed_hosts = _BFO_SNAPSHOT_SOURCE_CONTRACTS.get(source)
-    if not allowed_hosts:
-        return False
-    if str(record.get("parser_contract", "") or "") != BFO_PARSER_CONTRACT:
-        return False
-
-    source_url = str(record.get("source_url", "") or "").strip()
-    parsed_url = urlparse(source_url)
-    hostname = str(parsed_url.hostname or "").lower()
-    if parsed_url.scheme not in {"http", "https"}:
-        return False
-    if not any(hostname == host or hostname.endswith(f".{host}") for host in allowed_hosts):
-        return False
-
-    content_hash = str(
-        record.get("page_sha256") or record.get("payload_sha256") or ""
-    ).strip().lower()
-    return bool(re.fullmatch(r"[0-9a-f]{64}", content_hash))
-
-
-def _snapshot_has_v2_provenance(snapshot: dict) -> bool:
-    records = snapshot.get("records") or []
-    return isinstance(records, list) and all(
-        _record_has_v2_provenance(record) for record in records
-    )
-
-
 def _snapshot_is_stale_at(
     snapshot: dict,
     *,
@@ -751,17 +698,6 @@ def load_latest_method_odds_snapshot(
         snapshot = _load_snapshot(path)
         if snapshot is None:
             continue
-        # Schema-v1 records were collected by the markerless parser and cannot
-        # safely be consumed by inference.  Leave the files intact for audit
-        # purposes, but never reinterpret or migrate them implicitly.
-        if snapshot.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
-            continue
-        if not _snapshot_has_v2_provenance(snapshot):
-            logger.debug(
-                "Ignoring method-odds v2 snapshot with invalid record provenance: %s",
-                path,
-            )
-            continue
         if cutoff is not None:
             snapshot_time = _parse_datetime_like(snapshot.get("snapshot_time"))
             if snapshot_time is None or snapshot_time > cutoff:
@@ -835,9 +771,6 @@ def _snapshot_record(
     event_id: str = "",
     commence_time: str = "",
     event_title: str = "",
-    source_url: str = "",
-    page_sha256: str = "",
-    parser_contract: str = "",
 ) -> dict:
     return {
         "fighter_a": fighter_a,
@@ -848,9 +781,6 @@ def _snapshot_record(
         "commence_time": str(commence_time or ""),
         "event_title": str(event_title or ""),
         "source": source,
-        "source_url": str(source_url or ""),
-        "page_sha256": str(page_sha256 or ""),
-        "parser_contract": str(parser_contract or ""),
         "captured_at": captured_at,
         "method_odds": _jsonable_method_result(method_odds),
     }
@@ -1460,8 +1390,8 @@ def _bfo_exact_matchup_rows(
     if not marker_tables:
         return None
 
-    matched_ranges: list[tuple[int, int, int]] = []
-    for table_index, (rows, marker_indices) in enumerate(marker_tables):
+    matched_ranges: set[tuple[int, int, int]] = set()
+    for rows, marker_indices in marker_tables:
         for marker_position, start in enumerate(marker_indices):
             if start + 1 >= len(rows):
                 continue
@@ -1478,14 +1408,12 @@ def _bfo_exact_matchup_rows(
                 if marker_position + 1 < len(marker_indices)
                 else len(rows)
             )
-            matched_ranges.append((table_index, start, end))
+            matched_ranges.add((len(rows), start, end))
 
     if len(matched_ranges) != 1:
         return []
 
-    marker_table_index, start, end = matched_ranges[0]
-    marker_rows, _marker_indices = marker_tables[marker_table_index]
-    row_count = len(marker_rows)
+    row_count, start, end = matched_ranges.pop()
     scoped_rows = []
     for table in tables:
         rows = table.select("tr")
@@ -1511,8 +1439,11 @@ def _parse_bfo_method_odds(soup: BeautifulSoup, fighter_a: str, fighter_b: str) 
     """
     rows = _bfo_exact_matchup_rows(soup, fighter_a, fighter_b)
     if rows is None:
-        return None
-    if not rows:
+        page_text = soup.get_text(" ", strip=True)
+        if not (_names_match(fighter_a, page_text) and _names_match(fighter_b, page_text)):
+            return None
+        rows = soup.select("tr")
+    elif not rows:
         return None
 
     prob_lists = _collect_method_probs()
@@ -1621,7 +1552,6 @@ def _collect_bfo_records_for_event_group(
     event_url, soup = resolved
     records: list[dict] = []
     captured_at = _now_iso()
-    page_sha256 = hashlib.sha256(str(soup).encode("utf-8")).hexdigest()
 
     for fight in fights:
         fighter_a = str(fight.get("fighter_a", "") or "")
@@ -1643,9 +1573,6 @@ def _collect_bfo_records_for_event_group(
                 event_id=str(fight.get("event_id", "") or ""),
                 commence_time=str(fight.get("commence_time", "") or ""),
                 event_title=str(fight.get("event_title", "") or fight.get("event", "") or ""),
-                source_url=event_url,
-                page_sha256=page_sha256,
-                parser_contract=BFO_PARSER_CONTRACT,
             )
         )
 
@@ -1849,7 +1776,6 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
 
     snapshot = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
-        "parser_contracts": {"bestfightodds": BFO_PARSER_CONTRACT},
         "snapshot_time": _now_iso(),
         "status": snapshot_status,
         "record_count": len(records),

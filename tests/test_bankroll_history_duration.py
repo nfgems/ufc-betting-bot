@@ -5,7 +5,6 @@ import src.strategy.backtest as backtest
 import src.strategy.lab_stats as lab_stats
 import src.strategy.model_lab as model_lab
 import src.strategy.model_variants as model_variants
-import src.strategy.run_evaluation as run_evaluation
 
 
 def _make_model_lab_features_frame() -> pd.DataFrame:
@@ -93,22 +92,6 @@ def _make_model_lab_features_frame() -> pd.DataFrame:
             "seed_prob_b": 0.50,
         },
     ])
-    for window_start in ("2024-07-01", "2025-01-01"):
-        for offset in range(5):
-            event_date = pd.Timestamp(window_start) + pd.Timedelta(days=offset)
-            rows.append({
-                "event_date": event_date,
-                "fighter_a": f"Reserved A {event_date.date()}",
-                "fighter_b": f"Reserved B {event_date.date()}",
-                "target": offset % 2,
-                "dummy_feature": 200.0 + len(rows),
-                "a_num_fights": 5,
-                "b_num_fights": 5,
-                "a_market_prob": 0.50,
-                "b_market_prob": 0.50,
-                "seed_prob_a": 0.50,
-                "seed_prob_b": 0.50,
-            })
     return pd.DataFrame(rows)
 
 
@@ -171,11 +154,6 @@ def test_backtest_bankroll_history_counts_only_settled_bets(monkeypatch):
 
 
 def test_model_lab_drawdown_duration_counts_only_settled_bets(monkeypatch):
-    monkeypatch.setattr(
-        run_evaluation,
-        "_preflight_selection_fold_manifest",
-        lambda *_args, **_kwargs: "0" * 64,
-    )
     monkeypatch.setattr(model_lab, "_passes_filters", lambda *args, **kwargs: True)
     bankroll_manager_cls = model_lab.BankrollManager
     monkeypatch.setattr(

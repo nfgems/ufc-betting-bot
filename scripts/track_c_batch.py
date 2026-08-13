@@ -24,7 +24,6 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,17 +31,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import check_production_refit_contract as contract_gate
 from src import config as app_config
 from src.config import PROCESSED_DATA_DIR, TRAIN_CUTOFF_DATE
-from src.data.name_utils import fighter_identity_key
 from src.model.training_spec import resolve_named_training_spec
 from src.strategy.backtest import (
     BacktestExecutionConfig,
     BacktestStrategyConfig,
     run_walkforward_strategy_comparison,
-)
-from src.strategy.duo_trader_sweep import SweepConfig, _evaluate_config
-from src.strategy.runtime_strategy import (
-    canonical_json_sha256 as strategy_config_sha256,
-    validate_locked_strategy_config,
 )
 from src.strategy.value import NewbieRuleConfig
 
@@ -63,10 +56,6 @@ _EVALUATION_INDEX_COLUMNS = [
     "fold",
     "train_end",
     "test_end",
-]
-_METHOD_ODDS_COLUMNS = [
-    "a_ko_odds_prob", "a_sub_odds_prob", "a_dec_odds_prob",
-    "b_ko_odds_prob", "b_sub_odds_prob", "b_dec_odds_prob",
 ]
 
 
@@ -101,103 +90,6 @@ def _evaluation_sample_sha256(predictions: pd.DataFrame) -> str:
     sample = _canonical_evaluation_index(predictions)
     payload = sample.to_csv(index=False, lineterminator="\n").encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
-
-def _explicit_boolean_series(series: pd.Series, *, column: str) -> pd.Series:
-    """Materialize missing evidence as false without coercing malformed values."""
-    values: list[bool] = []
-    for value in series:
-        if isinstance(value, (bool, np.bool_)):
-            values.append(bool(value))
-            continue
-        if value is None or value is pd.NA or value is pd.NaT or (
-            np.isscalar(value) and bool(pd.isna(value))
-        ):
-            values.append(False)
-            continue
-        raise ValueError(
-            f"walk-forward predictions contain a non-boolean {column}: {value!r}"
-        )
-    return pd.Series(values, index=series.index, dtype=bool)
-
-
-def _build_data_quality_frame(predictions: pd.DataFrame) -> pd.DataFrame:
-    """Create one provenance row for every canonical evaluation fight."""
-    index = _canonical_evaluation_index(predictions)
-    source = predictions.copy()
-    source["event_date"] = pd.to_datetime(source["event_date"], errors="raise").dt.strftime("%Y-%m-%d")
-    merge_keys = ["event_date", "fighter_a", "fighter_b", "target", "fold", "train_end", "test_end"]
-    for column in ("train_end", "test_end"):
-        source[column] = pd.to_datetime(source[column], errors="raise").dt.strftime("%Y-%m-%d")
-    source["target"] = pd.to_numeric(source["target"], errors="raise").astype(int)
-    source["fold"] = pd.to_numeric(source["fold"], errors="raise").astype(int)
-
-    quality = index.copy()
-    optional = [
-        "fighter_a_id", "fighter_b_id",
-        "a_num_fights", "b_num_fights",
-        "entry_source_kind", "entry_source_file", "entry_observed_at", "entry_commence_time",
-        "entry_hours_to_start", "entry_verified_prefight",
-        "model_odds_source_kind", "model_odds_source_file", "model_odds_observed_at",
-        "model_odds_commence_time",
-        "model_odds_hours_to_start", "model_odds_verified_prefight",
-        "market_source_kind", "market_source_file", "market_observed_at", "market_commence_time",
-        "market_hours_to_start", "market_verified_prefight", "bet_eligible",
-        *_METHOD_ODDS_COLUMNS,
-    ]
-    present = [column for column in optional if column in source.columns]
-    quality = quality.merge(
-        source[merge_keys + present],
-        on=merge_keys,
-        how="left",
-        validate="one_to_one",
-    )
-    for column in ("fighter_a_id", "fighter_b_id"):
-        if column not in quality.columns:
-            quality[column] = ""
-    quality["fighter_a_identity_key"] = [
-        fighter_identity_key(name, fighter_id) or ""
-        for name, fighter_id in zip(
-            quality["fighter_a"], quality["fighter_a_id"], strict=True
-        )
-    ]
-    quality["fighter_b_identity_key"] = [
-        fighter_identity_key(name, fighter_id) or ""
-        for name, fighter_id in zip(
-            quality["fighter_b"], quality["fighter_b_id"], strict=True
-        )
-    ]
-    for column in ("a_num_fights", "b_num_fights"):
-        if column not in quality.columns:
-            quality[column] = float("nan")
-    for prefix in ("entry", "model_odds", "market"):
-        defaults = {
-            f"{prefix}_source_kind": "",
-            f"{prefix}_source_file": "",
-            f"{prefix}_observed_at": "",
-            f"{prefix}_commence_time": "",
-            f"{prefix}_hours_to_start": float("nan"),
-            f"{prefix}_verified_prefight": False,
-        }
-        for column, default in defaults.items():
-            if column not in quality.columns:
-                quality[column] = default
-    if "bet_eligible" not in quality.columns:
-        quality["bet_eligible"] = False
-    for column in (
-        "entry_verified_prefight",
-        "model_odds_verified_prefight",
-        "market_verified_prefight",
-        "bet_eligible",
-    ):
-        quality[column] = _explicit_boolean_series(quality[column], column=column)
-    available_method = [column for column in _METHOD_ODDS_COLUMNS if column in quality.columns]
-    quality["method_odds_complete"] = (
-        quality[available_method].notna().all(axis=1)
-        if len(available_method) == len(_METHOD_ODDS_COLUMNS)
-        else False
-    )
-    return quality.drop(columns=_METHOD_ODDS_COLUMNS, errors="ignore")
 
 
 def _legacy_protocol(
@@ -256,27 +148,12 @@ def _scheduled_strategy(policy: dict) -> tuple[BacktestStrategyConfig, BacktestE
     return strategy, execution
 
 
-def _confirmed_sweep_config(policy: dict) -> tuple[SweepConfig, str] | None:
-    confirmation = policy.get("performance_confirmation")
-    if not isinstance(confirmation, dict):
-        return None
-    config_payload = validate_locked_strategy_config(
-        confirmation.get("strategy_config")
-    )
-    actual_sha256 = strategy_config_sha256(config_payload)
-    if confirmation.get("strategy_config_sha256") != actual_sha256:
-        raise ValueError("confirmed Track C strategy hash does not reproduce")
-    normalized = dict(config_payload)
-    if normalized.get("c_max_decimal_odds") is None:
-        normalized["c_max_decimal_odds"] = float("inf")
-    return SweepConfig(**normalized), actual_sha256
-
-
 def _validate_scheduled_runtime_constants(policy: dict) -> None:
     """Fail if implicit strategy globals drift from the reviewed policy."""
 
     evaluation = policy["evaluation"]
     expected = {
+        "MODEL_AGREEMENT_MIN_EDGE": evaluation["model_agreement_min_edge"],
         "MIN_MODEL_PROB": evaluation["min_model_probability"],
         "BLEND_WEIGHT_MIN": evaluation["dynamic_blend_min"],
         "BLEND_WEIGHT_MAX": evaluation["dynamic_blend_max"],
@@ -285,17 +162,6 @@ def _validate_scheduled_runtime_constants(policy: dict) -> None:
         "LINE_MOVEMENT_FILTER": evaluation["line_movement_filter"],
         "MIN_FIGHTER_FIGHTS": evaluation["minimum_fighter_fights"],
     }
-    if "performance_confirmation" not in policy:
-        # Pre-confirmation Track C uses the legacy BacktestStrategyConfig and
-        # therefore still depends on these module defaults. Confirmed Track C
-        # injects the exact S thresholds through its locked SweepConfig.
-        expected.update(
-            {
-                "MODEL_AGREEMENT_MIN_EDGE": evaluation[
-                    "model_agreement_min_edge"
-                ],
-            }
-        )
     mismatches = []
     for name, expected_value in expected.items():
         actual = getattr(app_config, name)
@@ -348,11 +214,21 @@ def _load_or_rebuild_features(cache_path: Path) -> pd.DataFrame:
     logger.info("Rebuilding features from %d fights (this takes a while)...", len(fights))
     features_df = build_features(fights)
 
-    # The pinned feature snapshot may still supply the winner-derived label,
-    # but never market columns: scheduled evaluation prepares odds from
-    # verified historical observations immediately before prediction.
+    # The rebuilt frame lacks the consolidated odds overlays applied by
+    # ufc_refresh; graft the market columns from the pinned features.csv so
+    # odds features match production exactly.
     pinned = pd.read_csv(PROCESSED_DATA_DIR / "features.csv", parse_dates=["event_date"])
+    odds_cols = [
+        c for c in pinned.columns
+        if ("implied_prob" in c or "odds_prob" in c or c in ("a_odds", "b_odds"))
+    ]
     key = ["event_date", "fighter_a", "fighter_b"]
+    graft = pinned[key + [c for c in odds_cols if c in pinned.columns]]
+    features_df = features_df.drop(
+        columns=[c for c in odds_cols if c in features_df.columns]
+    ).merge(graft, on=key, how="left")
+
+    # Same for target (winner-derived label) when absent.
     if "target" not in features_df.columns and "target" in pinned.columns:
         features_df = features_df.merge(pinned[key + ["target"]], on=key, how="left")
 
@@ -393,7 +269,6 @@ def main(argv: list[str] | None = None) -> int:
     policy_sha256 = ""
     scheduled_strategy: BacktestStrategyConfig | None = None
     scheduled_execution: BacktestExecutionConfig | None = None
-    confirmed_sweep: tuple[SweepConfig, str] | None = None
     if args.scheduled_policy is not None:
         conflicting = []
         for name, value in (
@@ -426,10 +301,8 @@ def main(argv: list[str] | None = None) -> int:
         execution_mode = str(evaluation["execution_mode"])
         entry_offset_days = float(evaluation["entry_offset_days"])
         entry_offset_for_features = bool(evaluation["entry_offset_for_features"])
-        require_entry_odds = bool(evaluation.get("require_entry_odds", False))
         protocol = contract_gate.scheduled_protocol(policy)
         scheduled_strategy, scheduled_execution = _scheduled_strategy(policy)
-        confirmed_sweep = _confirmed_sweep_config(policy)
     else:
         specs = args.specs or list(DEFAULT_SPECS)
         retrain_months = int(args.retrain_months if args.retrain_months is not None else 6)
@@ -438,7 +311,6 @@ def main(argv: list[str] | None = None) -> int:
         execution_mode = args.execution_mode or "legacy"
         entry_offset_days = args.entry_offset_days
         entry_offset_for_features = bool(args.entry_offset_for_features)
-        require_entry_odds = False
         protocol = _legacy_protocol(
             retrain_months=retrain_months,
             model_seed=model_seed,
@@ -497,7 +369,6 @@ def main(argv: list[str] | None = None) -> int:
             "execution_mode": execution_mode,
             "entry_offset_days": entry_offset_days,
             "entry_offset_for_features": entry_offset_for_features,
-            "require_entry_odds": require_entry_odds,
         }
         if policy is not None:
             evaluation = policy["evaluation"]
@@ -528,10 +399,6 @@ def main(argv: list[str] | None = None) -> int:
             index=False,
             lineterminator="\n",
         )
-        quality_path = out_dir / f"{spec_name}_data_quality.csv"
-        quality_frame = _build_data_quality_frame(predictions)
-        quality_frame.to_csv(quality_path, index=False, lineterminator="\n")
-        data_quality_sha256 = _sha256_file(quality_path)
 
         row = {
             "spec": spec_name,
@@ -540,8 +407,6 @@ def main(argv: list[str] | None = None) -> int:
             "features_sha256": features_sha256,
             "protocol_sha256": protocol_sha256,
             "evaluation_sample_sha256": evaluation_sample_sha256,
-            "data_quality_sha256": data_quality_sha256,
-            "data_quality_rows": len(quality_frame),
             "model_seed": effective_model_seed,
             "odds_noise_seed": effective_noise_seed,
             "execution_mode": execution_mode,
@@ -551,42 +416,10 @@ def main(argv: list[str] | None = None) -> int:
         evaluation_window = predictive.get("evaluation_window", {})
         for key in ("start_date", "end_date", "n_fights", "n_folds"):
             row[f"evaluation_{key}"] = evaluation_window.get(key)
-        row["evaluation_excluded_draw_nc_dq"] = (
-            predictive.get("data_exclusions", {}).get("missing_binary_target_draw_nc_dq", 0)
-        )
         row.update({f"model_{key}": value for key, value in models.get("xgboost", {}).items()})
         blend = predictive.get("blend", {}).get("overall", {})
         row.update({f"blend_{key}": value for key, value in blend.items()})
-        confirmed_sweep_result = None
-        if confirmed_sweep is not None:
-            locked_config, locked_strategy_sha256 = confirmed_sweep
-            fold_predictions = [
-                (int(fold), frame.copy())
-                for fold, frame in predictions.groupby("fold", sort=True)
-            ]
-            confirmed_sweep_result = _evaluate_config(
-                fold_predictions,
-                locked_config,
-                initial_bankroll=float(policy["evaluation"]["initial_bankroll"]),
-                bet_start_date=str(policy["evaluation"]["bet_start_date"]),
-                execution_mode=execution_mode,
-                execution_config=scheduled_execution,
-            )
-            combined = confirmed_sweep_result["combined"]
-            row.update(
-                {
-                    "strategy_config_sha256": locked_strategy_sha256,
-                    "strategy_total_bets": combined["total_bets"],
-                    "strategy_win_rate": combined["win_rate"],
-                    "strategy_total_wagered": combined["total_wagered"],
-                    "strategy_roi": combined["roi"],
-                    "strategy_total_profit": combined["total_profit"],
-                    "strategy_avg_clv": combined["avg_clv"],
-                    "strategy_max_drawdown_pct": combined["max_drawdown_pct"],
-                    "strategy_execution_mode": execution_mode,
-                }
-            )
-        elif summary is not None and hasattr(summary, "empty") and not summary.empty:
+        if summary is not None and hasattr(summary, "empty") and not summary.empty:
             gated = summary[summary["strategy"] == "production_gated"]
             if not gated.empty:
                 gated_row = gated.iloc[0]
@@ -609,28 +442,15 @@ def main(argv: list[str] | None = None) -> int:
         with (out_dir / f"{spec_name}_predictive.json").open("w", encoding="utf-8") as handle:
             json.dump(predictive, handle, indent=2, default=str)
         production_log_written = False
-        if confirmed_sweep_result is not None:
-            bet_log = confirmed_sweep_result["bet_log"].copy()
-            bet_log["strategy"] = "production_gated"
-            bet_log["execution_mode"] = execution_mode
-            bet_log.to_csv(
-                out_dir / f"{spec_name}_production_gated_bets.csv",
-                index=False,
-                lineterminator="\n",
-            )
-            production_log_written = True
-        else:
-            for strategy_name, strategy_result in result.get("strategy_results", {}).items():
-                bet_log = strategy_result.get("bet_log")
-                if isinstance(bet_log, pd.DataFrame):
-                    bet_log.to_csv(
-                        out_dir / f"{spec_name}_{strategy_name}_bets.csv",
-                        index=False,
-                        lineterminator="\n",
-                    )
-                    production_log_written = (
-                        production_log_written or strategy_name == "production_gated"
-                    )
+        for strategy_name, strategy_result in result.get("strategy_results", {}).items():
+            bet_log = strategy_result.get("bet_log")
+            if isinstance(bet_log, pd.DataFrame):
+                bet_log.to_csv(
+                    out_dir / f"{spec_name}_{strategy_name}_bets.csv",
+                    index=False,
+                    lineterminator="\n",
+                )
+                production_log_written = production_log_written or strategy_name == "production_gated"
         if not production_log_written:
             pd.DataFrame().to_csv(
                 out_dir / f"{spec_name}_production_gated_bets.csv",
