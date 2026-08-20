@@ -108,7 +108,7 @@ def test_runtime_binding_requires_and_matches_both_deployed_hashes():
     ]
 
 
-def test_tapology_probe_proves_403_circuit_suppression_and_real_recovery(monkeypatch):
+def test_tapology_probe_proves_reader_wide_circuit_suppression_and_real_recovery(monkeypatch):
     monkeypatch.setenv("RAILWAY_PROJECT_ID", "project")
     monkeypatch.setattr(railway_probe.fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
     monkeypatch.setattr(
@@ -190,7 +190,9 @@ def test_tapology_probe_proves_403_circuit_suppression_and_real_recovery(monkeyp
 
     assert summary["ok"] is True
     assert summary["injected_status_count"] == 1
-    assert summary["circuit_opened_after_synthetic_403"] is True
+    assert summary["synthetic_reader_wide_status_code"] == 401
+    assert "status 401" in summary["circuit_open_error"]
+    assert summary["circuit_opened_after_synthetic_reader_wide_status"] is True
     assert summary["circuit_suppressed_request_while_open"] is True
     assert summary["circuit_recovered_through_real_request"] is True
     assert summary["reader_profile_request_count"] == 1
