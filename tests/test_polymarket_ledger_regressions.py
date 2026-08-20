@@ -415,7 +415,7 @@ def test_cancel_all_stale_limit_bids_includes_all_ledgers(monkeypatch, tmp_path)
     ]
 
 
-def test_fetch_wallet_positions_for_reconciliation_reuses_cache_after_429(monkeypatch):
+def test_fetch_wallet_positions_for_reconciliation_rejects_expired_cache_after_429(monkeypatch):
     wallet = "0xabc"
     cached_positions = [{"asset": "token-1", "size": "2"}]
     executor_module._WALLET_POSITION_FETCH_CACHE.clear()
@@ -436,8 +436,24 @@ def test_fetch_wallet_positions_for_reconciliation_reuses_cache_after_429(monkey
 
     result = executor_module._fetch_wallet_positions_for_reconciliation(wallet)
 
-    assert result == cached_positions
+    assert result is None
     assert executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] == pytest.approx(215.0)
+
+
+def test_fetch_wallet_positions_for_reconciliation_reuses_fresh_cache_without_network(monkeypatch):
+    wallet = "0xabc"
+    cached_positions = [{"asset": "token-1", "size": "2"}]
+    executor_module._WALLET_POSITION_FETCH_CACHE.clear()
+    executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL.clear()
+    executor_module._WALLET_POSITION_FETCH_CACHE[wallet] = (150.0, cached_positions)
+
+    def _unexpected_get(*args, **kwargs):
+        raise AssertionError("network should not be called while the cache is fresh")
+
+    monkeypatch.setattr(executor_module.time, "monotonic", lambda: 200.0)
+    monkeypatch.setattr(executor_module.requests, "get", _unexpected_get)
+
+    assert executor_module._fetch_wallet_positions_for_reconciliation(wallet) == cached_positions
 
 
 @pytest.mark.parametrize("status_code", [408, 530])
@@ -480,6 +496,31 @@ def test_fetch_wallet_positions_for_reconciliation_skips_network_during_cooldown
     wallet = "0xabc"
     executor_module._WALLET_POSITION_FETCH_CACHE.clear()
     executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL.clear()
+    executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] = 130.0
+
+    calls: list[int] = []
+
+    def _unexpected_get(*args, **kwargs):
+        calls.append(1)
+        raise AssertionError("network should not be called during cooldown")
+
+    monkeypatch.setattr(executor_module.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(executor_module.requests, "get", _unexpected_get)
+
+    assert executor_module._fetch_wallet_positions_for_reconciliation(wallet) is None
+    assert calls == []
+
+
+def test_fetch_wallet_positions_for_reconciliation_rejects_expired_cache_during_cooldown(
+    monkeypatch,
+):
+    wallet = "0xabc"
+    executor_module._WALLET_POSITION_FETCH_CACHE.clear()
+    executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL.clear()
+    executor_module._WALLET_POSITION_FETCH_CACHE[wallet] = (
+        0.0,
+        [{"asset": "token-1", "size": "2"}],
+    )
     executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] = 130.0
 
     calls: list[int] = []
