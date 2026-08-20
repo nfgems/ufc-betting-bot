@@ -35,6 +35,7 @@ from src.data.name_utils import normalize_cross_source_name  # noqa: E402
 
 TAPOLOGY_PROBE_NAME = "Ian Garry"
 TAPOLOGY_PROFILE_PATH = "/fightcenter/fighters/171377-ian-garry"
+TAPOLOGY_READER_WIDE_PROBE_STATUS_CODE = 401
 FIGHTDX_PROBE_NAME = "Felix Klinkhammer"
 FIGHTDX_PROFILE_PATH = "/person/felix-klinkhammer"
 
@@ -244,7 +245,7 @@ def _tapology_probe() -> dict[str, Any]:
     discovery_diagnostics: dict[str, object] = {}
     with _trace_real_requests(
         inject_one_status_for_path="r.jina.ai/https://www.tapology.com/search",
-        injected_status_code=403,
+        injected_status_code=TAPOLOGY_READER_WIDE_PROBE_STATUS_CODE,
     ) as trace:
         try:
             fallback_scrapers._get_tapology_search_markdown_with_reader(search_url)
@@ -338,7 +339,8 @@ def _tapology_probe() -> dict[str, Any]:
         "published_physical_fields": published_physical_fields,
         "discovery_diagnostics": discovery_diagnostics,
         "circuit_check_ok": circuit_check_ok,
-        "circuit_opened_after_synthetic_403": circuit_opened,
+        "synthetic_reader_wide_status_code": TAPOLOGY_READER_WIDE_PROBE_STATUS_CODE,
+        "circuit_opened_after_synthetic_reader_wide_status": circuit_opened,
         "circuit_suppressed_request_while_open": suppression_preserved_attempt_count,
         "circuit_recovered_through_real_request": circuit_recovered,
         "circuit_open_error": circuit_error,

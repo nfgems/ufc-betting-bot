@@ -3297,6 +3297,56 @@ def test_build_tapology_row_stops_after_reader_runtime_block(monkeypatch):
     assert scraped_urls == [blocked_url]
 
 
+def test_tapology_healthy_zero_result_is_missing_profile_not_source_error(
+    tmp_path,
+    monkeypatch,
+):
+    scraped_path = tmp_path / "fighters.csv"
+    output_path = tmp_path / "supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Profileless Fighter",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(scraped_path, index=False)
+
+    def healthy_empty_search(_name, limit=5, diagnostics=None):
+        diagnostics.update(
+            {
+                "healthy": True,
+                "candidate_count": 0,
+                "attempts": [
+                    {"channel": "reader", "query": _name, "result": "no_results"}
+                ],
+            }
+        )
+        return []
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_tapology_candidates",
+        healthy_empty_search,
+    )
+
+    summary = external_profiles.run_profile_supplement_refresh(
+        scraped_fighters_path=scraped_path,
+        output_path=output_path,
+        sources=["tapology"],
+        limit=1,
+    )
+
+    assert summary["attempted_rows"] == 1
+    assert summary["recovered_rows"] == 0
+    assert summary["source_errors"]["tapology"] == 0
+    assert summary["source_error_count"] == 0
+
+
 def test_tapology_discovery_failure_is_unhealthy_and_not_a_healthy_empty(monkeypatch):
     fallback_scrapers.clear_fallback_cache()
     monkeypatch.setattr(fallback_scrapers, "_tapology_prefer_reader", lambda: False)
@@ -6715,19 +6765,28 @@ def test_tapology_reader_403_recovers_with_single_no_cache_attempt(
     assert fallback_scrapers._tapology_reader_unavailable is False
 
 
-def test_tapology_reader_repeated_403_opens_circuit_after_two_requests(monkeypatch):
+def test_tapology_reader_repeated_403_stays_target_scoped(monkeypatch):
     calls = []
+    search_markdown = """
+    Title: Search Fighters, Bouts & Events | Tapology
+    Search Results (1)
+    | [Steve Nelmark](https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman) |
+    """
 
     class _FakeResponse:
-        status_code = 403
-        text = ""
+        def __init__(self, status_code, text=""):
+            self.status_code = status_code
+            self.text = text
 
         def raise_for_status(self):
-            raise requests.HTTPError("status 403")
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"status {self.status_code}")
 
     def fake_get(url, **kwargs):
         calls.append((url, kwargs))
-        return _FakeResponse()
+        if "Harrison+Garcia" in url:
+            return _FakeResponse(403)
+        return _FakeResponse(200, search_markdown)
 
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_API_KEY", "")
@@ -6736,22 +6795,36 @@ def test_tapology_reader_repeated_403_opens_circuit_after_two_requests(monkeypat
     monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
     fallback_scrapers.clear_fallback_cache()
 
-    with pytest.raises(fallback_scrapers.TapologyRequestError) as exc_info:
-        fallback_scrapers._get_tapology_search_markdown_with_reader(
-            "https://www.tapology.com/search?term=Ian+Garry"
-        )
+    first_result = fallback_scrapers._search_tapology_candidates_with_reader(
+        "Harrison Garcia",
+        "Harrison Garcia",
+        scored_urls={},
+    )
+    later_urls = {}
+    later_result = fallback_scrapers._search_tapology_candidates_with_reader(
+        "Steve Nelmark",
+        "Steve Nelmark",
+        scored_urls=later_urls,
+    )
 
-    assert exc_info.value.status_code == 403
+    assert first_result.startswith("failed:")
+    assert "status 403" in first_result
+    assert later_result == "scored"
+    assert set(later_urls) == {
+        "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
+    }
     assert [call[1].get("headers") for call in calls] == [
         None,
         {"x-no-cache": "true"},
+        None,
     ]
     base_reader_url = (
-        "https://r.jina.ai/https://www.tapology.com/search?term=Ian+Garry"
+        "https://r.jina.ai/https://www.tapology.com/search?term=Harrison+Garcia"
     )
     assert calls[0][0] == base_reader_url
     assert calls[1][0] == base_reader_url
-    assert fallback_scrapers._tapology_reader_unavailable is True
+    assert fallback_scrapers._tapology_reader_unavailable is False
+    assert fallback_scrapers._tapology_reader_unavailable_until == 0.0
 
 
 def test_tapology_reader_401_disables_reader_without_retry_storm(monkeypatch):
@@ -6904,10 +6977,11 @@ def test_tapology_reader_circuit_reprobes_and_recovers_after_cooldown(monkeypatc
     def fake_get(url, **kwargs):
         calls.append((url, kwargs))
         if len(calls) <= 2:
-            return _FakeResponse(403)
+            return _FakeResponse(451)
         return _FakeResponse(200, search_markdown)
 
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_MAX_RETRIES", 1)
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS", 10.0)
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", 0.0)
     monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
@@ -7008,11 +7082,11 @@ def test_search_tapology_reader_block_skips_useless_discovery_when_origin_disabl
     calls = []
 
     class _BlockedResponse:
-        status_code = 403
+        status_code = 401
         text = ""
 
         def raise_for_status(self):
-            exc = requests.HTTPError("status 403")
+            exc = requests.HTTPError("status 401")
             exc.response = self
             raise exc
 
@@ -7037,7 +7111,7 @@ def test_search_tapology_reader_block_skips_useless_discovery_when_origin_disabl
     base_reader_url = (
         "https://r.jina.ai/https://www.tapology.com/search?term=Steve+Nelmark"
     )
-    assert calls == [base_reader_url, base_reader_url]
+    assert calls == [base_reader_url]
     warning_messages = [record.getMessage() for record in caplog.records]
     assert len(warning_messages) == 1
     assert "reader circuit opened" in warning_messages[0]

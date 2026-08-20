@@ -92,7 +92,7 @@ TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 TAPOLOGY_READER_MAX_RETRIES = 3
 _TAPOLOGY_READER_IMMEDIATE_BLOCK_STATUSES = {401}
-_TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES = {401, 403, 451}
+_TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES = {401, 451}
 MARTIALBOT_REQUEST_DELAY = 1.5
 BRAVE_SEARCH_HTML_URL = "https://search.brave.com/search"
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
@@ -851,10 +851,6 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
                     )
                     break
                 if response.status_code == 403:
-                    _mark_tapology_reader_unavailable(
-                        response.status_code,
-                        "reader fallback unavailable",
-                    )
                     raise last_error from exc
                 if _tapology_reader_status_blocks_immediately(response.status_code):
                     _mark_tapology_reader_unavailable(
@@ -908,7 +904,6 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
                     )
                     break
                 if invalid_status == 403:
-                    _mark_tapology_reader_unavailable(invalid_status, invalid_detail)
                     raise last_error
                 if _tapology_reader_status_blocks_immediately(invalid_status):
                     _mark_tapology_reader_unavailable(invalid_status, invalid_detail)
@@ -1030,10 +1025,6 @@ def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
                     )
                     break
                 if response.status_code == 403:
-                    _mark_tapology_reader_unavailable(
-                        response.status_code,
-                        "reader search unavailable",
-                    )
                     raise last_error from exc
                 if _tapology_reader_status_blocks_immediately(response.status_code):
                     _mark_tapology_reader_unavailable(
@@ -1087,7 +1078,6 @@ def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
                     )
                     break
                 if invalid_status == 403:
-                    _mark_tapology_reader_unavailable(invalid_status, invalid_detail)
                     raise last_error
                 if _tapology_reader_status_blocks_immediately(invalid_status):
                     _mark_tapology_reader_unavailable(invalid_status, invalid_detail)
@@ -1134,7 +1124,7 @@ def _search_tapology_candidates_with_reader(
         if _tapology_reader_error_opens_circuit(exc):
             return "runtime_block"
         logger.info("Tapology reader search failed for %s: %s", search_url, exc)
-        return "failed"
+        return f"failed:{exc}"
 
     result_count = _tapology_reader_search_result_count(markdown)
     if result_count == 0:

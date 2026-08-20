@@ -273,12 +273,14 @@ def _fetch_wallet_positions_for_reconciliation(wallet_address: str) -> list[dict
     rate_limited_until = _WALLET_POSITION_RATE_LIMIT_UNTIL.get(wallet, 0.0)
     if now < rate_limited_until:
         if cached_entry is not None:
-            cached_at, cached_positions = cached_entry
+            cached_at, _cached_positions = cached_entry
             logger.warning(
-                "Polymarket positions endpoint still rate-limited; reusing cached wallet positions from %.0fs ago",
+                "Polymarket positions endpoint still rate-limited; cached wallet positions from %.0fs ago "
+                "exceed the %.0fs freshness limit, so reconciliation will be skipped",
                 now - cached_at,
+                _WALLET_POSITION_CACHE_TTL_SECONDS,
             )
-            return list(cached_positions)
+            return None
         logger.warning(
             "Skipping wallet-position reconciliation fetch: Polymarket positions endpoint still rate-limited for %.0fs",
             rate_limited_until - now,
@@ -340,12 +342,22 @@ def _fetch_wallet_positions_for_reconciliation(wallet_address: str) -> list[dict
     cached_entry = _WALLET_POSITION_FETCH_CACHE.get(wallet)
     if cached_entry is not None:
         cached_at, cached_positions = cached_entry
+        cache_age_seconds = time.monotonic() - cached_at
+        if cache_age_seconds <= _WALLET_POSITION_CACHE_TTL_SECONDS:
+            logger.warning(
+                "Failed to fetch wallet positions for reconciliation; reusing cached snapshot from %.0fs ago: %s",
+                cache_age_seconds,
+                last_exc or "rate limited",
+            )
+            return list(cached_positions)
         logger.warning(
-            "Failed to fetch wallet positions for reconciliation; reusing cached snapshot from %.0fs ago: %s",
-            time.monotonic() - cached_at,
+            "Failed to fetch wallet positions for reconciliation; cached snapshot from %.0fs ago "
+            "exceeds the %.0fs freshness limit, so reconciliation will be skipped: %s",
+            cache_age_seconds,
+            _WALLET_POSITION_CACHE_TTL_SECONDS,
             last_exc or "rate limited",
         )
-        return list(cached_positions)
+        return None
 
     if cooldown_seconds > 0:
         logger.warning(
