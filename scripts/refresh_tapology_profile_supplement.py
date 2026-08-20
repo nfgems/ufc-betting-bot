@@ -49,7 +49,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SCRAPED_FIGHTERS_PATH = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
 DEFAULT_PROFILE_SUPPLEMENT_PATH = RAW_DATA_DIR / "ufc_fighters_profile_supplement.csv"
-DEFAULT_PROBE_NAME = "Andre Fili"
+DEFAULT_PROBE_NAME = "Feng Pengchao"
+DEFAULT_PROBE_URL = (
+    "https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger"
+)
 PROFILE_FIELDS = ("height", "reach", "weight", "dob")
 _HOSTED_ORIGINAL_PROFILE_STATUS_COLUMN = "_hosted_original_profile_status"
 _HOSTED_CURRENT_VERIFICATION_BLOCK_COLUMN = (
@@ -152,6 +155,31 @@ def _profile_status_is_blank_or_unknown(
 ) -> bool:
     status_key = _normalized_status_key(row.get("profile_status"))
     return status_key in {"", "status unknown"}
+
+
+def _row_is_unverified_hollow_zero_record(
+    row: pd.Series | dict[str, object],
+) -> bool:
+    """Identify archive-only rows with no evidence of an MMA fighter profile."""
+    return (
+        _normalized_status_key(row.get("profile_status")) == "active"
+        and _normalized_status_key(row.get("record"))
+        in {"0 0 0", "0 0 0 w l d"}
+        and _normalized_status_key(row.get("combat_sport")) == "mma"
+        and not _optional_cell_text(row.get("combat_sport_reason"))
+        and all(
+            not _optional_cell_text(row.get(column))
+            for column in (
+                "profile_record",
+                "birthplace",
+                "height",
+                "reach",
+                "weight",
+                "ufcstats_name",
+                "ufcstats_url",
+            )
+        )
+    )
 
 
 def _verified_candidate_row_count(candidate_df: pd.DataFrame) -> int:
@@ -387,6 +415,7 @@ def _probe_failure_kind(errors: list[str]) -> str:
         or "rate limit" in detail
         or "too many requests" in detail
         or "blocked" in detail
+        or "runtime_block" in detail
     ):
         return "hosted_egress_blocked"
     if "timed out" in detail or "connection" in detail:
@@ -413,7 +442,7 @@ def _profile_refresh_failure_kind(refresh_summary: dict[str, object]) -> str:
 def probe_tapology_access(
     *,
     fighter_name: str = DEFAULT_PROBE_NAME,
-    fighter_url: str = "",
+    fighter_url: str = DEFAULT_PROBE_URL,
 ) -> dict[str, object]:
     clear_fallback_cache(preserve_environment_blocks=False)
     discovery_errors: list[str] = []
@@ -649,9 +678,24 @@ def _prioritize_current_card_candidates(
     # candidate artifact.
     candidate_df["active_roster_current_verified"] = False
     current_verified_rows = 0
+    hollow_quarantined_names: list[str] = []
     for index, row in candidate_df.iterrows():
         if _row_has_hard_current_verification_block(row):
             candidate_df.at[index, "coverage_eligible"] = False
+            continue
+        if (
+            _row_is_unverified_hollow_zero_record(row)
+            and index not in current_verified_indices
+        ):
+            candidate_df.at[index, "coverage_eligible"] = False
+            candidate_df.at[index, "active_roster_status_reason"] = (
+                "unverified_hollow_zero_record_not_on_current_card"
+            )
+            fighter_name = _optional_cell_text(row.get("official_name"))
+            if not fighter_name:
+                fighter_name = _optional_cell_text(row.get("name"))
+            if fighter_name:
+                hollow_quarantined_names.append(fighter_name)
             continue
         if (
             index not in current_verified_indices
@@ -698,6 +742,10 @@ def _prioritize_current_card_candidates(
         "upcoming_fighter_names": int(len(upcoming_keys)),
         "matched_candidate_rows": int(upcoming_mask.sum()),
         "current_card_verified_rows": int(current_verified_rows),
+        "hollow_zero_record_quarantined_rows": int(
+            len(hollow_quarantined_names)
+        ),
+        "hollow_zero_record_quarantined_names": hollow_quarantined_names,
         "verified_candidate_rows": int(verified_candidate_rows),
         **identity_summary,
         "output_path": str(output_path),
@@ -876,7 +924,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--probe-only", action="store_true")
     parser.add_argument("--probe-name", default=DEFAULT_PROBE_NAME)
-    parser.add_argument("--probe-url", default="")
+    parser.add_argument("--probe-url", default=DEFAULT_PROBE_URL)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
 

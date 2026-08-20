@@ -46,6 +46,44 @@ def _args(tmp_path: Path, **overrides) -> Namespace:
     return Namespace(**values)
 
 
+def test_standalone_probe_defaults_to_known_feng_profile(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(hosted_refresh, "clear_fallback_cache", lambda **_kwargs: None)
+
+    def fake_search(name, limit=3, *, diagnostics=None):
+        seen["name"] = name
+        diagnostics.update(
+            {
+                "healthy": True,
+                "candidate_count": 1,
+                "attempts": [
+                    {"channel": "reader", "query": name, "result": "scored"}
+                ],
+            }
+        )
+        return [hosted_refresh.DEFAULT_PROBE_URL]
+
+    monkeypatch.setattr(hosted_refresh, "search_tapology_candidates", fake_search)
+
+    def fake_scrape(url):
+        seen["url"] = url
+        return {"name": "Pengchao Feng", "height": 180.0}
+
+    monkeypatch.setattr(
+        hosted_refresh,
+        "scrape_tapology_profile",
+        fake_scrape,
+    )
+
+    summary = hosted_refresh.probe_tapology_access()
+
+    assert summary["ok"] is True
+    assert seen == {
+        "name": hosted_refresh.DEFAULT_PROBE_NAME,
+        "url": hosted_refresh.DEFAULT_PROBE_URL,
+    }
+
+
 @pytest.mark.parametrize(
     "false_value",
     [False, 0, 0.0, "0", "0.0", "0.00", "0e0", "-0.0"],
@@ -325,6 +363,13 @@ def test_hosted_refresh_marks_candidate_source_error_unhealthy(tmp_path, monkeyp
     [
         ("request timed out", "network_unavailable"),
         ("status 429: too many requests", "hosted_egress_blocked"),
+        (
+            "Tapology request failed for Harrison Garcia: Tapology discovery unavailable: "
+            "[{'channel': 'reader', 'query': 'Harrison Garcia', 'result': 'runtime_block'}, "
+            "{'channel': 'site_search', 'query': 'Harrison Garcia', "
+            "'result': 'unavailable_or_no_results'}]",
+            "hosted_egress_blocked",
+        ),
         ("profile parsed without a fighter identity", "profile_fetch_or_parse_failed"),
     ],
 )
@@ -738,6 +783,98 @@ def test_unbooked_blank_roster_row_stays_blocked(tmp_path, monkeypatch):
     assert not hosted_refresh._coverage_enabled(candidate["coverage_eligible"])
     assert not _candidate_source_row_is_coverage_eligible(candidate.to_dict())
     assert summary["current_card_verified_rows"] == 0
+
+
+def test_unbooked_hollow_zero_record_active_row_is_quarantined(
+    tmp_path,
+    monkeypatch,
+):
+    source_path = tmp_path / "roster.csv"
+    output_path = tmp_path / "candidates.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Hollow Archive Fighter",
+                "profile_status": "Active",
+                "record": "0-0-0 (W-L-D)",
+                "profile_record": "",
+                "birthplace": "",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "ufcstats_name": "",
+                "ufcstats_url": "",
+                "combat_sport": "mma",
+                "combat_sport_reason": "",
+                "coverage_eligible": True,
+            }
+        ]
+    ).to_csv(source_path, index=False)
+    monkeypatch.setattr(
+        hosted_refresh,
+        "_load_upcoming_fighter_names",
+        lambda: (["Different Fighter"], 1),
+    )
+
+    prioritized_path, summary = hosted_refresh._prioritize_current_card_candidates(
+        source_path,
+        output_path=output_path,
+    )
+
+    candidate = pd.read_csv(prioritized_path).iloc[0]
+    assert not hosted_refresh._coverage_enabled(candidate["coverage_eligible"])
+    assert candidate["active_roster_status_reason"] == (
+        "unverified_hollow_zero_record_not_on_current_card"
+    )
+    assert summary["hollow_zero_record_quarantined_rows"] == 1
+    assert summary["hollow_zero_record_quarantined_names"] == [
+        "Hollow Archive Fighter"
+    ]
+    assert summary["verified_candidate_rows"] == 0
+
+
+def test_booked_hollow_zero_record_active_row_remains_eligible(
+    tmp_path,
+    monkeypatch,
+):
+    source_path = tmp_path / "roster.csv"
+    output_path = tmp_path / "candidates.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Booked Newcomer",
+                "profile_status": "Active",
+                "record": "0-0-0 (W-L-D)",
+                "profile_record": "",
+                "birthplace": "",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "ufcstats_name": "",
+                "ufcstats_url": "",
+                "combat_sport": "mma",
+                "combat_sport_reason": "",
+                "coverage_eligible": True,
+            }
+        ]
+    ).to_csv(source_path, index=False)
+    monkeypatch.setattr(
+        hosted_refresh,
+        "_load_upcoming_fighter_names",
+        lambda: (["Booked Newcomer"], 1),
+    )
+
+    prioritized_path, summary = hosted_refresh._prioritize_current_card_candidates(
+        source_path,
+        output_path=output_path,
+    )
+
+    candidate = pd.read_csv(prioritized_path).iloc[0]
+    assert hosted_refresh._coverage_enabled(candidate["coverage_eligible"])
+    assert summary["hollow_zero_record_quarantined_rows"] == 0
+    assert summary["hollow_zero_record_quarantined_names"] == []
+    assert summary["unambiguous_current_card_matches"] == 1
+    assert summary["verified_candidate_rows"] == 1
 
 
 @pytest.mark.parametrize(
