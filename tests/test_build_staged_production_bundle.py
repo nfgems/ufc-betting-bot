@@ -88,8 +88,10 @@ def _model_result(spec: dict) -> dict:
 
 
 @pytest.fixture
-def staged_inputs(tmp_path: Path, monkeypatch):
-    repo = tmp_path / "repo"
+def staged_inputs(tmp_path_factory, monkeypatch):
+    # Keep the nested atomic-copy destination below the practical Windows path
+    # limit while still using pytest's repository-local configured basetemp.
+    repo = tmp_path_factory.mktemp("bundle") / "repo"
     (repo / "src").mkdir(parents=True)
     (repo / "scripts").mkdir()
     source_odds = Path(__file__).resolve().parents[1] / "data/raw/historical_odds"
@@ -231,6 +233,7 @@ def staged_inputs(tmp_path: Path, monkeypatch):
     features["fighter_a"] = ["A", "C"]
     features["fighter_b"] = ["B", "D"]
     features["winner"] = ["A", "D"]
+    audit_features = features.copy(deep=True)
     fights = pd.DataFrame(
         {
             "event_date": ["2026-07-25", "2026-08-01"],
@@ -244,7 +247,6 @@ def staged_inputs(tmp_path: Path, monkeypatch):
     fights.to_csv(processed_dir / "fights_cleaned.csv", index=False)
     features.to_csv(processed_dir / "features.csv", index=False)
     audit_fights = fights.copy()
-    audit_features = features.copy()
     audit_fights.loc[0, "pace_metric"] += 5e-13
     audit_features.loc[0, feature_cols[0]] += 5e-13
     audit_fights.to_csv(audit_dir / "fights_cleaned.csv", index=False)
