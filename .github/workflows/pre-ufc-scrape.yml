@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: weekly-pre-ufc-scrape
+  cancel-in-progress: false
+
 env:
   PYTHONPATH: .
 
@@ -27,14 +31,60 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run pre-UFC supplement scraper
-        run: python scripts/build_pre_ufc_career_supplement.py --resume
-
-      - name: Commit updated supplement if changed
+      - name: Discover current card and run queued pre-UFC collection
+        id: forward_collection
+        shell: bash
         run: |
-          git diff --quiet -- data/raw/pre_ufc_career_supplement_v2.csv data/raw/pre_ufc_career_checkpoint_v2.json data/raw/amateur_career_supplement.csv data/raw/amateur_career_checkpoint.json && exit 0
+          set +e
+          python scripts/run_sunday_pre_ufc_collection.py \
+            --mode daily \
+            --execution-contract sunday_pre_ufc \
+            --storage-root data/raw/practical_forward_collection_v1 \
+            --summary-json data/raw/practical_forward_collection_v1/latest-sunday-run-summary.json
+          collection_exit_code=$?
+          set -e
+          echo "exit_code=${collection_exit_code}" >> "$GITHUB_OUTPUT"
+          if [ "$collection_exit_code" -eq 2 ]; then
+            echo "::warning::Current-card/pre-UFC collection is incomplete; persisting discovery and retry state before failing the job."
+          elif [ "$collection_exit_code" -ne 0 ]; then
+            echo "::error::Current-card/pre-UFC collector failed with exit code ${collection_exit_code}; persisting safe state before failing the job."
+          fi
+          exit 0
+
+      - name: Commit durable discovery, retry, and supplement state if changed
+        shell: bash
+        run: |
+          durable_paths=(
+            data/raw/practical_forward_collection_v1
+            data/raw/pre_ufc_career_supplement_v2.csv
+            data/raw/pre_ufc_career_checkpoint_v2.json
+            data/raw/amateur_career_supplement.csv
+            data/raw/amateur_career_checkpoint.json
+          )
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/raw/pre_ufc_career_supplement_v2.csv data/raw/pre_ufc_career_checkpoint_v2.json data/raw/amateur_career_supplement.csv data/raw/amateur_career_checkpoint.json
-          git commit -m "chore: weekly pre-UFC supplement refresh"
+          git add -- "${durable_paths[@]}"
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: weekly current-card and pre-UFC refresh"
           git push
+
+      - name: Enforce current-card and pre-UFC collection status
+        if: always()
+        shell: bash
+        env:
+          COLLECTION_EXIT_CODE: ${{ steps.forward_collection.outputs.exit_code }}
+        run: |
+          collection_exit_code="${COLLECTION_EXIT_CODE:-1}"
+          if ! [[ "$collection_exit_code" =~ ^[0-9]+$ ]]; then
+            echo "::error::Current-card/pre-UFC collector did not publish a valid exit code."
+            exit 1
+          fi
+          if [ "$collection_exit_code" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$collection_exit_code" -eq 2 ]; then
+            echo "::error::Current-card/pre-UFC collection remains incomplete; durable discovery and retry state were preserved."
+          else
+            echo "::error::Current-card/pre-UFC collection failed with exit code ${collection_exit_code}."
+          fi
+          exit "$collection_exit_code"

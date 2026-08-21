@@ -12,6 +12,7 @@ data/raw/rankings/
 data/raw/ufc_active_roster_identity_audit.csv
 data/raw/ufcstats_profile_scrape_failures.csv
 data/processed/audit_remediation_*/
+data/raw/practical_forward_collection_v1/.coordinator.lock
 
 # Logs & models (runtime generated, now under data/)
 logs/

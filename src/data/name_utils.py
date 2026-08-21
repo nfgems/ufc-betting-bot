@@ -8,6 +8,29 @@ import re
 import unicodedata
 
 
+_UFCSTATS_ID_RE = re.compile(
+    r"^(?:"
+    r"([0-9a-f]{16})"
+    r"|(?:(?:https?://)?(?:www\.)?ufcstats\.com/)?/?fighter-details/"
+    r"([0-9a-f]{16})/?(?:[?#][^\s]*)?"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def normalize_ufcstats_id(value: object) -> str | None:
+    """Normalize a UFCStats profile URL or slug to its stable fighter ID."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.casefold() in {"nan", "none", "nat", "<na>"}:
+        return None
+    match = _UFCSTATS_ID_RE.fullmatch(text)
+    if match is None:
+        return None
+    return (match.group(1) or match.group(2)).casefold()
+
+
 # Small, source-reviewed identity set used only where name-keyed historical
 # data would otherwise split or contaminate these exact fighters. This is not
 # a suffix rule: only the spellings listed in ``tracked_names`` are joined.
