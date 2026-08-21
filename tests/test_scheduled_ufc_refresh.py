@@ -1,4 +1,5 @@
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -9,6 +10,28 @@ import scripts.run_scheduled_ufc_refresh as scheduled_refresh
 from scripts.backfill_active_roster_ufcstats import FIGHTERS_PATH as BACKFILL_FIGHTERS_PATH
 from src.config import RAW_DATA_DIR
 from src.data.io_utils import write_csv_atomically
+
+
+@pytest.mark.parametrize(("continuity_green", "expected"), [(True, 0), (False, 2)])
+def test_src_bot_scheduled_dispatch_propagates_continuity_exit(
+    monkeypatch,
+    continuity_green,
+    expected,
+):
+    from src import bot as bot_cli
+
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_scheduled_refresh",
+        lambda **_kwargs: {"continuity_green": continuity_green},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["bot", "ufc-refresh-scheduled", "--skip-rebuild", "--skip-audit"],
+    )
+
+    assert bot_cli.main() == expected
 
 
 @pytest.mark.parametrize("false_value", [0.0, "0.0", "0.00", "0e0"])
@@ -59,6 +82,7 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
                 }
             ]
         )
+        df.attrs.update(sync_source="live", sync_complete=True)
         df.to_csv(output_path, index=False)
         return df
 
@@ -81,6 +105,14 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
         }
 
     def fake_run_rebuild(*, dataset_variant, output_subdirs, update_production_manifest):
+        staged_dir = Path(output_subdirs[0])
+        staged_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame([{"event_date": "2026-08-01"}]).to_csv(
+            staged_dir / "fights_cleaned.csv", index=False
+        )
+        pd.DataFrame([{"event_date": "2026-08-01", "feature": 1}]).to_csv(
+            staged_dir / "features.csv", index=False
+        )
         calls["rebuild"] = {
             "dataset_variant": dataset_variant,
             "output_subdirs": output_subdirs,
@@ -161,19 +193,23 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
         "limit_fighters": 25,
         "rows": 1,
     }
-    assert calls["rebuild"] == {
-        "dataset_variant": "pulled_all_plus_legacy_market",
-        "output_subdirs": scheduled_refresh.DEFAULT_REBUILD_OUTPUT_SUBDIRS,
-        "update_production_manifest": True,
-    }
+    assert calls["rebuild"]["dataset_variant"] == "pulled_all_plus_legacy_market"
+    assert calls["rebuild"]["update_production_manifest"] is False
+    staged_dir = Path(calls["rebuild"]["output_subdirs"][0])
+    assert staged_dir.parent == processed_dir / scheduled_refresh.REFRESH_GENERATIONS_SUBDIR
+    assert staged_dir.name.startswith("refresh-")
+    assert calls["rebuild"]["output_subdirs"] == [str(staged_dir)]
     assert calls["audit"]["active_roster_path"] == roster_path
-    assert calls["audit"]["processed_fights_path"] == processed_dir / "fights_cleaned.csv"
+    assert calls["audit"]["processed_fights_path"] == staged_dir / "fights_cleaned.csv"
     assert calls["audit"]["scraped_fighters_path"] == raw_dir / "ufc_fighters_scraped.csv"
 
     assert summary["roster_sync"]["rows"] == 1
     assert summary["ufcstats_backfill"]["new_result_rows"] == 1
     assert summary["rebuild"]["outputs"][0]["fight_rows"] == 10
-    assert summary["rebuild"]["production_bundle"]["bundle_id"] == "bundle-1"
+    assert "production_bundle" not in summary["rebuild"]
+    assert summary["continuity_green"] is False
+    assert summary["published"] is False
+    assert "partial_refresh_limit" in summary["outcome_reasons"]
     assert summary["profile_audit"]["active_roster_rows"] == 1
 
     saved_audit = json.loads(audit_json_path.read_text(encoding="utf-8"))

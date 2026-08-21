@@ -324,6 +324,22 @@ def _runtime_status_with_liveness() -> dict:
         errors.append("clob_not_ready")
         critical_loop_issue = True
 
+    refresh_component = dict(components.get("ufc_refresh_loop") or {})
+    refresh_attempt_finished = bool(
+        refresh_component.get("last_cycle_completed_at")
+        or refresh_component.get("last_cycle_failed_at")
+    )
+    if refresh_attempt_finished:
+        if refresh_component.get("continuity_green") is False:
+            errors.append("ufc_refresh_continuity_failed")
+            critical_loop_issue = True
+        if (
+            "published" in refresh_component
+            and refresh_component.get("published") is False
+        ):
+            errors.append("ufc_refresh_publication_failed")
+            critical_loop_issue = True
+
     status["components"] = components
     status["errors"] = sorted(set(errors))
     status["warnings"] = sorted(set(warnings))

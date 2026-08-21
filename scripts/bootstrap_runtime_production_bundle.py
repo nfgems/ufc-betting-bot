@@ -42,6 +42,25 @@ def _processed_snapshot_exists(processed_dir: Path) -> bool:
     return all((processed_dir / filename).is_file() for filename in ("fights_cleaned.csv", "features.csv"))
 
 
+def _manifest_addressed_processed_dir(
+    payload: dict[str, object],
+    *,
+    target_processed_dir: Path,
+) -> Path:
+    """Resolve a valid runtime manifest's snapshot within its writable lookup root."""
+    raw = _manifest_text(payload, "processed_dir")
+    if raw is None:
+        raise ProductionBundleError("Runtime production bundle manifest is missing processed_dir.")
+    root = target_processed_dir.resolve(strict=False)
+    addressed = Path(raw).resolve(strict=False)
+    if addressed != root and not addressed.is_relative_to(root):
+        raise ProductionBundleError(
+            "Runtime production bundle processed_dir escapes its writable lookup root: "
+            f"manifest={addressed}, root={root}."
+        )
+    return addressed
+
+
 def _copy_processed_snapshot(*, source_processed_dir: Path, target_processed_dir: Path) -> None:
     for filename in ("fights_cleaned.csv", "features.csv"):
         copy_file_atomically(
@@ -241,21 +260,33 @@ def _source_generation_differs(
     """Return whether an explicitly selected release differs from runtime.
 
     The active release pointer is authoritative during a promotion or rollback.
-    Comparing the bundle id plus the two always-required model hashes lets that
-    one deliberate generation switch restore its matching processed snapshot,
-    even when the mutable runtime lookup data has a later event date.  A legacy
-    runtime manifest may omit the logistic hash, so absence alone is not a
-    generation change; two present, unequal logistic hashes are.
+    Rich manifests identify that immutable release by ``rich_release_root``;
+    their mutable runtime bundle id may legitimately change when a scheduled
+    lookup refresh advances the processed snapshot.  Legacy manifests have no
+    release root, so their bundle id remains the generation discriminator.  The
+    two always-required model hashes then protect both forms, while absence of a
+    legacy logistic hash alone is not a generation change.
     """
     if not target_payload:
         return True
 
-    source_bundle_id = _manifest_text(source_payload, "bundle_id")
-    target_bundle_id = _manifest_text(target_payload, "bundle_id")
-    if source_bundle_id is None or target_bundle_id is None:
-        return True
-    if source_bundle_id != target_bundle_id:
-        return True
+    source_release_root = _manifest_text(source_payload, "rich_release_root")
+    target_release_root = _manifest_text(target_payload, "rich_release_root")
+    if source_release_root is not None or target_release_root is not None:
+        if source_release_root is None or target_release_root is None:
+            return True
+        if (
+            Path(source_release_root).resolve(strict=False)
+            != Path(target_release_root).resolve(strict=False)
+        ):
+            return True
+    else:
+        source_bundle_id = _manifest_text(source_payload, "bundle_id")
+        target_bundle_id = _manifest_text(target_payload, "bundle_id")
+        if source_bundle_id is None or target_bundle_id is None:
+            return True
+        if source_bundle_id != target_bundle_id:
+            return True
 
     try:
         source_core = _model_identity(
@@ -294,7 +325,6 @@ def bootstrap_runtime_production_bundle(
     activate_source_generation: bool = False,
 ) -> dict[str, object]:
     source_snapshot_exists = _processed_snapshot_exists(source_processed_dir)
-    target_snapshot_exists = _processed_snapshot_exists(target_processed_dir)
     source_payload: dict[str, object] = {}
     source_fingerprints: dict[str, int | str] = {}
     if source_snapshot_exists:
@@ -323,7 +353,19 @@ def bootstrap_runtime_production_bundle(
             # closed below because generation metadata is then unavailable.
             target_payload = {}
 
-    bootstrap_action = "reused_existing_runtime_bundle"
+    addressed_processed_dir = target_processed_dir.resolve(strict=False)
+    if not needs_source_bootstrap and target_payload:
+        addressed_processed_dir = _manifest_addressed_processed_dir(
+            target_payload,
+            target_processed_dir=target_processed_dir,
+        )
+    target_snapshot_exists = _processed_snapshot_exists(addressed_processed_dir)
+
+    bootstrap_action = (
+        "preserved_manifest_addressed_runtime_bundle"
+        if addressed_processed_dir != target_processed_dir.resolve(strict=False)
+        else "reused_existing_runtime_bundle"
+    )
     promote_source = False
 
     generation_activation = bool(
@@ -343,7 +385,7 @@ def bootstrap_runtime_production_bundle(
         promote_source = True
     elif source_snapshot_exists and target_snapshot_exists:
         source_date = get_processed_snapshot_max_event_date(source_processed_dir)
-        target_date = get_processed_snapshot_max_event_date(target_processed_dir)
+        target_date = get_processed_snapshot_max_event_date(addressed_processed_dir)
         if source_date is None or target_date is None:
             raise ProductionBundleError(
                 "Cannot compare production snapshots because one has no usable event_date."
@@ -353,7 +395,7 @@ def bootstrap_runtime_production_bundle(
             _require_source_processed_hashes(source_payload)
             promote_source = True
         elif source_date == target_date:
-            target_fingerprints = get_processed_snapshot_fingerprints(target_processed_dir)
+            target_fingerprints = get_processed_snapshot_fingerprints(addressed_processed_dir)
             hashes_match = all(
                 source_fingerprints[field] == target_fingerprints[field]
                 for field in _PROCESSED_HASH_FIELDS
@@ -388,6 +430,7 @@ def bootstrap_runtime_production_bundle(
             source_processed_dir=source_processed_dir,
             target_processed_dir=target_processed_dir,
         )
+        addressed_processed_dir = target_processed_dir.resolve(strict=False)
         bootstrap_action = "promoted_source_bundle"
 
     summary = reconcile_production_bundle_manifest(
@@ -396,10 +439,11 @@ def bootstrap_runtime_production_bundle(
         model_path=model_path,
         no_odds_model_path=no_odds_model_path,
         logistic_model_path=logistic_model_path,
-        processed_dir=target_processed_dir,
+        processed_dir=addressed_processed_dir,
         authoritative_source_manifest=generation_activation,
     )
     summary["bootstrap_action"] = bootstrap_action
+    summary["bootstrap_processed_dir"] = str(addressed_processed_dir)
     return summary
 
 

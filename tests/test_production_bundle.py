@@ -1379,6 +1379,158 @@ def test_bootstrap_runtime_production_bundle_preserves_valid_runtime_snapshot_on
     assert "runtime_only" in preserved_features.columns
 
 
+def test_bootstrap_preserves_manifest_addressed_refresh_generation_on_restart(
+    tmp_path,
+    monkeypatch,
+):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    source_processed_dir = tmp_path / "image" / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    refresh_generation = target_processed_dir / "ufc_refresh_generations" / "refresh-1"
+    source_processed_dir.mkdir(parents=True)
+    target_processed_dir.mkdir(parents=True)
+    refresh_generation.mkdir(parents=True)
+
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_new_no_odds")
+
+    pd.DataFrame({"event_date": ["2026-03-20"], "source_only": [1]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-03-20"], "source_only": [1]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-03-22"], "canonical_only": [1]}).to_csv(
+        target_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-03-22"], "canonical_only": [1]}).to_csv(
+        target_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-03-24"], "generation_only": [1]}).to_csv(
+        refresh_generation / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-03-24"], "generation_only": [1]}).to_csv(
+        refresh_generation / "features.csv", index=False
+    )
+
+    source_manifest = tmp_path / "models" / "source.json"
+    source_manifest.write_text(
+        json.dumps(
+            {
+                "bundle_id": "bundle-source",
+                "model_spec_name": "prod_spec_new",
+                "no_odds_model_spec_name": "prod_spec_new_no_odds",
+                "model_path": str(models_dir / "xgboost_model.pkl"),
+                "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+                "processed_dir": str(source_processed_dir),
+                "snapshot_max_event_date": "2026-03-20",
+                "built_at": "2026-03-23T00:00:00Z",
+                "git_sha": "newsha",
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        processed_dir=refresh_generation,
+    )
+
+    summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+        target_manifest=runtime_manifest,
+        source_manifest=source_manifest,
+        source_processed_dir=source_processed_dir,
+        target_processed_dir=target_processed_dir,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+    )
+
+    payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert summary["bootstrap_action"] == "preserved_manifest_addressed_runtime_bundle"
+    assert summary["processed_snapshot_max_event_date"] == "2026-03-24"
+    assert payload["processed_dir"] == str(refresh_generation.resolve())
+    assert "generation_only" in pd.read_csv(refresh_generation / "features.csv").columns
+    assert "canonical_only" in pd.read_csv(target_processed_dir / "features.csv").columns
+
+
+def test_explicit_rich_release_activation_preserves_refreshed_generation_on_restart(
+    tmp_path,
+    monkeypatch,
+):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    release_root = tmp_path / "rich-release"
+    source_processed_dir = release_root / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    refresh_generation = target_processed_dir / "ufc_refresh_generations" / "refresh-1"
+    source_processed_dir.mkdir(parents=True)
+    refresh_generation.mkdir(parents=True)
+
+    pd.DataFrame({"event_date": ["2026-08-01"], "release_only": [1]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "release_only": [1]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-08"], "refresh_only": [1]}).to_csv(
+        refresh_generation / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-08"], "refresh_only": [1]}).to_csv(
+        refresh_generation / "features.csv", index=False
+    )
+
+    specs = _write_rich_models(models_dir, generation="restart")
+    source_manifest = _write_rich_manifest(
+        release_root,
+        models_dir=models_dir,
+        processed_dir=source_processed_dir,
+        generation="restart",
+        specs=specs,
+    )
+    source_payload = json.loads(source_manifest.read_text(encoding="utf-8"))
+    source_payload["rich_release_root"] = str(release_root.resolve())
+    source_manifest.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=source_manifest,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        processed_dir=source_processed_dir,
+    )
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        processed_dir=refresh_generation,
+    )
+    refreshed_payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert refreshed_payload["bundle_id"] != source_payload["bundle_id"]
+    assert refreshed_payload["rich_release_root"] == source_payload["rich_release_root"]
+
+    summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+        target_manifest=runtime_manifest,
+        source_manifest=source_manifest,
+        source_processed_dir=source_processed_dir,
+        target_processed_dir=target_processed_dir,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        activate_source_generation=True,
+    )
+
+    runtime_payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert summary["bootstrap_action"] == "preserved_manifest_addressed_runtime_bundle"
+    assert summary["processed_snapshot_max_event_date"] == "2026-08-08"
+    assert runtime_payload["processed_dir"] == str(refresh_generation.resolve())
+    assert "refresh_only" in pd.read_csv(refresh_generation / "features.csv").columns
+    assert not target_processed_dir.joinpath("features.csv").exists()
+
+
 def test_bootstrap_runtime_production_bundle_promotes_newer_source_snapshot(tmp_path, monkeypatch):
     models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
     source_processed_dir = tmp_path / "image" / "processed"

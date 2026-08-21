@@ -13,7 +13,11 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
+from contextlib import contextmanager
+from functools import wraps
+from uuid import uuid4
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,8 +40,14 @@ from scripts.build_profile_supplement_from_external_profiles import (
     run_profile_supplement_refresh,
 )
 from scripts.rebuild_ufc_processed_artifacts import run_rebuild
-from src.model.production_bundle import PRODUCTION_BUNDLE_ENV, is_hosted_runtime
+from src.model.production_bundle import (
+    DEFAULT_MANIFEST_PATH,
+    PRODUCTION_BUNDLE_ENV,
+    is_hosted_runtime,
+    reconcile_production_bundle_manifest,
+)
 from src.config import DATA_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR, PROJECT_ROOT
+from src.data.io_utils import write_json_atomically
 from src.data.name_utils import normalize_person_name
 from src.data.ufc_active_roster import (
     OFFICIAL_ACTIVE_ROSTER_PATH,
@@ -52,11 +62,9 @@ from src.features.stance_utils import encode_stance
 logger = logging.getLogger(__name__)
 
 DEFAULT_DATASET_VARIANT = "pulled_all_plus_legacy_market"
-DEFAULT_REBUILD_OUTPUT_SUBDIRS = [
-    ".",
-    "candidates/full_live_contract_v5_fullfit_retrain",
-    "candidates/v6_eval",
-]
+DEFAULT_REBUILD_OUTPUT_SUBDIRS = ["."]
+REFRESH_GENERATIONS_SUBDIR = "ufc_refresh_generations"
+RETAIN_INACTIVE_REFRESH_GENERATIONS = 2
 DEFAULT_AUDIT_JSON = DATA_DIR / "tmp" / "active_roster_profile_completeness_scheduled_latest.json"
 DEFAULT_AUDIT_CSV = DATA_DIR / "tmp" / "active_roster_profile_completeness_scheduled_latest.csv"
 DEFAULT_UNRESOLVED_PROFILE_JSON = DATA_DIR / "tmp" / "active_roster_profile_unresolved_scheduled_latest.json"
@@ -267,6 +275,313 @@ def _row_guard_snapshot() -> dict[str, dict[str, object]]:
                 snapshot["identity_rows"] = identity_rows
         snapshots[name] = snapshot
     return snapshots
+
+
+def _new_refresh_generation_dir(*, now: datetime | None = None) -> Path:
+    """Return a unique processed directory that no active manifest addresses."""
+    observed_at = now or datetime.now(timezone.utc)
+    generation_id = (
+        f"refresh-{observed_at.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex[:12]}"
+    )
+    return PROCESSED_DATA_DIR / REFRESH_GENERATIONS_SUBDIR / generation_id
+
+
+def _active_refresh_generation_dir(generations_root: Path) -> Path | None:
+    manifest = _active_production_manifest_path()
+    if not manifest.is_file():
+        return None
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("active production manifest is not a JSON object")
+    raw = str(payload.get("processed_dir") or "").strip()
+    if not raw:
+        raise ValueError("active production manifest has no processed_dir")
+    candidate = Path(raw).resolve(strict=False)
+    root = generations_root.resolve(strict=False)
+    if candidate.parent != root or not candidate.name.startswith("refresh-"):
+        return None
+    return candidate
+
+
+def _prune_refresh_generations(
+    *,
+    retain_inactive: int = RETAIN_INACTIVE_REFRESH_GENERATIONS,
+) -> dict[str, object]:
+    """Bound inactive refresh storage while never deleting the addressed generation."""
+    root = PROCESSED_DATA_DIR / REFRESH_GENERATIONS_SUBDIR
+    summary: dict[str, object] = {
+        "root": str(root),
+        "active_generation": "",
+        "retained_inactive": [],
+        "removed": [],
+        "failures": [],
+    }
+    if not root.exists():
+        return summary
+    if root.is_symlink() or not root.is_dir():
+        summary["failures"] = [f"unsafe_generation_root:{root}"]
+        return summary
+
+    resolved_root = root.resolve(strict=True)
+    manifest = _active_production_manifest_path()
+    manifest_before = manifest.read_bytes() if manifest.is_file() else None
+    try:
+        active = _active_refresh_generation_dir(resolved_root)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        summary["failures"] = [f"active_manifest_unresolved:{exc}"]
+        return summary
+    summary["active_generation"] = str(active) if active is not None else ""
+    candidates: list[Path] = []
+    for child in root.iterdir():
+        if child.is_symlink() or not child.is_dir() or not child.name.startswith("refresh-"):
+            continue
+        resolved = child.resolve(strict=True)
+        if resolved.parent != resolved_root:
+            summary["failures"].append(f"unsafe_generation_path:{resolved}")
+            continue
+        if active is not None and resolved == active:
+            continue
+        candidates.append(resolved)
+
+    keep_count = max(int(retain_inactive), 0)
+    candidates.sort(key=lambda path: path.name, reverse=True)
+    retained = candidates[:keep_count]
+    summary["retained_inactive"] = [str(path) for path in retained]
+    for path in candidates[keep_count:]:
+        manifest_now = manifest.read_bytes() if manifest.is_file() else None
+        if manifest_now != manifest_before:
+            summary["failures"].append("active_manifest_changed_during_cleanup")
+            break
+        try:
+            shutil.rmtree(path)
+            summary["removed"].append(str(path))
+        except OSError as exc:
+            summary["failures"].append(f"{path}:{exc}")
+    return summary
+
+
+@contextmanager
+def _refresh_writer_lock():
+    """Serialize refresh generations and manifest publication across processes."""
+    root = PROCESSED_DATA_DIR / REFRESH_GENERATIONS_SUBDIR
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / ".scheduled-refresh.lock"
+    handle = lock_path.open("a+b")
+    acquired = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise RuntimeError("scheduled_ufc_refresh_already_running") from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise RuntimeError("scheduled_ufc_refresh_already_running") from exc
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def _serialized_refresh(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _refresh_writer_lock():
+            return function(*args, **kwargs)
+
+    return wrapped
+
+
+def _staged_rebuild_output_subdirs(
+    staged_processed_dir: Path,
+    requested_output_subdirs: list[str],
+) -> list[str]:
+    """Keep the active root staged while preserving isolated caller outputs."""
+    outputs = [str(staged_processed_dir)]
+    canonical_root = PROCESSED_DATA_DIR.resolve(strict=False)
+    seen = {os.path.normcase(str(staged_processed_dir.resolve(strict=False)))}
+    for value in requested_output_subdirs:
+        text = str(value or "").strip()
+        if text in {"", ".", "base"}:
+            continue
+        candidate = Path(text)
+        resolved = (
+            candidate.resolve(strict=False)
+            if candidate.is_absolute()
+            else (PROCESSED_DATA_DIR / candidate).resolve(strict=False)
+        )
+        if resolved == canonical_root:
+            continue
+        identity = os.path.normcase(str(resolved))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        outputs.append(text)
+    return outputs
+
+
+def _active_production_manifest_path() -> Path:
+    configured = str(os.getenv(PRODUCTION_BUNDLE_ENV, "") or "").strip()
+    candidate = Path(configured) if configured else DEFAULT_MANIFEST_PATH
+    return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+
+
+def _publish_validated_processed_generation(processed_dir: Path) -> dict[str, object]:
+    """Prevalidate off-pointer, then atomically publish only the final manifest."""
+    active_manifest = _active_production_manifest_path()
+    active_manifest.parent.mkdir(parents=True, exist_ok=True)
+    active_before = active_manifest.read_bytes() if active_manifest.exists() else None
+    with TemporaryDirectory(
+        prefix="ufc_refresh_manifest_prevalidation_",
+        dir=active_manifest.parent,
+    ) as temporary:
+        candidate_manifest = Path(temporary) / "production-bundle.json"
+        if active_before is not None:
+            shutil.copyfile(active_manifest, candidate_manifest)
+        summary = reconcile_production_bundle_manifest(
+            target_manifest_path=candidate_manifest,
+            processed_dir=processed_dir,
+        )
+        candidate_payload = json.loads(candidate_manifest.read_text(encoding="utf-8"))
+        if not isinstance(candidate_payload, dict):
+            raise RuntimeError("Prevalidated production manifest is not a JSON object")
+        active_now = active_manifest.read_bytes() if active_manifest.exists() else None
+        if active_now != active_before:
+            raise RuntimeError("Active production manifest changed during refresh prevalidation")
+        write_json_atomically(candidate_payload, active_manifest)
+    return {**summary, "manifest_path": str(active_manifest)}
+
+
+def _snapshot_with_staged_processed_files(
+    snapshot: dict[str, dict[str, object]],
+    *,
+    processed_dir: Path,
+) -> dict[str, dict[str, object]]:
+    staged = dict(snapshot)
+    staged["processed_fights_cleaned"] = _file_snapshot(processed_dir / "fights_cleaned.csv")
+    staged["processed_features"] = _file_snapshot(processed_dir / "features.csv")
+    return staged
+
+
+def _append_outcome_reason(reasons: list[str], reason: str) -> None:
+    reason = str(reason or "").strip()
+    if reason and reason not in reasons:
+        reasons.append(reason)
+
+
+def _refresh_outcome_reasons(
+    *,
+    limit_fighters: int | None,
+    roster_summary: dict[str, object],
+    backfill_summary: dict[str, object],
+    profile_supplement_summary: dict[str, object] | None,
+    rebuild_summary: dict[str, object] | None,
+    staged_processed_dir: Path | None,
+    audit_summary: dict[str, object] | None,
+    row_drop_guard: dict[str, object],
+    generation_cleanup: dict[str, object],
+    skip_rebuild: bool,
+    skip_audit: bool,
+) -> list[str]:
+    """Return bounded, operator-visible reasons an attempt cannot publish."""
+    reasons: list[str] = []
+    if limit_fighters is not None:
+        _append_outcome_reason(reasons, "partial_refresh_limit")
+
+    roster_source = str(roster_summary.get("source") or "").strip().casefold()
+    if int(roster_summary.get("rows") or 0) <= 0:
+        _append_outcome_reason(reasons, "roster_empty")
+    if roster_source != "live":
+        _append_outcome_reason(reasons, f"roster_source_{roster_source or 'unknown'}")
+    if roster_summary.get("sync_complete") is not True:
+        _append_outcome_reason(reasons, "roster_scan_incomplete")
+    if str(roster_summary.get("sync_error") or "").strip():
+        _append_outcome_reason(reasons, "roster_sync_error")
+
+    if int(backfill_summary.get("scraped_profile_scrape_failures") or 0):
+        _append_outcome_reason(reasons, "ufcstats_profile_scrape_failures")
+    if int(backfill_summary.get("fighter_fight_list_scrape_failures") or 0):
+        _append_outcome_reason(reasons, "ufcstats_fight_list_failures")
+    status_counts = backfill_summary.get("fight_detail_status_counts") or {}
+    status_counts = status_counts if isinstance(status_counts, dict) else {}
+    failed_urls = backfill_summary.get("failed_fight_urls") or []
+    partial_urls = backfill_summary.get("partial_fight_urls") or []
+    failed = max(
+        len(failed_urls) if isinstance(failed_urls, list) else 0,
+        int(status_counts.get("failed") or 0),
+    )
+    partial = max(
+        len(partial_urls) if isinstance(partial_urls, list) else 0,
+        int(status_counts.get("partial") or 0),
+    )
+    complete = (
+        int(status_counts.get("complete") or 0)
+        if "complete" in status_counts
+        else int(backfill_summary.get("new_result_rows") or 0)
+    )
+    if failed:
+        _append_outcome_reason(reasons, "ufcstats_fight_detail_failures")
+    if partial:
+        _append_outcome_reason(reasons, "ufcstats_partial_fight_observations")
+    due = int(backfill_summary.get("missing_fight_urls_found") or 0)
+    if due > complete + partial + failed:
+        _append_outcome_reason(reasons, "ufcstats_fight_attempts_incomplete")
+    if due > 0 and complete <= 0:
+        _append_outcome_reason(reasons, "ufcstats_zero_completed_fights")
+    if (
+        int(backfill_summary.get("new_result_rows") or 0) > 0
+        and int(backfill_summary.get("new_stat_rows") or 0) <= 0
+    ):
+        _append_outcome_reason(reasons, "ufcstats_results_without_stats")
+
+    supplement = profile_supplement_summary or {}
+    if str(supplement.get("action") or "").strip().casefold() == "error":
+        _append_outcome_reason(reasons, "profile_supplement_error")
+    if int(supplement.get("source_error_count") or 0) or bool(supplement.get("source_errors")):
+        _append_outcome_reason(reasons, "profile_supplement_source_errors")
+
+    if skip_rebuild:
+        _append_outcome_reason(reasons, "rebuild_skipped")
+    elif rebuild_summary is None:
+        _append_outcome_reason(reasons, "rebuild_missing")
+    if staged_processed_dir is not None:
+        for filename, reason in (
+            ("fights_cleaned.csv", "staged_fights_missing_or_empty"),
+            ("features.csv", "staged_features_missing_or_empty"),
+        ):
+            snapshot = _file_snapshot(staged_processed_dir / filename)
+            if snapshot.get("exists") is not True or int(snapshot.get("row_count") or 0) <= 0:
+                _append_outcome_reason(reasons, reason)
+    if skip_audit:
+        _append_outcome_reason(reasons, "audit_skipped")
+    elif audit_summary is None:
+        _append_outcome_reason(reasons, "audit_missing")
+    if row_drop_guard.get("violations"):
+        _append_outcome_reason(reasons, "row_drop_guard_violations")
+    if generation_cleanup.get("failures"):
+        _append_outcome_reason(reasons, "refresh_generation_cleanup_failures")
+    return reasons
 
 
 def _identity_row_index(
@@ -1802,6 +2117,7 @@ def _maybe_refresh_profile_supplement(
     }
 
 
+@_serialized_refresh
 def run_scheduled_refresh(
     *,
     dataset_variant: str = DEFAULT_DATASET_VARIANT,
@@ -1813,6 +2129,8 @@ def run_scheduled_refresh(
     unresolved_csv_path: Path | None = DEFAULT_UNRESOLVED_PROFILE_CSV,
     skip_rebuild: bool = False,
     skip_audit: bool = False,
+    update_production_manifest: bool | None = None,
+    refresh_existing_profiles: bool = False,
 ) -> dict[str, object]:
     # --- diagnostic: log all resolved paths and pre-refresh file state ---
     resolved_paths = _log_resolved_data_paths()
@@ -1832,6 +2150,26 @@ def run_scheduled_refresh(
         pre_refresh_state["processed_fights"],
     )
 
+    if update_production_manifest is None:
+        should_update_production_manifest = is_hosted_runtime() or bool(
+            str(os.getenv(PRODUCTION_BUNDLE_ENV, "") or "").strip()
+        )
+    else:
+        should_update_production_manifest = bool(update_production_manifest)
+    generation_cleanup = _prune_refresh_generations()
+    requested_output_subdirs = [
+        str(value) for value in (output_subdirs or list(DEFAULT_REBUILD_OUTPUT_SUBDIRS))
+    ]
+    staged_processed_dir = None if skip_rebuild else _new_refresh_generation_dir()
+    rebuild_output_subdirs = (
+        []
+        if staged_processed_dir is None
+        else _staged_rebuild_output_subdirs(
+            staged_processed_dir,
+            requested_output_subdirs,
+        )
+    )
+
     # --- seed stale scraped fighters from image if hosted ---
     seed_summary: dict[str, object] | None = None
     profile_supplement_seed_summary: dict[str, object] | None = None
@@ -1839,7 +2177,18 @@ def run_scheduled_refresh(
         seed_summary = _seed_stale_scraped_fighters()
         profile_supplement_seed_summary = _seed_stale_profile_supplement()
 
-    roster_df = _load_fresh_cached_roster_for_hosted_refresh(OFFICIAL_ACTIVE_ROSTER_PATH)
+    publication_cycle_requires_live_roster = bool(
+        should_update_production_manifest
+        and staged_processed_dir is not None
+        and not skip_audit
+    )
+    roster_df = (
+        None
+        if publication_cycle_requires_live_roster
+        else _load_fresh_cached_roster_for_hosted_refresh(
+            OFFICIAL_ACTIVE_ROSTER_PATH
+        )
+    )
     if roster_df is None:
         roster_df = sync_official_active_roster(output_path=OFFICIAL_ACTIVE_ROSTER_PATH)
     else:
@@ -1852,28 +2201,33 @@ def run_scheduled_refresh(
         )
     roster_summary = _roster_summary(roster_df, output_path=OFFICIAL_ACTIVE_ROSTER_PATH)
 
-    backfill_summary = run_backfill(
-        refresh_roster=False,
-        limit_fighters=limit_fighters,
-        roster_df=roster_df,
-    )
+    backfill_kwargs: dict[str, object] = {
+        "refresh_roster": False,
+        "limit_fighters": limit_fighters,
+        "roster_df": roster_df,
+    }
+    if refresh_existing_profiles:
+        backfill_kwargs["refresh_existing_profiles"] = True
+    backfill_summary = run_backfill(**backfill_kwargs)
 
     rebuild_summary: dict[str, object] | None = None
-    if not skip_rebuild:
-        update_production_manifest = is_hosted_runtime() or bool(
-            str(os.getenv(PRODUCTION_BUNDLE_ENV, "") or "").strip()
-        )
+    if staged_processed_dir is not None:
         rebuild_summary = run_rebuild(
             dataset_variant=dataset_variant,
-            output_subdirs=output_subdirs or list(DEFAULT_REBUILD_OUTPUT_SUBDIRS),
-            update_production_manifest=update_production_manifest,
+            output_subdirs=rebuild_output_subdirs,
+            update_production_manifest=False,
         )
+        rebuild_summary.pop("production_bundle", None)
 
     profile_supplement_summary: dict[str, object] | None = None
     if not skip_audit:
         _pre_audit_summary, pre_audit_df = run_audit(
             active_roster_path=OFFICIAL_ACTIVE_ROSTER_PATH,
-            processed_fights_path=processed_fights_path,
+            processed_fights_path=(
+                staged_processed_dir / "fights_cleaned.csv"
+                if staged_processed_dir is not None
+                else processed_fights_path
+            ),
             scraped_fighters_path=scraped_fighters_path,
         )
         try:
@@ -1896,9 +2250,10 @@ def run_scheduled_refresh(
                 )
                 rebuild_summary = run_rebuild(
                     dataset_variant=dataset_variant,
-                    output_subdirs=output_subdirs or list(DEFAULT_REBUILD_OUTPUT_SUBDIRS),
-                    update_production_manifest=update_production_manifest,
+                    output_subdirs=rebuild_output_subdirs,
+                    update_production_manifest=False,
                 )
+                rebuild_summary.pop("production_bundle", None)
 
     audit_summary: dict[str, object] | None = None
     audit_alert_summary: dict[str, object] | None = None
@@ -1914,7 +2269,11 @@ def run_scheduled_refresh(
 
         audit_summary, audit_df = run_audit(
             active_roster_path=OFFICIAL_ACTIVE_ROSTER_PATH,
-            processed_fights_path=processed_fights_path,
+            processed_fights_path=(
+                staged_processed_dir / "fights_cleaned.csv"
+                if staged_processed_dir is not None
+                else processed_fights_path
+            ),
             scraped_fighters_path=scraped_fighters_path,
         )
         if audit_json_path is not None:
@@ -1946,9 +2305,18 @@ def run_scheduled_refresh(
     post_refresh_state = {
         "active_roster": _file_snapshot(OFFICIAL_ACTIVE_ROSTER_PATH),
         "scraped_fighters": _file_snapshot(scraped_fighters_path),
-        "processed_fights": _file_snapshot(processed_fights_path),
+        "processed_fights": _file_snapshot(
+            staged_processed_dir / "fights_cleaned.csv"
+            if staged_processed_dir is not None
+            else processed_fights_path
+        ),
     }
     post_refresh_row_guard_state = _row_guard_snapshot()
+    if staged_processed_dir is not None:
+        post_refresh_row_guard_state = _snapshot_with_staged_processed_files(
+            post_refresh_row_guard_state,
+            processed_dir=staged_processed_dir,
+        )
     roster_attrs = dict(getattr(roster_df, "attrs", {}) or {})
     roster_identity_explanations = {
         reason: rows
@@ -1979,20 +2347,62 @@ def run_scheduled_refresh(
         post_refresh_state["processed_fights"],
     )
 
+    outcome_reasons = _refresh_outcome_reasons(
+        limit_fighters=limit_fighters,
+        roster_summary=roster_summary,
+        backfill_summary=backfill_summary,
+        profile_supplement_summary=profile_supplement_summary,
+        rebuild_summary=rebuild_summary,
+        staged_processed_dir=staged_processed_dir,
+        audit_summary=audit_summary,
+        row_drop_guard=row_drop_guard,
+        generation_cleanup=generation_cleanup,
+        skip_rebuild=skip_rebuild,
+        skip_audit=skip_audit,
+    )
+    continuity_green = not outcome_reasons
+    publication_ready = bool(continuity_green and staged_processed_dir is not None)
+    published = False
+    production_bundle_summary: dict[str, object] | None = None
+    if publication_ready and should_update_production_manifest:
+        production_bundle_summary = _publish_validated_processed_generation(
+            staged_processed_dir
+        )
+        published = True
+        if rebuild_summary is not None:
+            rebuild_summary["production_bundle"] = production_bundle_summary
+    if not continuity_green:
+        logger.warning(
+            "UFC refresh continuity gate remained non-green; staged generation was not published: %s",
+            outcome_reasons,
+        )
+
     return {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "outcome_status": "green" if continuity_green else "incomplete",
+        "continuity_green": continuity_green,
+        "outcome_reasons": outcome_reasons,
+        "publication_requested": should_update_production_manifest,
+        "publication_ready": publication_ready,
+        "published": published,
+        "requested_output_subdirs": list(requested_output_subdirs),
+        "materialized_output_subdirs": list(rebuild_output_subdirs),
+        "staged_processed_dir": str(staged_processed_dir) if staged_processed_dir else "",
+        "active_processed_dir": str(staged_processed_dir) if published else "",
         "limit_fighters": int(limit_fighters) if limit_fighters is not None else None,
         "partial_refresh": bool(limit_fighters is not None),
         "resolved_paths": resolved_paths,
         "pre_refresh_file_state": pre_refresh_state,
         "post_refresh_file_state": post_refresh_state,
         "row_drop_guard": row_drop_guard,
+        "generation_cleanup": generation_cleanup,
         "seed_stale_scraped_fighters": seed_summary,
         "seed_stale_profile_supplement": profile_supplement_seed_summary,
         "roster_sync": roster_summary,
         "ufcstats_backfill": backfill_summary,
         "profile_supplement_refresh": profile_supplement_summary,
         "rebuild": rebuild_summary,
+        "production_bundle": production_bundle_summary,
         "profile_audit": audit_summary,
         "profile_audit_alert_summary": audit_alert_summary,
         "profile_unresolved_report": unresolved_summary,
@@ -2014,9 +2424,17 @@ def main() -> int:
         "--output-subdir",
         action="append",
         default=None,
-        help="Processed output subdir(s) to rebuild. Defaults to base + promoted candidate dirs.",
+        help=(
+            "Additional isolated processed output subdir(s) to materialize; "
+            "the publication candidate is always built in an unaddressed generation."
+        ),
     )
     parser.add_argument("--limit-fighters", type=int, default=None)
+    parser.add_argument(
+        "--refresh-existing-profiles",
+        action="store_true",
+        help="Refresh changed nonblank UFCStats facts for already-complete profiles.",
+    )
     parser.add_argument("--skip-rebuild", action="store_true")
     parser.add_argument("--skip-audit", action="store_true")
     parser.add_argument("--audit-json-path", type=Path, default=DEFAULT_AUDIT_JSON)
@@ -2036,10 +2454,11 @@ def main() -> int:
         unresolved_csv_path=args.unresolved_csv_path,
         skip_rebuild=args.skip_rebuild,
         skip_audit=args.skip_audit,
+        refresh_existing_profiles=args.refresh_existing_profiles,
     )
     _write_json(args.summary_json, summary)
     print(json.dumps(summary, indent=2))
-    return 0
+    return 0 if summary.get("continuity_green") is True else 2
 
 
 if __name__ == "__main__":

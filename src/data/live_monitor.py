@@ -17,7 +17,7 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
@@ -39,7 +39,11 @@ from src.config import (
 )
 from src.data.event_context import infer_empty_arena
 from src.data.io_utils import write_json_atomically
-from src.data.name_utils import normalize_cross_source_name, normalize_person_name
+from src.data.name_utils import (
+    normalize_cross_source_name,
+    normalize_person_name,
+    normalize_ufcstats_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +73,7 @@ UPSTREAM_FETCH_RETRY_DELAY_SECONDS = 1.0
 # URL instead of once per caller.
 UPSTREAM_HTML_CACHE_TTL_SECONDS = 180.0
 UPSTREAM_FETCH_FAILURE_TTL_SECONDS = 60.0
-_UPSTREAM_HTML_CACHE: dict[str, tuple[float, str]] = {}
+_UPSTREAM_HTML_CACHE: dict[str, tuple[float, str, str]] = {}
 _UPSTREAM_FETCH_FAILURE_CACHE: dict[str, float] = {}
 _UPSTREAM_FETCH_ALERT_ACTIVE_URLS: set[str] = set()
 _UPSTREAM_FETCH_RECOVERY_PROBED_URLS: set[str] = set()
@@ -84,6 +88,7 @@ _UPCOMING_EVENT_CARDS_CACHE: tuple[
     tuple[int, int],
     list[dict],
     bool,
+    str,
 ] | None = None
 SNAPSHOTS_DIR = RAW_DATA_DIR / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -248,6 +253,11 @@ def _attach_event_identity(tracked_fights: list[dict]) -> list[dict]:
     return enriched
 
 
+def enrich_upcoming_fight_contexts(tracked_fights: list[dict]) -> list[dict]:
+    """Expose best-effort schedule enrichment to the scheduled collector."""
+    return _attach_event_identity(copy.deepcopy(tracked_fights))
+
+
 # ---------------------------------------------------------------------------
 # Upcoming event scraping
 # ---------------------------------------------------------------------------
@@ -273,7 +283,7 @@ def _cached_upstream_html(url: str) -> Optional[str]:
         cached = _UPSTREAM_HTML_CACHE.get(url)
         if cached is None:
             return None
-        cached_at, cached_html = cached
+        cached_at, _retrieved_at_utc, cached_html = cached
         if time.monotonic() - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS:
             _UPSTREAM_HTML_CACHE.pop(url, None)
             return None
@@ -287,11 +297,46 @@ def _store_upstream_html(url: str, html: str) -> None:
         # so without this the cache grows for the life of the process.
         for key in [
             key
-            for key, (cached_at, _) in list(_UPSTREAM_HTML_CACHE.items())
+            for key, (cached_at, _retrieved_at_utc, _body) in list(
+                _UPSTREAM_HTML_CACHE.items()
+            )
             if now - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS
         ]:
             _UPSTREAM_HTML_CACHE.pop(key, None)
-        _UPSTREAM_HTML_CACHE[url] = (now, html)
+        _UPSTREAM_HTML_CACHE[url] = (
+            now,
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            html,
+        )
+
+
+def _upcoming_source_responses(event_cards: list[dict]) -> list[dict[str, str]]:
+    """Return cached source bodies and their original retrieval timestamps."""
+    source_urls = {UFC_COM_EVENTS_URL, UFCSTATS_UPCOMING_URL}
+    for event_card in event_cards:
+        event = event_card.get("event") if isinstance(event_card, dict) else None
+        if isinstance(event, dict):
+            event_url = str(event.get("url") or "").strip()
+            if event_url:
+                source_urls.add(event_url)
+
+    responses: list[dict[str, str]] = []
+    with _UPSTREAM_CACHE_LOCK:
+        for url in sorted(source_urls):
+            cached = _UPSTREAM_HTML_CACHE.get(url)
+            if cached is None:
+                continue
+            cached_at, retrieved_at_utc, body = cached
+            if time.monotonic() - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS:
+                continue
+            responses.append(
+                {
+                    "url": url,
+                    "retrieval_time_utc": retrieved_at_utc,
+                    "body": body,
+                }
+            )
+    return responses
 
 
 def _upstream_fetch_recently_failed(url: str, *, label: str) -> bool:
@@ -730,6 +775,27 @@ def _extract_ufc_com_corner_name(fight, selector: str) -> str:
     return re.sub(r"\s+", " ", name_el.get_text(" ", strip=True)).strip()
 
 
+def _extract_ufc_com_corner_athlete_url(fight, selector: str) -> str:
+    """Return only a UFC.com athlete link attached to the named corner."""
+    name_el = fight.select_one(f".c-listing-fight__names-row {selector}") or fight.select_one(
+        selector
+    )
+    if name_el is None:
+        return ""
+    link = name_el if name_el.name == "a" and name_el.get("href") else name_el.select_one(
+        "a[href]"
+    )
+    if link is None:
+        return ""
+    candidate = urljoin(UFC_COM_BASE_URL, str(link.get("href") or "").strip())
+    parsed = urlparse(candidate)
+    if str(parsed.hostname or "").casefold() not in {"ufc.com", "www.ufc.com"}:
+        return ""
+    if not parsed.path.rstrip("/").casefold().startswith("/athlete/"):
+        return ""
+    return candidate
+
+
 def _extract_ufc_com_weight_class(fight) -> str:
     class_el = (
         fight.select_one(".c-listing-fight__class--desktop .c-listing-fight__class-text")
@@ -858,10 +924,18 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
     fight_blocks = soup.select(".c-listing-fight")
 
     for fight in fight_blocks:
-        fighter_a = _extract_ufc_com_corner_name(fight, ".c-listing-fight__corner-name--red")
-        fighter_b = _extract_ufc_com_corner_name(fight, ".c-listing-fight__corner-name--blue")
+        red_selector = ".c-listing-fight__corner-name--red"
+        blue_selector = ".c-listing-fight__corner-name--blue"
+        fighter_a = _extract_ufc_com_corner_name(fight, red_selector)
+        fighter_b = _extract_ufc_com_corner_name(fight, blue_selector)
         if not fighter_a or not fighter_b:
             continue
+        fighter_a_athlete_url = _extract_ufc_com_corner_athlete_url(
+            fight, red_selector
+        )
+        fighter_b_athlete_url = _extract_ufc_com_corner_athlete_url(
+            fight, blue_selector
+        )
 
         weight_class = _extract_ufc_com_weight_class(fight)
         row_text = fight.get_text(" ", strip=True).lower()
@@ -871,17 +945,20 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
             or "championship" in row_text
             or "interim" in row_text
         )
-        fights.append(
-            {
-                "fighter_a": fighter_a,
-                "fighter_b": fighter_b,
-                "weight_class": weight_class,
-                "is_main_event": is_main_event,
-                "is_title_bout": is_title_bout,
-                "num_rounds": 5 if (is_main_event or is_title_bout) else 3,
-                "location": event_location,
-            }
-        )
+        card_row = {
+            "fighter_a": fighter_a,
+            "fighter_b": fighter_b,
+            "weight_class": weight_class,
+            "is_main_event": is_main_event,
+            "is_title_bout": is_title_bout,
+            "num_rounds": 5 if (is_main_event or is_title_bout) else 3,
+            "location": event_location,
+        }
+        if fighter_a_athlete_url:
+            card_row["fighter_a_athlete_url"] = fighter_a_athlete_url
+        if fighter_b_athlete_url:
+            card_row["fighter_b_athlete_url"] = fighter_b_athlete_url
+        fights.append(card_row)
 
     if not fights and not fight_blocks and _ufc_com_event_page_is_valid_empty(
         soup,
@@ -944,6 +1021,8 @@ def scrape_event_card(event_url: str) -> list[dict]:
 
         fighter_a = fighters[0].text.strip()
         fighter_b = fighters[1].text.strip()
+        fighter_a_id = normalize_ufcstats_id(fighters[0].get("href"))
+        fighter_b_id = normalize_ufcstats_id(fighters[1].get("href"))
 
         # Weight class
         weight_class = _extract_upcoming_weight_class(row)
@@ -962,7 +1041,7 @@ def scrape_event_card(event_url: str) -> list[dict]:
         )
         num_rounds = 5 if (is_main_event or is_title_bout) else 3
 
-        fights.append({
+        card_row = {
             "fighter_a": fighter_a,
             "fighter_b": fighter_b,
             "weight_class": weight_class,
@@ -970,7 +1049,12 @@ def scrape_event_card(event_url: str) -> list[dict]:
             "is_title_bout": is_title_bout,
             "num_rounds": num_rounds,
             "location": event_location,
-        })
+        }
+        if fighter_a_id:
+            card_row["fighter_a_id"] = fighter_a_id
+        if fighter_b_id:
+            card_row["fighter_b_id"] = fighter_b_id
+        fights.append(card_row)
 
     logger.info(f"Found {len(fights)} fights on card")
     return fights
@@ -1012,28 +1096,35 @@ def _extract_upcoming_weight_class(row) -> str:
 def _event_fight_contexts(event: dict, card: list[dict]) -> list[dict]:
     contexts: list[dict] = []
     for fight in card:
-        contexts.append(
-            {
-                "event_title": event.get("title", ""),
-                "event_date": event.get("date", ""),
-                "location": fight.get("location", ""),
-                "fighter_a": fight.get("fighter_a", ""),
-                "fighter_b": fight.get("fighter_b", ""),
-                "weight_class": fight.get("weight_class", ""),
-                "is_main_event": bool(fight.get("is_main_event", False)),
-                "is_title_bout": bool(fight.get("is_title_bout", False)),
-                "is_empty_arena": infer_empty_arena(
-                    event_title=event.get("title", ""),
-                    location=fight.get("location", ""),
-                ),
-                "num_rounds": int(
-                    fight.get(
-                        "num_rounds",
-                        5 if (fight.get("is_main_event") or fight.get("is_title_bout")) else 3,
-                    )
-                ),
-            }
-        )
+        context = {
+            "event_title": event.get("title", ""),
+            "event_date": event.get("date", ""),
+            "location": fight.get("location", ""),
+            "fighter_a": fight.get("fighter_a", ""),
+            "fighter_b": fight.get("fighter_b", ""),
+            "weight_class": fight.get("weight_class", ""),
+            "is_main_event": bool(fight.get("is_main_event", False)),
+            "is_title_bout": bool(fight.get("is_title_bout", False)),
+            "is_empty_arena": infer_empty_arena(
+                event_title=event.get("title", ""),
+                location=fight.get("location", ""),
+            ),
+            "num_rounds": int(
+                fight.get(
+                    "num_rounds",
+                    5 if (fight.get("is_main_event") or fight.get("is_title_bout")) else 3,
+                )
+            ),
+        }
+        for field in (
+            "fighter_a_id",
+            "fighter_b_id",
+            "fighter_a_athlete_url",
+            "fighter_b_athlete_url",
+        ):
+            if fight.get(field):
+                context[field] = fight[field]
+        contexts.append(context)
     return contexts
 
 
@@ -1125,7 +1216,7 @@ def collect_upcoming_event_cards(*, force_refresh: bool = False) -> list[dict]:
     now = time.monotonic()
     with _UPCOMING_EVENT_CARDS_LOCK:
         if not force_refresh and _UPCOMING_EVENT_CARDS_CACHE is not None:
-            cached_at, cached_identity, cached_rows, cached_complete = (
+            cached_at, cached_identity, cached_rows, cached_complete, _collected_at = (
                 _UPCOMING_EVENT_CARDS_CACHE
             )
             reuse_ttl = (
@@ -1172,8 +1263,31 @@ def collect_upcoming_event_cards(*, force_refresh: bool = False) -> list[dict]:
             producer_identity,
             copy.deepcopy(collected),
             scan_complete,
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         )
         return copy.deepcopy(collected)
+
+
+def collect_upcoming_event_cards_snapshot(*, force_refresh: bool = False) -> dict:
+    """Return card rows with explicit completeness and raw-source evidence."""
+    cards = collect_upcoming_event_cards(force_refresh=force_refresh)
+    with _UPCOMING_EVENT_CARDS_LOCK:
+        cached = _UPCOMING_EVENT_CARDS_CACHE
+        if cached is None:
+            return {
+                "event_cards": cards,
+                "scan_complete": False,
+                "collected_at_utc": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "source_responses": _upcoming_source_responses(cards),
+            }
+        return {
+            "event_cards": copy.deepcopy(cached[2]),
+            "scan_complete": bool(cached[3]),
+            "collected_at_utc": str(cached[4]),
+            "source_responses": _upcoming_source_responses(cached[2]),
+        }
 
 
 def collect_upcoming_fight_contexts(expected_fights: object = None) -> list[dict]:
