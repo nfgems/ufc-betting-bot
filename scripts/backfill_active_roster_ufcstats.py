@@ -20,7 +20,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.config import RAW_DATA_DIR
-from src.data.io_utils import write_csv_atomically
+from src.data.io_utils import (
+    csv_pair_manifest_path,
+    read_csv_pair_verified,
+    write_csv_atomically,
+    write_csvs_atomically,
+)
+from src.data.name_utils import normalize_person_name
 from src.data.scraper import scrape_fighter
 from src.data.ufcstats_http import (
     DEFAULT_UFCSTATS_HEADERS,
@@ -46,6 +52,9 @@ FIGHTERS_PATH = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
 PROFILE_SCRAPE_FAILURES_PATH = RAW_DATA_DIR / "ufcstats_profile_scrape_failures.csv"
 PROFILE_REFRESH_FIELDS = ("height", "reach", "weight", "stance", "dob")
 PROFILE_RATE_FIELDS = ("slpm", "sapm", "td_avg", "sub_avg", "str_acc", "str_def", "td_acc", "td_def")
+PROFILE_REFRESHABLE_OBSERVED_FIELDS = frozenset(
+    ("record", *PROFILE_REFRESH_FIELDS, *PROFILE_RATE_FIELDS)
+)
 PROFILE_SCRAPE_FAILURE_COLUMNS = [
     "fighter",
     "ufcstats_url",
@@ -88,6 +97,18 @@ STATS_COLUMNS = [
     "CLINCH",
     "GROUND",
 ]
+_REQUIRED_RESULT_FIELDS = (
+    "EVENT",
+    "BOUT",
+    "OUTCOME",
+    "WEIGHTCLASS",
+    "METHOD",
+    "ROUND",
+    "TIME",
+    "TIME FORMAT",
+    "URL",
+)
+_REQUIRED_STAT_FIELDS = tuple(STATS_COLUMNS)
 
 
 def _clean_text(text: object) -> str:
@@ -339,14 +360,23 @@ def _profile_row_needs_refresh(row: pd.Series | dict | None) -> bool:
     return any(_blank_profile_value(row.get(field)) for field in PROFILE_REFRESH_FIELDS)
 
 
-def _merge_profile_rows(existing_row: dict, refreshed_row: dict) -> tuple[dict, bool]:
+def _merge_profile_rows(
+    existing_row: dict,
+    refreshed_row: dict,
+    *,
+    refresh_existing_values: bool = False,
+) -> tuple[dict, bool]:
     merged = dict(existing_row)
     changed = False
     for field, value in refreshed_row.items():
-        if field in merged and not _blank_profile_value(merged.get(field)):
-            continue
         if _blank_profile_value(value):
             continue
+        existing_value = merged.get(field)
+        if field in merged and not _blank_profile_value(existing_value):
+            if not refresh_existing_values or field not in PROFILE_REFRESHABLE_OBSERVED_FIELDS:
+                continue
+            if str(existing_value).strip() == str(value).strip():
+                continue
         merged[field] = value
         changed = True
     return merged, changed
@@ -439,7 +469,11 @@ def _count_roster_profiles_with_nonzero_rate_stats(roster_df: pd.DataFrame) -> i
     return int(sum(_profile_rate_stats_nonzero(row) for _, row in matched.iterrows()))
 
 
-def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, object]:
+def _append_missing_profiles_with_summary(
+    roster_df: pd.DataFrame,
+    *,
+    refresh_existing_profiles: bool = False,
+) -> dict[str, object]:
     if not FIGHTERS_PATH.exists():
         logger.warning("Scraped fighters file does not exist: %s", FIGHTERS_PATH)
         existing_df = pd.DataFrame(
@@ -506,6 +540,7 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
     new_rows: list[dict] = []
     updated_rows = 0
     needed_refresh = 0
+    targeted_profiles = 0
     failed_scrapes = 0
     failed_profile_urls: list[str] = []
     failed_profile_details: list[dict[str, object]] = []
@@ -520,9 +555,12 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
             if existing_index is not None
             else None
         )
-        if not _profile_row_needs_refresh(existing_row):
+        profile_needs_refresh = _profile_row_needs_refresh(existing_row)
+        if not profile_needs_refresh and not refresh_existing_profiles:
             continue
-        needed_refresh += 1
+        if profile_needs_refresh:
+            needed_refresh += 1
+        targeted_profiles += 1
         profile_row, failure_reason = _profile_row_from_url_with_reason(fighter_url)
         if profile_row is None:
             failed_scrapes += 1
@@ -552,7 +590,11 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
         if existing_index is None:
             new_rows.append(profile_row)
             continue
-        merged_row, changed = _merge_profile_rows(existing_row, profile_row)
+        merged_row, changed = _merge_profile_rows(
+            existing_row,
+            profile_row,
+            refresh_existing_values=refresh_existing_profiles,
+        )
         if changed:
             for field, value in merged_row.items():
                 existing_df.at[existing_index, field] = value
@@ -579,12 +621,14 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
         )
 
     logger.info(
-        "Profile backfill complete: needed_refresh=%d new=%d updated=%d failed_scrapes=%d "
+        "Profile backfill complete: targeted=%d needed_refresh=%d new=%d updated=%d failed_scrapes=%d "
         "final_rows=%d final_stance=%d",
-        needed_refresh, len(new_rows), updated_rows, failed_scrapes,
+        targeted_profiles, needed_refresh, len(new_rows), updated_rows, failed_scrapes,
         len(combined), _stance_count(combined),
     )
     return {
+        "refresh_existing_profiles": bool(refresh_existing_profiles),
+        "scraped_profiles_targeted": int(targeted_profiles),
         "scraped_profiles_added": int(len(new_rows)),
         "scraped_profiles_updated": int(updated_rows),
         "scraped_profiles_needed_refresh": int(needed_refresh),
@@ -600,8 +644,15 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
     }
 
 
-def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
-    summary = _append_missing_profiles_with_summary(roster_df)
+def _append_missing_profiles(
+    roster_df: pd.DataFrame,
+    *,
+    refresh_existing_profiles: bool = False,
+) -> tuple[int, int]:
+    summary = _append_missing_profiles_with_summary(
+        roster_df,
+        refresh_existing_profiles=refresh_existing_profiles,
+    )
     return int(summary["scraped_profiles_added"]), int(summary["scraped_profiles_updated"])
 
 
@@ -633,11 +684,86 @@ def _merge_stats(existing_df: pd.DataFrame, new_rows: list[dict[str, str]]) -> p
     return combined
 
 
+def _observed(value: object) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    return str(value).strip().casefold() not in {"", "nan", "none", "<na>"}
+
+
+def _fight_observation_completeness(
+    result_row: dict[str, str],
+    stat_rows: list[dict[str, str]],
+) -> tuple[bool, list[str]]:
+    """Require one complete result and both fighters for every observed round."""
+    reasons = [
+        f"missing_result_{field.casefold().replace(' ', '_')}"
+        for field in _REQUIRED_RESULT_FIELDS
+        if not _observed(result_row.get(field))
+    ]
+    participants = [
+        name.strip()
+        for name in re.split(r"\s+vs\.?\s+", str(result_row.get("BOUT") or ""), flags=re.I)
+        if name.strip()
+    ]
+    participant_keys = {normalize_person_name(name) for name in participants}
+    if len(participants) != 2 or len(participant_keys) != 2:
+        reasons.append("invalid_result_participants")
+    outcome = [part.strip().upper() for part in str(result_row.get("OUTCOME") or "").split("/")]
+    if len(outcome) != 2 or any(part not in {"W", "L", "D", "NC"} for part in outcome):
+        reasons.append("invalid_result_outcome")
+    try:
+        finish_round = int(str(result_row.get("ROUND") or "").strip())
+        if finish_round < 1:
+            raise ValueError
+    except ValueError:
+        finish_round = None
+        reasons.append("invalid_result_round")
+
+    rows_by_round: dict[int, list[dict[str, str]]] = {}
+    for row in stat_rows:
+        try:
+            round_number = int(str(row.get("ROUND") or "").strip())
+            if round_number < 1:
+                raise ValueError
+        except ValueError:
+            reasons.append("invalid_stat_round")
+            continue
+        rows_by_round.setdefault(round_number, []).append(row)
+        for field in _REQUIRED_STAT_FIELDS:
+            if not _observed(row.get(field)):
+                reasons.append(f"missing_stat_{field.casefold().replace(' ', '_')}")
+
+    if finish_round is not None:
+        expected_rounds = set(range(1, finish_round + 1))
+        if set(rows_by_round) != expected_rounds:
+            reasons.append("incomplete_round_set")
+        for round_number in sorted(expected_rounds):
+            round_rows = rows_by_round.get(round_number, [])
+            fighters = {
+                normalize_person_name(row.get("FIGHTER"))
+                for row in round_rows
+                if normalize_person_name(row.get("FIGHTER"))
+            }
+            if len(round_rows) != 2 or fighters != participant_keys:
+                reasons.append(f"incomplete_round_{round_number}_fighters")
+
+    result_event = normalize_person_name(result_row.get("EVENT"))
+    result_bout = normalize_person_name(result_row.get("BOUT"))
+    for row in stat_rows:
+        if normalize_person_name(row.get("EVENT")) != result_event:
+            reasons.append("stat_event_mismatch")
+        if normalize_person_name(row.get("BOUT")) != result_bout:
+            reasons.append("stat_bout_mismatch")
+    deduped = list(dict.fromkeys(reasons))
+    return not deduped, deduped
+
+
 def run_backfill(
     *,
     refresh_roster: bool = False,
     limit_fighters: int | None = None,
     roster_df: pd.DataFrame | None = None,
+    refresh_existing_profiles: bool = False,
 ) -> dict[str, object]:
     if roster_df is None:
         roster_df = _load_official_roster(refresh=refresh_roster)
@@ -659,15 +785,25 @@ def run_backfill(
     if limit_fighters is not None:
         roster_df = roster_df.head(limit_fighters).copy()
 
-    results_df = pd.read_csv(RESULTS_PATH)
-    stats_df = pd.read_csv(STATS_PATH)
+    pair_manifest = csv_pair_manifest_path(RESULTS_PATH, STATS_PATH)
+    results_df, stats_df = read_csv_pair_verified(
+        RESULTS_PATH,
+        STATS_PATH,
+        manifest_path=pair_manifest,
+    )
     existing_urls = {
         str(url).strip()
         for url in results_df.get("URL", pd.Series(dtype="object")).dropna().astype(str)
         if str(url).strip()
     }
 
-    profile_summary = _append_missing_profiles_with_summary(roster_df)
+    if refresh_existing_profiles:
+        profile_summary = _append_missing_profiles_with_summary(
+            roster_df,
+            refresh_existing_profiles=True,
+        )
+    else:
+        profile_summary = _append_missing_profiles_with_summary(roster_df)
 
     session = requests.Session()
     missing_fight_urls: list[str] = []
@@ -711,22 +847,46 @@ def run_backfill(
 
     new_result_rows: list[dict[str, str]] = []
     new_stat_rows: list[dict[str, str]] = []
+    complete_fight_urls: list[str] = []
+    partial_fight_urls: list[str] = []
+    partial_fight_details: list[dict[str, object]] = []
     failed_urls: list[str] = []
+    failed_fight_details: list[dict[str, str]] = []
     for fight_url in missing_fight_urls:
         try:
             result_row, stat_rows = _parse_fight_detail(fight_url, session=session)
-        except Exception:
+        except Exception as exc:
             failed_urls.append(fight_url)
+            if len(failed_fight_details) < MAX_FAILURE_DETAILS:
+                failed_fight_details.append(
+                    {
+                        "fight_url": fight_url,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+            continue
+        complete, reasons = _fight_observation_completeness(result_row, stat_rows)
+        if not complete:
+            partial_fight_urls.append(fight_url)
+            if len(partial_fight_details) < MAX_FAILURE_DETAILS:
+                partial_fight_details.append({"fight_url": fight_url, "reasons": reasons})
             continue
         new_result_rows.append(result_row)
         new_stat_rows.extend(stat_rows)
+        complete_fight_urls.append(fight_url)
 
     merged_results = _merge_results(results_df, new_result_rows)
     merged_stats = _merge_stats(stats_df, new_stat_rows)
     _raise_if_raw_merge_loses_rows(results_df, merged_results, RESULTS_PATH)
     _raise_if_raw_merge_loses_rows(stats_df, merged_stats, STATS_PATH)
-    write_csv_atomically(merged_results, RESULTS_PATH, refuse_empty=True)
-    write_csv_atomically(merged_stats, STATS_PATH, refuse_empty=True)
+    canonical_files_written = bool(new_result_rows)
+    if canonical_files_written:
+        write_csvs_atomically(
+            ((merged_results, RESULTS_PATH), (merged_stats, STATS_PATH)),
+            refuse_empty=True,
+            manifest_path=pair_manifest,
+        )
 
     return {
         "active_roster_rows_total": active_roster_rows_total,
@@ -740,6 +900,19 @@ def run_backfill(
         "missing_fight_urls_found": int(len(missing_fight_urls)),
         "new_result_rows": int(len(new_result_rows)),
         "new_stat_rows": int(len(new_stat_rows)),
+        "fight_detail_status_counts": {
+            "complete": int(len(complete_fight_urls)),
+            "partial": int(len(partial_fight_urls)),
+            "failed": int(len(failed_urls)),
+        },
+        "complete_fight_urls": complete_fight_urls,
+        "partial_fight_urls": partial_fight_urls,
+        "partial_fight_details": partial_fight_details,
+        "partial_fight_details_truncated": max(
+            0, len(partial_fight_urls) - len(partial_fight_details)
+        ),
+        "canonical_files_written": canonical_files_written,
+        "pair_manifest_path": str(pair_manifest),
         "fighters_with_nonzero_ufcstats_rate_stats": _count_roster_profiles_with_nonzero_rate_stats(roster_df),
         **profile_summary,
         "fighter_fight_list_scrape_failures": int(fighter_fight_list_failure_count),
@@ -749,6 +922,10 @@ def run_backfill(
             int(fighter_fight_list_failure_count - len(fighter_fight_list_failures)),
         ),
         "failed_fight_urls": failed_urls,
+        "failed_fight_details": failed_fight_details,
+        "failed_fight_details_truncated": max(
+            0, len(failed_urls) - len(failed_fight_details)
+        ),
     }
 
 

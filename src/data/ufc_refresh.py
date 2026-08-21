@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 
 from src.config import RAW_DATA_DIR, UFCSTATS_BASE_URL
 from src.data.event_context import infer_empty_arena
+from src.data.io_utils import csv_pair_manifest_path, read_csv_pair_verified
 from src.data.kaggle_loader import (
     _parse_height_cm,
     _parse_reach_cm,
@@ -726,8 +727,11 @@ def build_training_rows_from_pulled_data(
     if not fight_stats_path.exists():
         raise FileNotFoundError(f"pulled fight stats file not found: {fight_stats_path}")
 
-    results_df = pd.read_csv(fight_results_path)
-    stats_df = pd.read_csv(fight_stats_path)
+    results_df, stats_df = read_csv_pair_verified(
+        fight_results_path,
+        fight_stats_path,
+        manifest_path=csv_pair_manifest_path(fight_results_path, fight_stats_path),
+    )
     if results_df.empty:
         return pd.DataFrame()
     event_url_hints = _build_event_url_hints_from_results(results_df)

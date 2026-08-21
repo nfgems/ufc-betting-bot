@@ -3333,6 +3333,7 @@ def cmd_ufc_refresh_scheduled(args):
         skip_audit=args.skip_audit,
     )
     logger.info("Scheduled UFC refresh complete:\n%s", json.dumps(summary, indent=2))
+    return 0 if summary.get("continuity_green") is True else 2
 
 def cmd_monitor(args):
     """Run continuous monitoring of upcoming UFC events."""
@@ -5083,7 +5084,10 @@ def main():
         "--output-subdir",
         action="append",
         default=None,
-        help="Processed output subdir(s) to rebuild. Defaults to base plus promoted candidate dirs.",
+        help=(
+            "Additional isolated processed output subdir(s) to materialize; "
+            "the active base is published only through the validated manifest."
+        ),
     )
     ufc_refresh_parser.add_argument("--limit-fighters", type=int, default=None)
     ufc_refresh_parser.add_argument("--skip-rebuild", action="store_true")
@@ -5486,10 +5490,12 @@ def main():
     }
 
     if args.command in commands:
-        commands[args.command](args)
+        result = commands[args.command](args)
+        if args.command == "ufc-refresh-scheduled":
+            return int(result)
     else:
         parser.print_help()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main() or 0)

@@ -661,6 +661,18 @@ def _ufc_refresh_operational_notes(summary: dict | None) -> list[str]:
 def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
     refresh_summary = summary or {}
     alerts: list[str] = []
+    outcome_reasons = refresh_summary.get("outcome_reasons") or []
+    if isinstance(outcome_reasons, (str, bytes)):
+        outcome_reasons = [outcome_reasons]
+    for value in outcome_reasons:
+        if isinstance(value, dict):
+            reason = str(
+                value.get("message") or value.get("reason") or value.get("code") or value
+            ).strip()
+        else:
+            reason = str(value or "").strip()
+        if reason:
+            alerts.append(f"refresh continuity gate failed: {reason}")
     roster_sync = refresh_summary.get("roster_sync") or {}
     if (
         str(roster_sync.get("source") or "").strip().casefold() == "live"
@@ -767,7 +779,58 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
             f"{violation.get('artifact')}: {violation.get('pre_rows')} -> "
             f"{violation.get('post_rows')} rows"
         )
-    return alerts
+    backfill = refresh_summary.get("ufcstats_backfill") or {}
+    profile_failures = max(
+        int(backfill.get("scraped_profile_scrape_failures") or 0),
+        len(backfill.get("failed_profile_urls") or []),
+    )
+    if profile_failures:
+        alerts.append(f"UFCStats profile collection failed for {profile_failures} fighter(s)")
+    fight_list_failures = int(backfill.get("fighter_fight_list_scrape_failures") or 0)
+    if fight_list_failures:
+        alerts.append(
+            "UFCStats completed-fight discovery failed for "
+            f"{fight_list_failures} fighter(s)"
+        )
+    detail_status = backfill.get("fight_detail_status_counts") or {}
+    detail_status = detail_status if isinstance(detail_status, dict) else {}
+    partial_fights = max(
+        int(detail_status.get("partial") or 0),
+        len(backfill.get("partial_fight_urls") or []),
+    )
+    if partial_fights:
+        alerts.append(
+            "UFCStats fight-detail collection returned partial observations for "
+            f"{partial_fights} fight(s)"
+        )
+    failed_fights = max(
+        int(detail_status.get("failed") or 0),
+        len(backfill.get("failed_fight_urls") or []),
+    )
+    if failed_fights:
+        alerts.append(f"UFCStats fight-detail collection failed for {failed_fights} fight(s)")
+
+    supplement = refresh_summary.get("profile_supplement_refresh") or {}
+    if str(supplement.get("action") or "").strip().casefold() == "error":
+        alerts.append(
+            "profile supplement refresh failed: "
+            f"{str(supplement.get('reason') or 'unknown error').strip()}"
+        )
+    source_error_count = int(supplement.get("source_error_count") or 0)
+    if source_error_count:
+        source_errors = supplement.get("source_errors") or {}
+        details = []
+        if isinstance(source_errors, dict):
+            details = [
+                f"{source}={int(count or 0)}"
+                for source, count in sorted(source_errors.items())
+                if int(count or 0) > 0
+            ]
+        suffix = f" ({', '.join(details)})" if details else ""
+        alerts.append(
+            f"profile supplement refresh recorded {source_error_count} source error(s){suffix}"
+        )
+    return list(dict.fromkeys(alert.strip() for alert in alerts if alert.strip()))
 
 
 def _ufc_refresh_coverage_skip_reason(summary: dict | None) -> str:
@@ -789,7 +852,10 @@ def _run_ufc_refresh_cycle(
 ) -> dict:
     from scripts.run_scheduled_ufc_refresh import run_scheduled_refresh
 
-    return run_scheduled_refresh(limit_fighters=limit_fighters)
+    return run_scheduled_refresh(
+        limit_fighters=limit_fighters,
+        refresh_existing_profiles=True,
+    )
 
 
 def run_background_ufc_refresh_loop(
@@ -808,6 +874,10 @@ def run_background_ufc_refresh_loop(
     now = datetime.now(timezone.utc)
     first_run_at = (now + timedelta(seconds=delay_seconds)).isoformat()
     waiting_for_betting = startup_gate is not None and not startup_gate.is_set()
+    existing_component = dict(
+        (get_runtime_status().get("components") or {}).get("ufc_refresh_loop") or {}
+    )
+    last_successful_refresh_at = existing_component.get("last_successful_refresh_at")
     update_runtime_component(
         "ufc_refresh_loop",
         "starting" if waiting_for_betting or delay_seconds > 0 else "running",
@@ -820,7 +890,7 @@ def run_background_ufc_refresh_loop(
         ),
         stale_after_seconds=heartbeat_window,
         consecutive_failures=0,
-        last_successful_refresh_at=None,
+        last_successful_refresh_at=last_successful_refresh_at,
         next_planned_refresh_at=first_run_at,
         last_error=None,
     )
@@ -847,7 +917,7 @@ def run_background_ufc_refresh_loop(
         "Scheduled UFC refresh loop active.",
         stale_after_seconds=heartbeat_window,
         consecutive_failures=0,
-        last_successful_refresh_at=None,
+        last_successful_refresh_at=last_successful_refresh_at,
         next_planned_refresh_at=datetime.now(timezone.utc).isoformat(),
         last_error=None,
     )
@@ -873,14 +943,29 @@ def run_background_ufc_refresh_loop(
 
         try:
             summary = _run_ufc_refresh_cycle(limit_fighters=limit_fighters)
-            consecutive_failures = 0
             cycle_completed_at = datetime.now(timezone.utc).isoformat()
             next_planned_refresh_at = (
                 datetime.now(timezone.utc) + timedelta(hours=interval_hours)
             ).isoformat()
             outputs = ((summary.get("rebuild") or {}).get("outputs") or [])
             fight_rows = outputs[0].get("fight_rows") if outputs else None
-            refreshed_bundle = (summary.get("rebuild") or {}).get("production_bundle")
+            refreshed_bundle = summary.get("production_bundle") or (
+                (summary.get("rebuild") or {}).get("production_bundle")
+            )
+            has_continuity_contract = "continuity_green" in summary or "published" in summary
+            continuity_green = summary.get("continuity_green") is not False
+            published = summary.get("published") is True
+            refresh_succeeded = continuity_green and (
+                published or not has_continuity_contract
+            )
+            raw_reasons = summary.get("outcome_reasons") or []
+            if isinstance(raw_reasons, (str, bytes)):
+                raw_reasons = [raw_reasons]
+            outcome_reasons = [
+                str(reason or "").strip()
+                for reason in raw_reasons
+                if str(reason or "").strip()
+            ]
             coverage_snapshot = _coverage_snapshot_from_refresh_summary(summary)
             coverage_skip_reason = _ufc_refresh_coverage_skip_reason(summary)
             operational_notes = _ufc_refresh_operational_notes(summary)
@@ -895,23 +980,54 @@ def run_background_ufc_refresh_loop(
                 else _ufc_refresh_coverage_alerts(coverage_snapshot)
             )
             refresh_alerts = [*operational_alerts, *coverage_alerts]
-            if isinstance(refreshed_bundle, dict):
+            if not continuity_green and not operational_alerts:
+                refresh_alerts.append("refresh continuity gate failed")
+            if has_continuity_contract and continuity_green and not published:
+                refresh_alerts.append(
+                    "refresh completed without publishing a production data bundle"
+                )
+            refresh_alerts = list(dict.fromkeys(refresh_alerts))
+            if refresh_succeeded:
+                consecutive_failures = 0
+                last_successful_refresh_at = cycle_completed_at
+            else:
+                consecutive_failures += 1
+            if (published or not has_continuity_contract) and isinstance(refreshed_bundle, dict):
                 runtime_status = get_runtime_status()
                 runtime_status["production_bundle"] = dict(refreshed_bundle)
                 set_runtime_status(runtime_status)
-            update_runtime_component(
-                "ufc_refresh_loop",
-                "degraded" if refresh_alerts else "running",
-                (
+            if not continuity_green:
+                completion_message = (
+                    f"Last UFC refresh failed continuity at {cycle_completed_at}; "
+                    f"retry in {interval_hours} hours"
+                )
+            elif has_continuity_contract and not published:
+                completion_message = (
+                    f"Last UFC refresh completed without publication at {cycle_completed_at}; "
+                    f"retry in {interval_hours} hours"
+                )
+            else:
+                completion_message = (
                     f"Last UFC refresh completed at {cycle_completed_at}; "
                     f"next run in {interval_hours} hours"
-                ),
+                )
+            update_runtime_component(
+                "ufc_refresh_loop",
+                "degraded" if refresh_alerts or not refresh_succeeded else "running",
+                completion_message,
                 consecutive_failures=consecutive_failures,
                 last_cycle_started_at=cycle_started_at,
                 last_cycle_completed_at=cycle_completed_at,
-                last_successful_refresh_at=cycle_completed_at,
+                last_successful_refresh_at=last_successful_refresh_at,
                 next_planned_refresh_at=next_planned_refresh_at,
-                last_error=None,
+                last_error=(
+                    None
+                    if refresh_succeeded
+                    else " | ".join(outcome_reasons or refresh_alerts)
+                ),
+                continuity_green=continuity_green,
+                published=published,
+                outcome_reasons=outcome_reasons,
                 last_summary=summary,
                 fight_rows=fight_rows,
                 coverage_snapshot=coverage_snapshot,
@@ -933,7 +1049,7 @@ def run_background_ufc_refresh_loop(
                             _SCHEDULED_UFC_REFRESH_INCIDENT_KEY
                         ]
                     }
-                    if not refresh_alerts
+                    if refresh_succeeded and not refresh_alerts
                     else None
                 ),
             )
@@ -974,8 +1090,12 @@ def run_background_ufc_refresh_loop(
                 consecutive_failures=consecutive_failures,
                 last_cycle_started_at=cycle_started_at,
                 last_cycle_failed_at=cycle_failed_at,
+                last_successful_refresh_at=last_successful_refresh_at,
                 next_planned_refresh_at=next_planned_refresh_at,
                 last_error=str(exc),
+                continuity_green=False,
+                published=False,
+                outcome_reasons=[str(exc)],
                 coverage_alerts=[f"refresh failure: {exc}"],
             )
             logger.error(
