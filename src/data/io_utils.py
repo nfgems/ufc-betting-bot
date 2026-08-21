@@ -415,6 +415,30 @@ def write_json_atomically(
     return target
 
 
+def write_bytes_atomically(content: bytes, path: Path | str) -> Path:
+    """Durably write bytes through a same-directory temp file and atomic replace."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_with_retry(tmp_path, target)
+        if os.name != "nt":
+            directory_fd = os.open(target.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+    return target
+
+
 def copy_file_atomically(src: Path | str, dst: Path | str) -> Path:
     """Copy a file through a temp file and rename it into place."""
     source = Path(src)

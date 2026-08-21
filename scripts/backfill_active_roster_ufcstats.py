@@ -690,6 +690,15 @@ def _observed(value: object) -> bool:
     return str(value).strip().casefold() not in {"", "nan", "none", "<na>"}
 
 
+def _round_number(value: object) -> int | None:
+    """Parse UFCStats result rounds ("1") and table headings ("Round 1")."""
+    match = re.fullmatch(r"(?:round\s+)?([0-9]+)", str(value or "").strip(), flags=re.I)
+    if match is None:
+        return None
+    round_number = int(match.group(1))
+    return round_number if round_number >= 1 else None
+
+
 def _fight_observation_completeness(
     result_row: dict[str, str],
     stat_rows: list[dict[str, str]],
@@ -711,21 +720,14 @@ def _fight_observation_completeness(
     outcome = [part.strip().upper() for part in str(result_row.get("OUTCOME") or "").split("/")]
     if len(outcome) != 2 or any(part not in {"W", "L", "D", "NC"} for part in outcome):
         reasons.append("invalid_result_outcome")
-    try:
-        finish_round = int(str(result_row.get("ROUND") or "").strip())
-        if finish_round < 1:
-            raise ValueError
-    except ValueError:
-        finish_round = None
+    finish_round = _round_number(result_row.get("ROUND"))
+    if finish_round is None:
         reasons.append("invalid_result_round")
 
     rows_by_round: dict[int, list[dict[str, str]]] = {}
     for row in stat_rows:
-        try:
-            round_number = int(str(row.get("ROUND") or "").strip())
-            if round_number < 1:
-                raise ValueError
-        except ValueError:
+        round_number = _round_number(row.get("ROUND"))
+        if round_number is None:
             reasons.append("invalid_stat_round")
             continue
         rows_by_round.setdefault(round_number, []).append(row)

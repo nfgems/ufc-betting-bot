@@ -19,7 +19,11 @@ from typing import Callable, Iterable, Mapping, Sequence
 import pandas as pd
 
 from src.config import RAW_DATA_DIR
-from src.data.io_utils import write_csv_atomically, write_json_atomically
+from src.data.io_utils import (
+    write_bytes_atomically,
+    write_csv_atomically,
+    write_json_atomically,
+)
 from src.data.live_monitor import event_identity_key
 from src.data.name_utils import normalize_cross_source_name, normalize_ufcstats_id
 
@@ -90,22 +94,41 @@ def append_jsonl_unique(
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     existing: set[str] = set()
+    original = target.read_bytes() if target.exists() else b""
+    valid_prefix = original
     if target.exists():
-        with target.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    existing.add(_present(json.loads(line).get(id_field)))
+        lines = original.splitlines(keepends=True)
+        for index, raw_line in enumerate(lines):
+            if not raw_line.strip():
+                continue
+            try:
+                payload = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                torn_tail = index == len(lines) - 1 and not original.endswith((b"\n", b"\r"))
+                if not torn_tail:
+                    raise
+                valid_prefix = b"".join(lines[:index])
+                logger.warning("Discarding one truncated JSONL tail from %s", target)
+                break
+            if not isinstance(payload, dict):
+                raise ValueError(f"JSONL fact in {target} is not an object")
+            existing.add(_present(payload.get(id_field)))
 
     appended = 0
-    with target.open("a", encoding="utf-8", newline="") as handle:
-        for source in rows:
-            row = dict(source)
-            row_id = _present(row.get(id_field))
-            if not row_id or row_id in existing:
-                continue
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-            existing.add(row_id)
-            appended += 1
+    encoded_rows: list[bytes] = []
+    for source in rows:
+        row = dict(source)
+        row_id = _present(row.get(id_field))
+        if not row_id or row_id in existing:
+            continue
+        encoded_rows.append(
+            (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        )
+        existing.add(row_id)
+        appended += 1
+    if encoded_rows or valid_prefix != original:
+        separator = b"" if not valid_prefix or valid_prefix.endswith((b"\n", b"\r")) else b"\n"
+        write_bytes_atomically(valid_prefix + separator + b"".join(encoded_rows), target)
     return appended
 
 
@@ -769,7 +792,6 @@ def build_pre_ufc_candidate_rows(
             ids_by_name[normalize_cross_source_name(name)].add(fighter_id)
 
     for target in targets:
-        event_date = _date_text(target.get("event_date"))
         for side in ("a", "b"):
             fighter_id = normalize_ufcstats_id(target.get(f"fighter_{side}_id")) or ""
             name = _present(target.get(f"fighter_{side}"))
@@ -782,8 +804,6 @@ def build_pre_ufc_candidate_rows(
             )
             identity["names"].add(name)
             identity["current"] = True
-            if event_date:
-                identity["dates"].add(event_date)
             if _present(target.get("event_key")):
                 identity["events"].add(_present(target.get("event_key")))
 

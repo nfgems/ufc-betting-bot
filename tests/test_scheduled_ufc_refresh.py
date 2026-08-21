@@ -198,6 +198,7 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
     staged_dir = Path(calls["rebuild"]["output_subdirs"][0])
     assert staged_dir.parent == processed_dir / scheduled_refresh.REFRESH_GENERATIONS_SUBDIR
     assert staged_dir.name.startswith("refresh-")
+    assert calls["rebuild"]["output_subdirs"] == [str(staged_dir)]
     assert calls["audit"]["active_roster_path"] == roster_path
     assert calls["audit"]["processed_fights_path"] == staged_dir / "fights_cleaned.csv"
     assert calls["audit"]["scraped_fighters_path"] == raw_dir / "ufc_fighters_scraped.csv"

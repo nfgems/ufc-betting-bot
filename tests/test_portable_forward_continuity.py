@@ -14,6 +14,7 @@ from scripts import run_sunday_pre_ufc_collection as sunday
 from src.data import live_monitor
 from src.data.name_utils import normalize_ufcstats_id
 from src.data.practical_forward_collection import (
+    append_jsonl_unique,
     build_pre_ufc_candidate_rows,
     build_upcoming_targets,
     diff_upcoming_targets,
@@ -151,6 +152,62 @@ def test_same_stable_id_opponents_never_enter_candidate_queue():
     assert "same_stable_id_opponents" in {row["code"] for row in issues}
     assert rows == []
     assert candidate_issues == []
+
+
+def test_upcoming_date_is_not_accepted_as_a_historical_debut_boundary():
+    targets, target_issues = build_upcoming_targets([CARD], observed_at=NOW)
+
+    rows, issues = build_pre_ufc_candidate_rows(targets, observed_at=NOW)
+
+    assert target_issues == []
+    assert rows == []
+    assert {issue["fighter_id"] for issue in issues} == {
+        "aaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbb",
+    }
+    assert {issue["code"] for issue in issues} == {"missing_first_ufc_boundary"}
+
+    bounded, bounded_issues = build_pre_ufc_candidate_rows(
+        targets,
+        roster_boundaries={
+            "aaaaaaaaaaaaaaaa": "2025-01-01",
+            "bbbbbbbbbbbbbbbb": "2024-01-01",
+        },
+        observed_at=NOW,
+    )
+    assert bounded_issues == []
+    assert {row["first_ufc_date"] for row in bounded} == {
+        "2025-01-01",
+        "2024-01-01",
+    }
+
+
+def test_jsonl_append_recovers_only_a_truncated_final_record(tmp_path):
+    ledger = tmp_path / "facts.jsonl"
+    ledger.write_bytes(b'{"fact_id":"old","value":1}\n{"fact_id":')
+
+    appended = append_jsonl_unique(
+        ledger,
+        [{"fact_id": "new", "value": 2}],
+        id_field="fact_id",
+    )
+
+    assert appended == 1
+    assert [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()] == [
+        {"fact_id": "old", "value": 1},
+        {"fact_id": "new", "value": 2},
+    ]
+
+    poisoned = tmp_path / "poisoned.jsonl"
+    original = b'{"fact_id":\n{"fact_id":"intact"}\n'
+    poisoned.write_bytes(original)
+    with pytest.raises(json.JSONDecodeError):
+        append_jsonl_unique(
+            poisoned,
+            [{"fact_id": "never-written"}],
+            id_field="fact_id",
+        )
+    assert poisoned.read_bytes() == original
 
 
 def test_each_start_time_move_has_an_exact_distinct_lifecycle_fact():
@@ -369,6 +426,13 @@ def test_sunday_workflow_persists_state_before_enforcing_exit():
     assert "scripts/run_sunday_pre_ufc_collection.py" in active
     assert "--mode daily" in active
     assert "--execution-contract sunday_pre_ufc" in active
+    odds_secret_mapping = "ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}"
+    collector_step = active.split(
+        "- name: Discover current card and run queued pre-UFC collection", 1
+    )[1].split("- name: Commit durable discovery, retry, and supplement state if changed", 1)[0]
+    assert active.count(odds_secret_mapping) == 1
+    assert odds_secret_mapping in collector_step
+    assert odds_secret_mapping not in active.split("jobs:", 1)[0]
     assert "--mode weekly" not in active
     assert "--mode method" not in active
     assert "--mode post-event" not in active
@@ -376,9 +440,13 @@ def test_sunday_workflow_persists_state_before_enforcing_exit():
     assert workflow.index("id: forward_collection") < workflow.index(
         "name: Commit durable discovery, retry, and supplement state if changed"
     ) < workflow.index("name: Enforce current-card and pre-UFC collection status")
-    assert "data/raw/practical_forward_collection_v1/.coordinator.lock" in (
-        root / ".gitignore"
-    ).read_text(encoding="utf-8")
+    ignored_runtime_paths = (root / ".gitignore").read_text(encoding="utf-8")
+    assert "data/raw/practical_forward_collection_v1/.coordinator.lock" in ignored_runtime_paths
+    assert (
+        "data/raw/ufc-fight-results--ufc-fight-stats.pair-commit.json"
+        in ignored_runtime_paths
+    )
+    assert "data/processed/ufc_refresh_generations/" in ignored_runtime_paths
     runner = (root / "scripts" / "run_sunday_pre_ufc_collection.py").read_text(
         encoding="utf-8"
     )

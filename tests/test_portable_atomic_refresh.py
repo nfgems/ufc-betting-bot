@@ -153,7 +153,12 @@ def _complete_fight_observation():
     for fighter in ("Alpha", "Beta"):
         row = {column: "0" for column in backfill._REQUIRED_STAT_FIELDS}
         row.update(
-            {"EVENT": "UFC Test", "BOUT": "Alpha vs. Beta", "ROUND": "1", "FIGHTER": fighter}
+            {
+                "EVENT": "UFC Test",
+                "BOUT": "Alpha vs. Beta",
+                "ROUND": "Round 1",
+                "FIGHTER": fighter,
+            }
         )
         rows.append(row)
     return result, rows
@@ -167,6 +172,17 @@ def test_partial_fight_slice_is_rejected_before_pair_publication():
     assert backfill._fight_observation_completeness(result, rows) == (True, [])
 
 
+def test_fight_completeness_rejects_malformed_round_headings():
+    result, rows = _complete_fight_observation()
+    rows[0]["ROUND"] = "Round one"
+
+    complete, reasons = backfill._fight_observation_completeness(result, rows)
+
+    assert complete is False
+    assert "invalid_stat_round" in reasons
+    assert "incomplete_round_1_fighters" in reasons
+
+
 def _install_refresh_fakes(tmp_path, monkeypatch, *, backfill_summary, supplement_summary):
     raw_dir = tmp_path / "raw"
     processed_dir = tmp_path / "processed"
@@ -174,7 +190,10 @@ def _install_refresh_fakes(tmp_path, monkeypatch, *, backfill_summary, supplemen
     active_manifest = tmp_path / "active.json"
     raw_dir.mkdir()
     processed_dir.mkdir()
-    active_manifest.write_text('{"bundle_id":"old"}\n', encoding="utf-8")
+    active_manifest.write_text(
+        json.dumps({"bundle_id": "old", "processed_dir": str(processed_dir)}) + "\n",
+        encoding="utf-8",
+    )
     events: list[str] = []
 
     monkeypatch.setattr(scheduled, "RAW_DATA_DIR", raw_dir)
@@ -320,9 +339,79 @@ def test_custom_isolated_output_is_preserved_alongside_unaddressed_stage(
     )
 
     assert len(calls) == 1
+    assert len(calls[0]) == 2
     assert Path(calls[0][0]).parent == processed / scheduled.REFRESH_GENERATIONS_SUBDIR
     assert calls[0][1] == "candidates/isolated-pre-recovery"
     assert summary["materialized_output_subdirs"] == calls[0]
+
+
+def test_refresh_generation_cleanup_bounds_inactive_storage_and_preserves_active(
+    tmp_path,
+    monkeypatch,
+):
+    processed = tmp_path / "processed"
+    generations = processed / scheduled.REFRESH_GENERATIONS_SUBDIR
+    active = generations / "refresh-20260820T000000000000Z-active"
+    inactive = [
+        generations / "refresh-20260817T000000000000Z-oldest",
+        generations / "refresh-20260818T000000000000Z-middle",
+        generations / "refresh-20260819T000000000000Z-newest",
+    ]
+    for path in [active, *inactive]:
+        path.mkdir(parents=True)
+        (path / "marker.txt").write_text(path.name, encoding="utf-8")
+    unrelated = generations / "operator-notes"
+    unrelated.mkdir()
+    manifest = tmp_path / "runtime-manifest.json"
+    manifest.write_text(json.dumps({"processed_dir": str(active)}), encoding="utf-8")
+    monkeypatch.setattr(scheduled, "PROCESSED_DATA_DIR", processed)
+    monkeypatch.setenv(scheduled.PRODUCTION_BUNDLE_ENV, str(manifest))
+
+    summary = scheduled._prune_refresh_generations(retain_inactive=2)
+
+    assert active.is_dir()
+    assert not inactive[0].exists()
+    assert inactive[1].is_dir()
+    assert inactive[2].is_dir()
+    assert unrelated.is_dir()
+    assert summary["active_generation"] == str(active.resolve())
+    assert summary["removed"] == [str(inactive[0].resolve())]
+    assert summary["failures"] == []
+
+
+def test_refresh_generation_cleanup_fails_closed_when_active_manifest_is_invalid(
+    tmp_path,
+    monkeypatch,
+):
+    processed = tmp_path / "processed"
+    generation = (
+        processed
+        / scheduled.REFRESH_GENERATIONS_SUBDIR
+        / "refresh-20260820T000000000000Z-unknown-active"
+    )
+    generation.mkdir(parents=True)
+    manifest = tmp_path / "runtime-manifest.json"
+    manifest.write_text("{truncated", encoding="utf-8")
+    monkeypatch.setattr(scheduled, "PROCESSED_DATA_DIR", processed)
+    monkeypatch.setenv(scheduled.PRODUCTION_BUNDLE_ENV, str(manifest))
+
+    summary = scheduled._prune_refresh_generations(retain_inactive=0)
+
+    assert generation.is_dir()
+    assert len(summary["failures"]) == 1
+    assert summary["failures"][0].startswith("active_manifest_unresolved:")
+
+
+def test_scheduled_refresh_writer_lock_rejects_a_competing_process_lane(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(scheduled, "PROCESSED_DATA_DIR", tmp_path / "processed")
+
+    with scheduled._refresh_writer_lock():
+        with pytest.raises(RuntimeError, match="scheduled_ufc_refresh_already_running"):
+            with scheduled._refresh_writer_lock():
+                pass
 
 
 def test_publishable_hosted_cycle_requires_live_roster_even_when_cache_is_fresh(

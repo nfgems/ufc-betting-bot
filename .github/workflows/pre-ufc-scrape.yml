@@ -34,6 +34,8 @@ jobs:
       - name: Discover current card and run queued pre-UFC collection
         id: forward_collection
         shell: bash
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
           set +e
           python scripts/run_sunday_pre_ufc_collection.py \

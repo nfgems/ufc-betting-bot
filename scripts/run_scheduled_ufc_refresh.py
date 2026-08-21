@@ -15,6 +15,8 @@ import logging
 import os
 import shutil
 import sys
+from contextlib import contextmanager
+from functools import wraps
 from uuid import uuid4
 from collections import deque
 from datetime import datetime, timezone
@@ -62,6 +64,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DATASET_VARIANT = "pulled_all_plus_legacy_market"
 DEFAULT_REBUILD_OUTPUT_SUBDIRS = ["."]
 REFRESH_GENERATIONS_SUBDIR = "ufc_refresh_generations"
+RETAIN_INACTIVE_REFRESH_GENERATIONS = 2
 DEFAULT_AUDIT_JSON = DATA_DIR / "tmp" / "active_roster_profile_completeness_scheduled_latest.json"
 DEFAULT_AUDIT_CSV = DATA_DIR / "tmp" / "active_roster_profile_completeness_scheduled_latest.csv"
 DEFAULT_UNRESOLVED_PROFILE_JSON = DATA_DIR / "tmp" / "active_roster_profile_unresolved_scheduled_latest.json"
@@ -283,6 +286,133 @@ def _new_refresh_generation_dir(*, now: datetime | None = None) -> Path:
     return PROCESSED_DATA_DIR / REFRESH_GENERATIONS_SUBDIR / generation_id
 
 
+def _active_refresh_generation_dir(generations_root: Path) -> Path | None:
+    manifest = _active_production_manifest_path()
+    if not manifest.is_file():
+        return None
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("active production manifest is not a JSON object")
+    raw = str(payload.get("processed_dir") or "").strip()
+    if not raw:
+        raise ValueError("active production manifest has no processed_dir")
+    candidate = Path(raw).resolve(strict=False)
+    root = generations_root.resolve(strict=False)
+    if candidate.parent != root or not candidate.name.startswith("refresh-"):
+        return None
+    return candidate
+
+
+def _prune_refresh_generations(
+    *,
+    retain_inactive: int = RETAIN_INACTIVE_REFRESH_GENERATIONS,
+) -> dict[str, object]:
+    """Bound inactive refresh storage while never deleting the addressed generation."""
+    root = PROCESSED_DATA_DIR / REFRESH_GENERATIONS_SUBDIR
+    summary: dict[str, object] = {
+        "root": str(root),
+        "active_generation": "",
+        "retained_inactive": [],
+        "removed": [],
+        "failures": [],
+    }
+    if not root.exists():
+        return summary
+    if root.is_symlink() or not root.is_dir():
+        summary["failures"] = [f"unsafe_generation_root:{root}"]
+        return summary
+
+    resolved_root = root.resolve(strict=True)
+    manifest = _active_production_manifest_path()
+    manifest_before = manifest.read_bytes() if manifest.is_file() else None
+    try:
+        active = _active_refresh_generation_dir(resolved_root)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        summary["failures"] = [f"active_manifest_unresolved:{exc}"]
+        return summary
+    summary["active_generation"] = str(active) if active is not None else ""
+    candidates: list[Path] = []
+    for child in root.iterdir():
+        if child.is_symlink() or not child.is_dir() or not child.name.startswith("refresh-"):
+            continue
+        resolved = child.resolve(strict=True)
+        if resolved.parent != resolved_root:
+            summary["failures"].append(f"unsafe_generation_path:{resolved}")
+            continue
+        if active is not None and resolved == active:
+            continue
+        candidates.append(resolved)
+
+    keep_count = max(int(retain_inactive), 0)
+    candidates.sort(key=lambda path: path.name, reverse=True)
+    retained = candidates[:keep_count]
+    summary["retained_inactive"] = [str(path) for path in retained]
+    for path in candidates[keep_count:]:
+        manifest_now = manifest.read_bytes() if manifest.is_file() else None
+        if manifest_now != manifest_before:
+            summary["failures"].append("active_manifest_changed_during_cleanup")
+            break
+        try:
+            shutil.rmtree(path)
+            summary["removed"].append(str(path))
+        except OSError as exc:
+            summary["failures"].append(f"{path}:{exc}")
+    return summary
+
+
+@contextmanager
+def _refresh_writer_lock():
+    """Serialize refresh generations and manifest publication across processes."""
+    root = PROCESSED_DATA_DIR / REFRESH_GENERATIONS_SUBDIR
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / ".scheduled-refresh.lock"
+    handle = lock_path.open("a+b")
+    acquired = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise RuntimeError("scheduled_ufc_refresh_already_running") from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise RuntimeError("scheduled_ufc_refresh_already_running") from exc
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def _serialized_refresh(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _refresh_writer_lock():
+            return function(*args, **kwargs)
+
+    return wrapped
+
+
 def _staged_rebuild_output_subdirs(
     staged_processed_dir: Path,
     requested_output_subdirs: list[str],
@@ -370,6 +500,7 @@ def _refresh_outcome_reasons(
     staged_processed_dir: Path | None,
     audit_summary: dict[str, object] | None,
     row_drop_guard: dict[str, object],
+    generation_cleanup: dict[str, object],
     skip_rebuild: bool,
     skip_audit: bool,
 ) -> list[str]:
@@ -448,6 +579,8 @@ def _refresh_outcome_reasons(
         _append_outcome_reason(reasons, "audit_missing")
     if row_drop_guard.get("violations"):
         _append_outcome_reason(reasons, "row_drop_guard_violations")
+    if generation_cleanup.get("failures"):
+        _append_outcome_reason(reasons, "refresh_generation_cleanup_failures")
     return reasons
 
 
@@ -1984,6 +2117,7 @@ def _maybe_refresh_profile_supplement(
     }
 
 
+@_serialized_refresh
 def run_scheduled_refresh(
     *,
     dataset_variant: str = DEFAULT_DATASET_VARIANT,
@@ -2022,6 +2156,7 @@ def run_scheduled_refresh(
         )
     else:
         should_update_production_manifest = bool(update_production_manifest)
+    generation_cleanup = _prune_refresh_generations()
     requested_output_subdirs = [
         str(value) for value in (output_subdirs or list(DEFAULT_REBUILD_OUTPUT_SUBDIRS))
     ]
@@ -2221,6 +2356,7 @@ def run_scheduled_refresh(
         staged_processed_dir=staged_processed_dir,
         audit_summary=audit_summary,
         row_drop_guard=row_drop_guard,
+        generation_cleanup=generation_cleanup,
         skip_rebuild=skip_rebuild,
         skip_audit=skip_audit,
     )
@@ -2259,6 +2395,7 @@ def run_scheduled_refresh(
         "pre_refresh_file_state": pre_refresh_state,
         "post_refresh_file_state": post_refresh_state,
         "row_drop_guard": row_drop_guard,
+        "generation_cleanup": generation_cleanup,
         "seed_stale_scraped_fighters": seed_summary,
         "seed_stale_profile_supplement": profile_supplement_seed_summary,
         "roster_sync": roster_summary,
