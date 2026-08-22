@@ -558,7 +558,10 @@ def _refresh_outcome_reasons(
     supplement = profile_supplement_summary or {}
     if str(supplement.get("action") or "").strip().casefold() == "error":
         _append_outcome_reason(reasons, "profile_supplement_error")
-    if int(supplement.get("source_error_count") or 0) or bool(supplement.get("source_errors")):
+    source_errors = supplement.get("source_errors") or {}
+    if int(supplement.get("source_error_count") or 0) or any(
+        int(count or 0) > 0 for count in source_errors.values()
+    ):
         _append_outcome_reason(reasons, "profile_supplement_source_errors")
 
     if skip_rebuild:
