@@ -46,6 +46,58 @@ def test_scheduled_alias_reports_reject_numeric_false_identity_flags(
     )
 
 
+@pytest.mark.parametrize(
+    ("source_errors", "expected_reasons"),
+    [
+        (
+            {
+                "espn": 0,
+                "fightdx": 0,
+                "martialbot": 0,
+                "sherdog": 0,
+                "tapology": 0,
+                "wikipedia": 0,
+            },
+            [],
+        ),
+        (
+            {
+                "espn": 0,
+                "fightdx": 0,
+                "martialbot": 0,
+                "sherdog": 1,
+                "tapology": 0,
+                "wikipedia": 0,
+            },
+            ["profile_supplement_source_errors"],
+        ),
+    ],
+)
+def test_refresh_outcome_reasons_only_flags_positive_profile_source_counts(
+    source_errors,
+    expected_reasons,
+):
+    reasons = scheduled_refresh._refresh_outcome_reasons(
+        limit_fighters=None,
+        roster_summary={"rows": 1, "source": "live", "sync_complete": True},
+        backfill_summary={},
+        profile_supplement_summary={
+            "action": "completed",
+            "source_error_count": 0,
+            "source_errors": source_errors,
+        },
+        rebuild_summary={},
+        staged_processed_dir=None,
+        audit_summary={},
+        row_drop_guard={},
+        generation_cleanup={},
+        skip_rebuild=False,
+        skip_audit=False,
+    )
+
+    assert reasons == expected_reasons
+
+
 def test_write_csv_atomically_refuses_empty_overwrite(tmp_path):
     target = tmp_path / "artifact.csv"
     pd.DataFrame([{"name": "Alpha"}]).to_csv(target, index=False)
