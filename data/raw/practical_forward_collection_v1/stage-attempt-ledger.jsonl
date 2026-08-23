@@ -1,0 +1,1 @@
+{"observed_at_utc": "2026-08-23T06:18:41.675923Z", "receipt_id": "eb0bb8ea841e740ef783fe9920816b6efa890029669618e77ee7a817331ff86e", "scheduled_slot": "2026-08-23", "stage": "daily_collection", "status": "incomplete", "warning_codes": ["fighter_identity_unresolved", "scheduled_start_unavailable", "pre_ufc_identity_retry_incomplete", "pre_ufc_incomplete"]}
