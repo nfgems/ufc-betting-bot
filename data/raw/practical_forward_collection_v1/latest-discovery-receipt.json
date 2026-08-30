@@ -1,20 +1,20 @@
 {
-  "run_id": "c97aea17d59f46284df4b0358a59cc1fec92cdd46cca0384587eb8ca1d223427",
+  "run_id": "7228fb62e81d331d7601432a580ecd607444a6b5eda1e1d7f10e36f6c2f76b7e",
   "schema_version": 1,
-  "observed_at_utc": "2026-08-23T06:18:54.080321Z",
+  "observed_at_utc": "2026-08-30T10:46:30.454644Z",
   "status": "incomplete",
   "scan_complete": true,
   "publication_complete": false,
   "event_count": 8,
   "target_count": 76,
   "effective_target_count": 76,
-  "resolved_target_count": 65,
-  "issue_count": 11,
+  "resolved_target_count": 68,
+  "issue_count": 8,
   "change_count": 76,
   "raw_source_response_count": 9,
   "warning_codes": [
     "fighter_identity_unresolved"
   ],
-  "snapshot_path": "data/raw/practical_forward_collection_v1/upcoming_snapshots/20260823T061854Z_b0db87928a2c585d.json",
-  "snapshot_sha256": "b0db87928a2c585d4b539ed942714b21ad00f35033d8770bed0dc7cd27df4149"
+  "snapshot_path": "data/raw/practical_forward_collection_v1/upcoming_snapshots/20260830T104630Z_5e122b2c57c38c54.json",
+  "snapshot_sha256": "5e122b2c57c38c54b6496896beeac550326fd09528ed94a5b957112ad6040795"
 }

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-08-23T06:18:41.675923Z",
+  "generated_at_utc": "2026-08-30T10:46:18.738473Z",
   "status": "complete",
-  "candidate_count": 140,
+  "candidate_count": 162,
   "issue_count": 0,
   "warning_codes": [],
   "queue_path": "data/raw/practical_forward_collection_v1/pre-ufc-candidate-queue.csv",
