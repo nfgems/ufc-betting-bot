@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "run_id": "62e97b14b10ca008303d16cd64d42c404c2b12691a21036e8db50b5111656ef8",
+  "run_id": "eb1fccc6d1843135fe153ff8bc6311972295bd3cd981409d0ac7113ae73ed5af",
   "mode": "daily",
   "execution_contract": "sunday_pre_ufc",
-  "generated_at_utc": "2026-09-06T09:44:48.042001Z",
+  "generated_at_utc": "2026-09-13T10:41:21.410652Z",
   "status": "incomplete",
   "health_state": "incomplete",
   "failed_stages": [],
@@ -19,286 +19,26 @@
   ],
   "stages": [
     {
-      "run_id": "bf0d23ff684e192693fb9b775cbbf154bad318b8ca3be491c0fed9397028130d",
+      "run_id": "8b1bfb87dffbf56c863fbd1f18052cffe07d33f0fa0e70e61a23a34c22a84a81",
       "schema_version": 1,
-      "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+      "observed_at_utc": "2026-09-13T10:41:31.834818Z",
       "status": "incomplete",
       "scan_complete": true,
       "publication_complete": false,
-      "event_count": 8,
-      "target_count": 70,
-      "effective_target_count": 70,
-      "resolved_target_count": 63,
-      "issue_count": 7,
-      "change_count": 70,
-      "raw_source_response_count": 9,
+      "event_count": 7,
+      "target_count": 60,
+      "effective_target_count": 60,
+      "resolved_target_count": 52,
+      "issue_count": 8,
+      "change_count": 60,
+      "raw_source_response_count": 8,
       "warning_codes": [
         "fighter_identity_unresolved",
         "scheduled_start_unavailable"
       ],
-      "snapshot_path": "data/raw/practical_forward_collection_v1/upcoming_snapshots/20260906T094459Z_1b08ec7ee8615026.json",
-      "snapshot_sha256": "1b08ec7ee86150268daddc59f54184322f77ded521e4d83aa22f2ae9bb7df96b",
+      "snapshot_path": "data/raw/practical_forward_collection_v1/upcoming_snapshots/20260913T104131Z_20ea3c5a9d27eb88.json",
+      "snapshot_sha256": "20ea3c5a9d27eb883d5e521a81d331dd8e336acfb32aedd2513e0d87a2fc78a1",
       "targets": [
-        {
-          "fight_key": "ea1180f61676d7bc16262f0eb3f92894aea9e37d237eee3f68a4551a47b17cf6",
-          "pair_key": "unresolved:jessie rosas|sean king",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Sean King",
-          "fighter_a_id": "",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/sean-king",
-          "fighter_b": "Jessie Rosas",
-          "fighter_b_id": "d1026588fa65693f",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/jessie-rosas",
-          "weight_class": "Featherweight Bout",
-          "identity_status": "unresolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:2fe9032955c2e013:792be9a24df82ed6",
-          "pair_key": "ufcstats:2fe9032955c2e013|792be9a24df82ed6",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Brandon Moreno",
-          "fighter_a_id": "792be9a24df82ed6",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/brandon-moreno",
-          "fighter_b": "Joseph Morales",
-          "fighter_b_id": "2fe9032955c2e013",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/joseph-morales",
-          "weight_class": "Flyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:312f7d7b2b2f7de4:7674b836ce0698a0",
-          "pair_key": "ufcstats:312f7d7b2b2f7de4|7674b836ce0698a0",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Yousri Belgaroui",
-          "fighter_a_id": "7674b836ce0698a0",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/yousri-belgaroui",
-          "fighter_b": "Djorden Santos",
-          "fighter_b_id": "312f7d7b2b2f7de4",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/djorden-santos",
-          "weight_class": "Middleweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:34ff304266360297:e8b731feff72294b",
-          "pair_key": "ufcstats:34ff304266360297|e8b731feff72294b",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Manon Fiorot",
-          "fighter_a_id": "34ff304266360297",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/manon-fiorot",
-          "fighter_b": "Alexa Grasso",
-          "fighter_b_id": "e8b731feff72294b",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/alexa-grasso",
-          "weight_class": "Women's Flyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:447f9858ae78f921:e4a47b07044ddd72",
-          "pair_key": "ufcstats:447f9858ae78f921|e4a47b07044ddd72",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Ignacio Bahamondes",
-          "fighter_a_id": "e4a47b07044ddd72",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/ignacio-bahamondes",
-          "fighter_b": "Muslim Salikhov",
-          "fighter_b_id": "447f9858ae78f921",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/muslim-salikhov",
-          "weight_class": "Welterweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:5ef94841c4bc3f86:c96d9178c9ed9e62",
-          "pair_key": "ufcstats:5ef94841c4bc3f86|c96d9178c9ed9e62",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Tim Elliott",
-          "fighter_a_id": "c96d9178c9ed9e62",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/tim-elliott",
-          "fighter_b": "Edgar Chairez",
-          "fighter_b_id": "5ef94841c4bc3f86",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/edgar-chairez",
-          "weight_class": "Flyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:6b0a6def604de298:6eedb757f13b9978",
-          "pair_key": "ufcstats:6b0a6def604de298|6eedb757f13b9978",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Tommy McMillen",
-          "fighter_a_id": "6b0a6def604de298",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/tommy-mcmillen",
-          "fighter_b": "Marwan Rahiki",
-          "fighter_b_id": "6eedb757f13b9978",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/marwan-rahiki",
-          "weight_class": "Featherweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:6fd953151d981979:9f5609dba6584ab2",
-          "pair_key": "ufcstats:6fd953151d981979|9f5609dba6584ab2",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "JJ Aldrich",
-          "fighter_a_id": "6fd953151d981979",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/jj-aldrich",
-          "fighter_b": "Regina Tarin",
-          "fighter_b_id": "9f5609dba6584ab2",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/regina-malpica-rivera",
-          "weight_class": "Women's Flyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:7cbf7c78d3b34218:de83f920fd302871",
-          "pair_key": "ufcstats:7cbf7c78d3b34218|de83f920fd302871",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Drakkar Klose",
-          "fighter_a_id": "7cbf7c78d3b34218",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/drakkar-klose",
-          "fighter_b": "Tommy Gantt",
-          "fighter_b_id": "de83f920fd302871",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/thomas-gantt",
-          "weight_class": "Lightweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:7d6ceff6747f2de2:9211aae062b799d6",
-          "pair_key": "ufcstats:7d6ceff6747f2de2|9211aae062b799d6",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Jean Silva",
-          "fighter_a_id": "9211aae062b799d6",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/jean-silva",
-          "fighter_b": "Jose Miguel Delgado",
-          "fighter_b_id": "7d6ceff6747f2de2",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/jose-miguel-delgado",
-          "weight_class": "Featherweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:82a5152216251682:9a97acbfd5a08bfa",
-          "pair_key": "ufcstats:82a5152216251682|9a97acbfd5a08bfa",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "David Martinez",
-          "fighter_a_id": "9a97acbfd5a08bfa",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/david-martinez",
-          "fighter_b": "Dan Ige",
-          "fighter_b_id": "82a5152216251682",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/dan-ige",
-          "weight_class": "Bantamweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:a13d755965a4ec9f:e132d47bd9efbbe0",
-          "pair_key": "ufcstats:a13d755965a4ec9f|e132d47bd9efbbe0",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Rafa Garcia",
-          "fighter_a_id": "e132d47bd9efbbe0",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/rafa-garcia",
-          "fighter_b": "Rongzhu",
-          "fighter_b_id": "a13d755965a4ec9f",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/zhu-rong",
-          "weight_class": "Lightweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:fa6796c55d6c5440:fc08099550072fe4",
-          "pair_key": "ufcstats:fa6796c55d6c5440|fc08099550072fe4",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Waldo Cortes Acosta",
-          "fighter_a_id": "fc08099550072fe4",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/waldo-cortes-acosta",
-          "fighter_b": "Curtis Blaydes",
-          "fighter_b_id": "fa6796c55d6c5440",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/curtis-blaydes",
-          "weight_class": "Heavyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
         {
           "fight_key": "63af4910b991ca0fca296705add69d8967399594b7248f9108ff43a96625e014",
           "pair_key": "unresolved:joosang yoo|michael aswell",
@@ -317,7 +57,7 @@
           "weight_class": "Featherweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:04835018f90b118c:de594b35c45c2e9a",
@@ -337,7 +77,7 @@
           "weight_class": "Women's Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:0f3a990526c5e706:f7e856a73c96048e",
@@ -357,7 +97,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:140567899d98978a:c62fbc117d57b943",
@@ -377,7 +117,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:17e97649403ba428:a0f0004aadf10b71",
@@ -397,7 +137,7 @@
           "weight_class": "Flyweight Title Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:1c23ec2f1b71be40:a495f599e787614f",
@@ -417,7 +157,7 @@
           "weight_class": "Light Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:1e719d4b676dc19a:4144798612ef96e5",
@@ -437,7 +177,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:6967153c7edb4d87:e463ce0a2ca474f4",
@@ -457,7 +197,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:791c8437b341fba5:9560ff14eb3129f7",
@@ -477,7 +217,7 @@
           "weight_class": "Featherweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:7c7332319c14094c:f1d64ae34e088832",
@@ -497,7 +237,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:98a58c26c5b1ed17:e93b04e308913c2e",
@@ -517,7 +257,7 @@
           "weight_class": "Featherweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:9c393e836a852f30:eae48ff31db420c2",
@@ -537,7 +277,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:b6452706b373eea1:def8166ff24bd237",
@@ -557,11 +297,11 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
-          "fight_key": "8e75e2633fb77cafb460487384339cc6a4cccd96e3c5605d7ee23eee8329f4d6",
-          "pair_key": "unresolved:ilimbek akylbek uulu|mehemmedeli osmanli",
+          "fight_key": "bfc46a64e619d7e407108bf71437f4e7f3bbc6caa04c74537ac801ec473904c2",
+          "pair_key": "unresolved:ilimbek akylbek|mehemmedeli osmanli",
           "event_key": "url:ufc.com/event/ufc-fight-night-september-26-2026",
           "event_id": "",
           "event_title": "UFC Fight Night: Rosas Jr. vs Barcelos",
@@ -571,13 +311,13 @@
           "fighter_a": "Mehemmedeli Osmanli",
           "fighter_a_id": "",
           "fighter_a_athlete_url": "https://www.ufc.com/athlete/mehemmedeli-osmanli",
-          "fighter_b": "Ilimbek Akylbek Uulu",
+          "fighter_b": "Ilimbek Akylbek",
           "fighter_b_id": "",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek-uulu",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek",
           "weight_class": "Bantamweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "c35c7b86fd65f78c3f5048bf3afa7e5521dfddfa8de669e7bbeca43230cc1c13",
@@ -597,7 +337,7 @@
           "weight_class": "Women's Strawweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:06e4245d16fc5315:d3f5d33d61cd00c9",
@@ -617,7 +357,7 @@
           "weight_class": "Women's Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:1897b7b913736a7c:5fa2974cbd18e05c",
@@ -637,7 +377,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:260e9e0d4954aea6:f96856f9d69fd7e4",
@@ -657,7 +397,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:2c483cf443f38ece:40cb680ae1cd331f",
@@ -677,7 +417,7 @@
           "weight_class": "Women's Strawweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:48a9a128784d53d1:e5864a42c80294f6",
@@ -697,7 +437,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:5987b2458f4b5290:cc1a8b4b38b92c6d",
@@ -717,7 +457,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:69898645d600abdb:f5d82eccdea4e2dd",
@@ -737,7 +477,7 @@
           "weight_class": "Light Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:7af33fc4435017f1:d8c811df0386d5e8",
@@ -757,7 +497,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:b9f28e7045fdfce7:fe2babf95de24fb1",
@@ -777,7 +517,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "9f95afe9dbc290db3a897ab6d2ce4725718e8794adc40426f68a11528329fba7",
@@ -788,16 +528,16 @@
           "event_url": "https://www.ufc.com/event/ufc-332",
           "event_date": "2026-10-03",
           "scheduled_start_utc": "",
-          "fighter_a": "Khaos Williams",
-          "fighter_a_id": "2558ae2e5671e318",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/khaos-williams",
-          "fighter_b": "Roberto Soldic",
-          "fighter_b_id": "",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/roberto-soldic",
+          "fighter_a": "Roberto Soldic",
+          "fighter_a_id": "",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/roberto-soldic",
+          "fighter_b": "Khaos Williams",
+          "fighter_b_id": "2558ae2e5671e318",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/khaos-williams",
           "weight_class": "Welterweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:0d5cc0170c1a7e71:c21f26bbde777573",
@@ -817,7 +557,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:22e07d3da1aa3475:fdd22e895a70e4a8",
@@ -837,7 +577,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:262a7d06203657e6:6a2f7c151031653d",
@@ -857,7 +597,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:262d32ebda89efc4:2997e7fe3c9d3d4a",
@@ -877,7 +617,7 @@
           "weight_class": "Women's Flyweight Title Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:2f815ed5f8278ba6:9d83f6da776ff7d6",
@@ -897,7 +637,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:323d4ca260dfa0ba:887961364be5ceb3",
@@ -917,7 +657,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:523fa774700d7d3f:64b12fe31be7560c",
@@ -937,7 +677,7 @@
           "weight_class": "Welterweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:5e9ca8dd7d783a75:6e8349a0a0476d60",
@@ -957,7 +697,7 @@
           "weight_class": "Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:6a96ad1bc34fb113:7acbb0972e75281a",
@@ -977,7 +717,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:6e743a33d56bdaa4:aa72b0f831d0bfe5",
@@ -997,7 +737,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:b6c37948cb226e8c:c0ac37a4a1133da9",
@@ -1017,7 +757,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-10-2026|fighters:2f181c0467965b98:a93f94c923c3a9cb",
@@ -1037,7 +777,47 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
+        },
+        {
+          "fight_key": "964b8c4dd25b3d0045c8a1449196f2ae759b3edaea3527fdcb895d095c53a91a",
+          "pair_key": "unresolved:javad mahjoub|louie sutherland",
+          "event_key": "url:ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_id": "",
+          "event_title": "UFC Fight Night: Buckley vs Malott",
+          "event_url": "https://www.ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_date": "2026-10-17",
+          "scheduled_start_utc": "",
+          "fighter_a": "Javad Mahjoub",
+          "fighter_a_id": "",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/javad-mahjoub",
+          "fighter_b": "Louie Sutherland",
+          "fighter_b_id": "cdb7b38b1b357f26",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/louie-sutherland",
+          "weight_class": "Heavyweight Bout",
+          "identity_status": "unresolved",
+          "status": "active",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
+        },
+        {
+          "fight_key": "e43b80bd5ec4484c175c86c95e6f993bc372fc18af28c0baba12a14ac16bcece",
+          "pair_key": "unresolved:cody chovancek|suyoung you",
+          "event_key": "url:ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_id": "",
+          "event_title": "UFC Fight Night: Buckley vs Malott",
+          "event_url": "https://www.ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_date": "2026-10-17",
+          "scheduled_start_utc": "",
+          "fighter_a": "Cody Chovancek",
+          "fighter_a_id": "3c4320a1b6106611",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/cody-chovancek",
+          "fighter_b": "SuYoung You",
+          "fighter_b_id": "",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/suyoung-you",
+          "weight_class": "Bantamweight Bout",
+          "identity_status": "unresolved",
+          "status": "active",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:04c8b08b16a5b99e:25f9a5f3e8a52618",
@@ -1057,7 +837,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:0e46690e55a8df75:91cd52cb92dfdd52",
@@ -1077,7 +857,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:51e2f44a8dbf6984:af9efbfd63d39734",
@@ -1097,7 +877,7 @@
           "weight_class": "Women's Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:583ee11abddfc581:8f4528c10bd34fab",
@@ -1117,7 +897,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:5c637af9472ae7cc:e872e9a9a902c045",
@@ -1137,7 +917,7 @@
           "weight_class": "Women's Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:669970f7feba8ecd:a9e260472d321361",
@@ -1157,7 +937,27 @@
           "weight_class": "Women's Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
+        },
+        {
+          "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:84512339473dd300:c7c39e2fb70248b3",
+          "pair_key": "ufcstats:84512339473dd300|c7c39e2fb70248b3",
+          "event_key": "url:ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_id": "",
+          "event_title": "UFC Fight Night: Buckley vs Malott",
+          "event_url": "https://www.ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_date": "2026-10-17",
+          "scheduled_start_utc": "",
+          "fighter_a": "Chad Anheliger",
+          "fighter_a_id": "c7c39e2fb70248b3",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/chad-anheliger",
+          "fighter_b": "Steven Koslow",
+          "fighter_b_id": "84512339473dd300",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/steven-koslow",
+          "weight_class": "Bantamweight Bout",
+          "identity_status": "resolved",
+          "status": "active",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:8e9eb3fc86db0f7d:d6c0cdd7e467c440",
@@ -1177,7 +977,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:b12fb759e02378de:cd0dfd9846bd03b9",
@@ -1197,7 +997,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:b9437600497350f3:dd6103dd7127db1d",
@@ -1217,7 +1017,7 @@
           "weight_class": "Welterweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:040a74bb0a465c54:5537efc6e496dd84",
@@ -1237,7 +1037,7 @@
           "weight_class": "Featherweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:1091d4d957141094:95aff2fd8d09a5f0",
@@ -1257,7 +1057,7 @@
           "weight_class": "Light Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:279566840aa55bf2:739fd4fbb5d862f4",
@@ -1277,7 +1077,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:2e19380f34871c6a:e90a2f22417af68e",
@@ -1297,7 +1097,7 @@
           "weight_class": "Light Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:36b8f265bcd1b7a4:8ebc3a8da015d70c",
@@ -1317,7 +1117,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:76e2870ffafbe38f:e1248941344b3288",
@@ -1337,7 +1137,7 @@
           "weight_class": "Featherweight Title Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:7d0a1968b38ca439:bb2c3c3a466224af",
@@ -1357,7 +1157,7 @@
           "weight_class": "Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:99bd51917728c25d:ca28cdf526d6b6e9",
@@ -1377,7 +1177,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:c03520b5c88ed6b4:d661ce4da776fc20",
@@ -1397,7 +1197,7 @@
           "weight_class": "Bantamweight Title Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "5bb98b0180890c6c709ce6b2fee998a3352f154d1dcc11cdc5b44d33d8c3c63d",
@@ -1417,7 +1217,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "86c9c129439580223eee3e72817068aea30ec90d37127047e94212acd7b0fb66",
@@ -1437,7 +1237,7 @@
           "weight_class": "Women's Flyweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         }
       ],
       "effective_targets": [
@@ -1459,7 +1259,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "63af4910b991ca0fca296705add69d8967399594b7248f9108ff43a96625e014",
@@ -1479,7 +1279,7 @@
           "weight_class": "Featherweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "86c9c129439580223eee3e72817068aea30ec90d37127047e94212acd7b0fb66",
@@ -1499,27 +1299,27 @@
           "weight_class": "Women's Flyweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
-          "fight_key": "8e75e2633fb77cafb460487384339cc6a4cccd96e3c5605d7ee23eee8329f4d6",
-          "pair_key": "unresolved:ilimbek akylbek uulu|mehemmedeli osmanli",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-26-2026",
+          "fight_key": "964b8c4dd25b3d0045c8a1449196f2ae759b3edaea3527fdcb895d095c53a91a",
+          "pair_key": "unresolved:javad mahjoub|louie sutherland",
+          "event_key": "url:ufc.com/event/ufc-fight-night-october-17-2026",
           "event_id": "",
-          "event_title": "UFC Fight Night: Rosas Jr. vs Barcelos",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-26-2026",
-          "event_date": "2026-09-26",
+          "event_title": "UFC Fight Night: Buckley vs Malott",
+          "event_url": "https://www.ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_date": "2026-10-17",
           "scheduled_start_utc": "",
-          "fighter_a": "Mehemmedeli Osmanli",
+          "fighter_a": "Javad Mahjoub",
           "fighter_a_id": "",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/mehemmedeli-osmanli",
-          "fighter_b": "Ilimbek Akylbek Uulu",
-          "fighter_b_id": "",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek-uulu",
-          "weight_class": "Bantamweight Bout",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/javad-mahjoub",
+          "fighter_b": "Louie Sutherland",
+          "fighter_b_id": "cdb7b38b1b357f26",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/louie-sutherland",
+          "weight_class": "Heavyweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "9f95afe9dbc290db3a897ab6d2ce4725718e8794adc40426f68a11528329fba7",
@@ -1530,16 +1330,36 @@
           "event_url": "https://www.ufc.com/event/ufc-332",
           "event_date": "2026-10-03",
           "scheduled_start_utc": "",
-          "fighter_a": "Khaos Williams",
-          "fighter_a_id": "2558ae2e5671e318",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/khaos-williams",
-          "fighter_b": "Roberto Soldic",
-          "fighter_b_id": "",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/roberto-soldic",
+          "fighter_a": "Roberto Soldic",
+          "fighter_a_id": "",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/roberto-soldic",
+          "fighter_b": "Khaos Williams",
+          "fighter_b_id": "2558ae2e5671e318",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/khaos-williams",
           "weight_class": "Welterweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
+        },
+        {
+          "fight_key": "bfc46a64e619d7e407108bf71437f4e7f3bbc6caa04c74537ac801ec473904c2",
+          "pair_key": "unresolved:ilimbek akylbek|mehemmedeli osmanli",
+          "event_key": "url:ufc.com/event/ufc-fight-night-september-26-2026",
+          "event_id": "",
+          "event_title": "UFC Fight Night: Rosas Jr. vs Barcelos",
+          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-26-2026",
+          "event_date": "2026-09-26",
+          "scheduled_start_utc": "",
+          "fighter_a": "Mehemmedeli Osmanli",
+          "fighter_a_id": "",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/mehemmedeli-osmanli",
+          "fighter_b": "Ilimbek Akylbek",
+          "fighter_b_id": "",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek",
+          "weight_class": "Bantamweight Bout",
+          "identity_status": "unresolved",
+          "status": "active",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "c35c7b86fd65f78c3f5048bf3afa7e5521dfddfa8de669e7bbeca43230cc1c13",
@@ -1559,27 +1379,27 @@
           "weight_class": "Women's Strawweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
-          "fight_key": "ea1180f61676d7bc16262f0eb3f92894aea9e37d237eee3f68a4551a47b17cf6",
-          "pair_key": "unresolved:jessie rosas|sean king",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
+          "fight_key": "e43b80bd5ec4484c175c86c95e6f993bc372fc18af28c0baba12a14ac16bcece",
+          "pair_key": "unresolved:cody chovancek|suyoung you",
+          "event_key": "url:ufc.com/event/ufc-fight-night-october-17-2026",
           "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
+          "event_title": "UFC Fight Night: Buckley vs Malott",
+          "event_url": "https://www.ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_date": "2026-10-17",
           "scheduled_start_utc": "",
-          "fighter_a": "Sean King",
-          "fighter_a_id": "",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/sean-king",
-          "fighter_b": "Jessie Rosas",
-          "fighter_b_id": "d1026588fa65693f",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/jessie-rosas",
-          "weight_class": "Featherweight Bout",
+          "fighter_a": "Cody Chovancek",
+          "fighter_a_id": "3c4320a1b6106611",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/cody-chovancek",
+          "fighter_b": "SuYoung You",
+          "fighter_b_id": "",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/suyoung-you",
+          "weight_class": "Bantamweight Bout",
           "identity_status": "unresolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:04835018f90b118c:de594b35c45c2e9a",
@@ -1599,7 +1419,7 @@
           "weight_class": "Women's Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:0f3a990526c5e706:f7e856a73c96048e",
@@ -1619,7 +1439,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:140567899d98978a:c62fbc117d57b943",
@@ -1639,7 +1459,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:17e97649403ba428:a0f0004aadf10b71",
@@ -1659,7 +1479,7 @@
           "weight_class": "Flyweight Title Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:1c23ec2f1b71be40:a495f599e787614f",
@@ -1679,7 +1499,7 @@
           "weight_class": "Light Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:1e719d4b676dc19a:4144798612ef96e5",
@@ -1699,7 +1519,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:6967153c7edb4d87:e463ce0a2ca474f4",
@@ -1719,7 +1539,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:791c8437b341fba5:9560ff14eb3129f7",
@@ -1739,7 +1559,7 @@
           "weight_class": "Featherweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:7c7332319c14094c:f1d64ae34e088832",
@@ -1759,7 +1579,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:98a58c26c5b1ed17:e93b04e308913c2e",
@@ -1779,7 +1599,7 @@
           "weight_class": "Featherweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:9c393e836a852f30:eae48ff31db420c2",
@@ -1799,7 +1619,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/cryptocom-ufc-331|fighters:b6452706b373eea1:def8166ff24bd237",
@@ -1819,7 +1639,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:0d5cc0170c1a7e71:c21f26bbde777573",
@@ -1839,7 +1659,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:22e07d3da1aa3475:fdd22e895a70e4a8",
@@ -1859,7 +1679,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:262a7d06203657e6:6a2f7c151031653d",
@@ -1879,7 +1699,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:262d32ebda89efc4:2997e7fe3c9d3d4a",
@@ -1899,7 +1719,7 @@
           "weight_class": "Women's Flyweight Title Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:2f815ed5f8278ba6:9d83f6da776ff7d6",
@@ -1919,7 +1739,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:323d4ca260dfa0ba:887961364be5ceb3",
@@ -1939,7 +1759,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:523fa774700d7d3f:64b12fe31be7560c",
@@ -1959,7 +1779,7 @@
           "weight_class": "Welterweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:5e9ca8dd7d783a75:6e8349a0a0476d60",
@@ -1979,7 +1799,7 @@
           "weight_class": "Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:6a96ad1bc34fb113:7acbb0972e75281a",
@@ -1999,7 +1819,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:6e743a33d56bdaa4:aa72b0f831d0bfe5",
@@ -2019,7 +1839,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-332|fighters:b6c37948cb226e8c:c0ac37a4a1133da9",
@@ -2039,7 +1859,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:040a74bb0a465c54:5537efc6e496dd84",
@@ -2059,7 +1879,7 @@
           "weight_class": "Featherweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:1091d4d957141094:95aff2fd8d09a5f0",
@@ -2079,7 +1899,7 @@
           "weight_class": "Light Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:279566840aa55bf2:739fd4fbb5d862f4",
@@ -2099,7 +1919,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:2e19380f34871c6a:e90a2f22417af68e",
@@ -2119,7 +1939,7 @@
           "weight_class": "Light Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:36b8f265bcd1b7a4:8ebc3a8da015d70c",
@@ -2139,7 +1959,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:76e2870ffafbe38f:e1248941344b3288",
@@ -2159,7 +1979,7 @@
           "weight_class": "Featherweight Title Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:7d0a1968b38ca439:bb2c3c3a466224af",
@@ -2179,7 +1999,7 @@
           "weight_class": "Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:99bd51917728c25d:ca28cdf526d6b6e9",
@@ -2199,7 +2019,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-333|fighters:c03520b5c88ed6b4:d661ce4da776fc20",
@@ -2219,7 +2039,7 @@
           "weight_class": "Bantamweight Title Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-10-2026|fighters:2f181c0467965b98:a93f94c923c3a9cb",
@@ -2239,7 +2059,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:04c8b08b16a5b99e:25f9a5f3e8a52618",
@@ -2259,7 +2079,7 @@
           "weight_class": "Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:0e46690e55a8df75:91cd52cb92dfdd52",
@@ -2279,7 +2099,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:51e2f44a8dbf6984:af9efbfd63d39734",
@@ -2299,7 +2119,7 @@
           "weight_class": "Women's Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:583ee11abddfc581:8f4528c10bd34fab",
@@ -2319,7 +2139,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:5c637af9472ae7cc:e872e9a9a902c045",
@@ -2339,7 +2159,7 @@
           "weight_class": "Women's Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:669970f7feba8ecd:a9e260472d321361",
@@ -2359,7 +2179,27 @@
           "weight_class": "Women's Flyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
+        },
+        {
+          "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:84512339473dd300:c7c39e2fb70248b3",
+          "pair_key": "ufcstats:84512339473dd300|c7c39e2fb70248b3",
+          "event_key": "url:ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_id": "",
+          "event_title": "UFC Fight Night: Buckley vs Malott",
+          "event_url": "https://www.ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_date": "2026-10-17",
+          "scheduled_start_utc": "",
+          "fighter_a": "Chad Anheliger",
+          "fighter_a_id": "c7c39e2fb70248b3",
+          "fighter_a_athlete_url": "https://www.ufc.com/athlete/chad-anheliger",
+          "fighter_b": "Steven Koslow",
+          "fighter_b_id": "84512339473dd300",
+          "fighter_b_athlete_url": "https://www.ufc.com/athlete/steven-koslow",
+          "weight_class": "Bantamweight Bout",
+          "identity_status": "resolved",
+          "status": "active",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:8e9eb3fc86db0f7d:d6c0cdd7e467c440",
@@ -2379,7 +2219,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:b12fb759e02378de:cd0dfd9846bd03b9",
@@ -2399,7 +2239,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:b9437600497350f3:dd6103dd7127db1d",
@@ -2419,247 +2259,7 @@
           "weight_class": "Welterweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:2fe9032955c2e013:792be9a24df82ed6",
-          "pair_key": "ufcstats:2fe9032955c2e013|792be9a24df82ed6",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Brandon Moreno",
-          "fighter_a_id": "792be9a24df82ed6",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/brandon-moreno",
-          "fighter_b": "Joseph Morales",
-          "fighter_b_id": "2fe9032955c2e013",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/joseph-morales",
-          "weight_class": "Flyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:312f7d7b2b2f7de4:7674b836ce0698a0",
-          "pair_key": "ufcstats:312f7d7b2b2f7de4|7674b836ce0698a0",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Yousri Belgaroui",
-          "fighter_a_id": "7674b836ce0698a0",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/yousri-belgaroui",
-          "fighter_b": "Djorden Santos",
-          "fighter_b_id": "312f7d7b2b2f7de4",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/djorden-santos",
-          "weight_class": "Middleweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:34ff304266360297:e8b731feff72294b",
-          "pair_key": "ufcstats:34ff304266360297|e8b731feff72294b",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Manon Fiorot",
-          "fighter_a_id": "34ff304266360297",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/manon-fiorot",
-          "fighter_b": "Alexa Grasso",
-          "fighter_b_id": "e8b731feff72294b",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/alexa-grasso",
-          "weight_class": "Women's Flyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:447f9858ae78f921:e4a47b07044ddd72",
-          "pair_key": "ufcstats:447f9858ae78f921|e4a47b07044ddd72",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Ignacio Bahamondes",
-          "fighter_a_id": "e4a47b07044ddd72",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/ignacio-bahamondes",
-          "fighter_b": "Muslim Salikhov",
-          "fighter_b_id": "447f9858ae78f921",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/muslim-salikhov",
-          "weight_class": "Welterweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:5ef94841c4bc3f86:c96d9178c9ed9e62",
-          "pair_key": "ufcstats:5ef94841c4bc3f86|c96d9178c9ed9e62",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Tim Elliott",
-          "fighter_a_id": "c96d9178c9ed9e62",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/tim-elliott",
-          "fighter_b": "Edgar Chairez",
-          "fighter_b_id": "5ef94841c4bc3f86",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/edgar-chairez",
-          "weight_class": "Flyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:6b0a6def604de298:6eedb757f13b9978",
-          "pair_key": "ufcstats:6b0a6def604de298|6eedb757f13b9978",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Tommy McMillen",
-          "fighter_a_id": "6b0a6def604de298",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/tommy-mcmillen",
-          "fighter_b": "Marwan Rahiki",
-          "fighter_b_id": "6eedb757f13b9978",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/marwan-rahiki",
-          "weight_class": "Featherweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:6fd953151d981979:9f5609dba6584ab2",
-          "pair_key": "ufcstats:6fd953151d981979|9f5609dba6584ab2",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "JJ Aldrich",
-          "fighter_a_id": "6fd953151d981979",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/jj-aldrich",
-          "fighter_b": "Regina Tarin",
-          "fighter_b_id": "9f5609dba6584ab2",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/regina-malpica-rivera",
-          "weight_class": "Women's Flyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:7cbf7c78d3b34218:de83f920fd302871",
-          "pair_key": "ufcstats:7cbf7c78d3b34218|de83f920fd302871",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Drakkar Klose",
-          "fighter_a_id": "7cbf7c78d3b34218",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/drakkar-klose",
-          "fighter_b": "Tommy Gantt",
-          "fighter_b_id": "de83f920fd302871",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/thomas-gantt",
-          "weight_class": "Lightweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:7d6ceff6747f2de2:9211aae062b799d6",
-          "pair_key": "ufcstats:7d6ceff6747f2de2|9211aae062b799d6",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Jean Silva",
-          "fighter_a_id": "9211aae062b799d6",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/jean-silva",
-          "fighter_b": "Jose Miguel Delgado",
-          "fighter_b_id": "7d6ceff6747f2de2",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/jose-miguel-delgado",
-          "weight_class": "Featherweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:82a5152216251682:9a97acbfd5a08bfa",
-          "pair_key": "ufcstats:82a5152216251682|9a97acbfd5a08bfa",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "David Martinez",
-          "fighter_a_id": "9a97acbfd5a08bfa",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/david-martinez",
-          "fighter_b": "Dan Ige",
-          "fighter_b_id": "82a5152216251682",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/dan-ige",
-          "weight_class": "Bantamweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:a13d755965a4ec9f:e132d47bd9efbbe0",
-          "pair_key": "ufcstats:a13d755965a4ec9f|e132d47bd9efbbe0",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Rafa Garcia",
-          "fighter_a_id": "e132d47bd9efbbe0",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/rafa-garcia",
-          "fighter_b": "Rongzhu",
-          "fighter_b_id": "a13d755965a4ec9f",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/zhu-rong",
-          "weight_class": "Lightweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
-        },
-        {
-          "fight_key": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:fa6796c55d6c5440:fc08099550072fe4",
-          "pair_key": "ufcstats:fa6796c55d6c5440|fc08099550072fe4",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_id": "",
-          "event_title": "UFC Fight Night: Silva vs Delgado",
-          "event_url": "https://www.ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date": "2026-09-12",
-          "scheduled_start_utc": "",
-          "fighter_a": "Waldo Cortes Acosta",
-          "fighter_a_id": "fc08099550072fe4",
-          "fighter_a_athlete_url": "https://www.ufc.com/athlete/waldo-cortes-acosta",
-          "fighter_b": "Curtis Blaydes",
-          "fighter_b_id": "fa6796c55d6c5440",
-          "fighter_b_athlete_url": "https://www.ufc.com/athlete/curtis-blaydes",
-          "weight_class": "Heavyweight Bout",
-          "identity_status": "resolved",
-          "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:06e4245d16fc5315:d3f5d33d61cd00c9",
@@ -2679,7 +2279,7 @@
           "weight_class": "Women's Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:1897b7b913736a7c:5fa2974cbd18e05c",
@@ -2699,7 +2299,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:260e9e0d4954aea6:f96856f9d69fd7e4",
@@ -2719,7 +2319,7 @@
           "weight_class": "Middleweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:2c483cf443f38ece:40cb680ae1cd331f",
@@ -2739,7 +2339,7 @@
           "weight_class": "Women's Strawweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:48a9a128784d53d1:e5864a42c80294f6",
@@ -2759,7 +2359,7 @@
           "weight_class": "Lightweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:5987b2458f4b5290:cc1a8b4b38b92c6d",
@@ -2779,7 +2379,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:69898645d600abdb:f5d82eccdea4e2dd",
@@ -2799,7 +2399,7 @@
           "weight_class": "Light Heavyweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:7af33fc4435017f1:d8c811df0386d5e8",
@@ -2819,7 +2419,7 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         },
         {
           "fight_key": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:b9f28e7045fdfce7:fe2babf95de24fb1",
@@ -2839,16 +2439,10 @@
           "weight_class": "Bantamweight Bout",
           "identity_status": "resolved",
           "status": "active",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z"
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z"
         }
       ],
       "issues": [
-        {
-          "code": "fighter_identity_unresolved",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "fighter_a": "Sean King",
-          "fighter_b": "Jessie Rosas"
-        },
         {
           "code": "fighter_identity_unresolved",
           "event_key": "url:ufc.com/event/cryptocom-ufc-331",
@@ -2858,20 +2452,32 @@
         {
           "code": "fighter_identity_unresolved",
           "event_key": "url:ufc.com/event/ufc-fight-night-september-26-2026",
+          "fighter_a": "Mehemmedeli Osmanli",
+          "fighter_b": "Ilimbek Akylbek"
+        },
+        {
+          "code": "fighter_identity_unresolved",
+          "event_key": "url:ufc.com/event/ufc-fight-night-september-26-2026",
           "fighter_a": "Melissa Amaya",
           "fighter_b": "Valesca Machado"
         },
         {
           "code": "fighter_identity_unresolved",
-          "event_key": "url:ufc.com/event/ufc-fight-night-september-26-2026",
-          "fighter_a": "Mehemmedeli Osmanli",
-          "fighter_b": "Ilimbek Akylbek Uulu"
+          "event_key": "url:ufc.com/event/ufc-332",
+          "fighter_a": "Roberto Soldic",
+          "fighter_b": "Khaos Williams"
         },
         {
           "code": "fighter_identity_unresolved",
-          "event_key": "url:ufc.com/event/ufc-332",
-          "fighter_a": "Khaos Williams",
-          "fighter_b": "Roberto Soldic"
+          "event_key": "url:ufc.com/event/ufc-fight-night-october-17-2026",
+          "fighter_a": "Cody Chovancek",
+          "fighter_b": "SuYoung You"
+        },
+        {
+          "code": "fighter_identity_unresolved",
+          "event_key": "url:ufc.com/event/ufc-fight-night-october-17-2026",
+          "fighter_a": "Javad Mahjoub",
+          "fighter_b": "Louie Sutherland"
         },
         {
           "code": "fighter_identity_unresolved",
@@ -2890,7 +2496,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:06e4245d16fc5315:d3f5d33d61cd00c9",
           "pair_key": "ufcstats:06e4245d16fc5315|d3f5d33d61cd00c9",
@@ -2913,7 +2519,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:99bd51917728c25d:ca28cdf526d6b6e9",
           "pair_key": "ufcstats:99bd51917728c25d|ca28cdf526d6b6e9",
@@ -2936,53 +2542,30 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:7cbf7c78d3b34218:de83f920fd302871",
-          "pair_key": "ufcstats:7cbf7c78d3b34218|de83f920fd302871",
+          "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:84512339473dd300:c7c39e2fb70248b3",
+          "pair_key": "ufcstats:84512339473dd300|c7c39e2fb70248b3",
           "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
+          "event_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026",
           "event_date_before": "",
-          "event_date_after": "2026-09-12",
+          "event_date_after": "2026-10-17",
           "scheduled_start_utc_before": "",
           "scheduled_start_utc_after": "",
           "fighter_a_before": "",
           "fighter_a_id_before": "",
-          "fighter_a_after": "Drakkar Klose",
-          "fighter_a_id_after": "7cbf7c78d3b34218",
+          "fighter_a_after": "Chad Anheliger",
+          "fighter_a_id_after": "c7c39e2fb70248b3",
           "fighter_b_before": "",
           "fighter_b_id_before": "",
-          "fighter_b_after": "Tommy Gantt",
-          "fighter_b_id_after": "de83f920fd302871",
-          "change_id": "11220664b93dd11ad763c45cf9ffe3efef8c020177af1d53419fc58d411b29ca"
+          "fighter_b_after": "Steven Koslow",
+          "fighter_b_id_after": "84512339473dd300",
+          "change_id": "071a5b8c52328dbc17cbc5ef0f9babd2cbd8510153f38a1ed2c517d5fdb34890"
         },
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:312f7d7b2b2f7de4:7674b836ce0698a0",
-          "pair_key": "ufcstats:312f7d7b2b2f7de4|7674b836ce0698a0",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Yousri Belgaroui",
-          "fighter_a_id_after": "7674b836ce0698a0",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Djorden Santos",
-          "fighter_b_id_after": "312f7d7b2b2f7de4",
-          "change_id": "11c042c8d9b29d07c50cef81cf85df68795d1bc4d71dcd8631d045f796b92e92"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:1e719d4b676dc19a:4144798612ef96e5",
           "pair_key": "ufcstats:1e719d4b676dc19a|4144798612ef96e5",
@@ -3005,7 +2588,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:0f3a990526c5e706:f7e856a73c96048e",
           "pair_key": "ufcstats:0f3a990526c5e706|f7e856a73c96048e",
@@ -3028,30 +2611,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:7d6ceff6747f2de2:9211aae062b799d6",
-          "pair_key": "ufcstats:7d6ceff6747f2de2|9211aae062b799d6",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Jean Silva",
-          "fighter_a_id_after": "9211aae062b799d6",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Jose Miguel Delgado",
-          "fighter_b_id_after": "7d6ceff6747f2de2",
-          "change_id": "1c73be7edd79553c6111794758379b81da426f343a57df164f15f045162ea5aa"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:17e97649403ba428:a0f0004aadf10b71",
           "pair_key": "ufcstats:17e97649403ba428|a0f0004aadf10b71",
@@ -3074,7 +2634,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:c03520b5c88ed6b4:d661ce4da776fc20",
           "pair_key": "ufcstats:c03520b5c88ed6b4|d661ce4da776fc20",
@@ -3097,7 +2657,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:791c8437b341fba5:9560ff14eb3129f7",
           "pair_key": "ufcstats:791c8437b341fba5|9560ff14eb3129f7",
@@ -3120,30 +2680,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:a13d755965a4ec9f:e132d47bd9efbbe0",
-          "pair_key": "ufcstats:a13d755965a4ec9f|e132d47bd9efbbe0",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Rafa Garcia",
-          "fighter_a_id_after": "e132d47bd9efbbe0",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Rongzhu",
-          "fighter_b_id_after": "a13d755965a4ec9f",
-          "change_id": "20d8c34d1ccd1765672a9745442777451ec3277abda7e28794ce5a69b7795dbe"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:583ee11abddfc581:8f4528c10bd34fab",
           "pair_key": "ufcstats:583ee11abddfc581|8f4528c10bd34fab",
@@ -3166,7 +2703,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:0d5cc0170c1a7e71:c21f26bbde777573",
           "pair_key": "ufcstats:0d5cc0170c1a7e71|c21f26bbde777573",
@@ -3189,7 +2726,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:260e9e0d4954aea6:f96856f9d69fd7e4",
           "pair_key": "ufcstats:260e9e0d4954aea6|f96856f9d69fd7e4",
@@ -3212,7 +2749,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:7d0a1968b38ca439:bb2c3c3a466224af",
           "pair_key": "ufcstats:7d0a1968b38ca439|bb2c3c3a466224af",
@@ -3235,7 +2772,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:0e46690e55a8df75:91cd52cb92dfdd52",
           "pair_key": "ufcstats:0e46690e55a8df75|91cd52cb92dfdd52",
@@ -3258,7 +2795,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:669970f7feba8ecd:a9e260472d321361",
           "pair_key": "ufcstats:669970f7feba8ecd|a9e260472d321361",
@@ -3281,30 +2818,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:6b0a6def604de298:6eedb757f13b9978",
-          "pair_key": "ufcstats:6b0a6def604de298|6eedb757f13b9978",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Tommy McMillen",
-          "fighter_a_id_after": "6b0a6def604de298",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Marwan Rahiki",
-          "fighter_b_id_after": "6eedb757f13b9978",
-          "change_id": "395f5f9ed67d5d604ee65a2748695a93888f6f427581b6adcfd63310e8d2413a"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "63af4910b991ca0fca296705add69d8967399594b7248f9108ff43a96625e014",
           "pair_key": "unresolved:joosang yoo|michael aswell",
@@ -3327,7 +2841,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:1091d4d957141094:95aff2fd8d09a5f0",
           "pair_key": "ufcstats:1091d4d957141094|95aff2fd8d09a5f0",
@@ -3350,7 +2864,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:b12fb759e02378de:cd0dfd9846bd03b9",
           "pair_key": "ufcstats:b12fb759e02378de|cd0dfd9846bd03b9",
@@ -3373,30 +2887,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "8e75e2633fb77cafb460487384339cc6a4cccd96e3c5605d7ee23eee8329f4d6",
-          "pair_key": "unresolved:ilimbek akylbek uulu|mehemmedeli osmanli",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-26",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Mehemmedeli Osmanli",
-          "fighter_a_id_after": "",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Ilimbek Akylbek Uulu",
-          "fighter_b_id_after": "",
-          "change_id": "3efe89415ce775947d061e44c5b52bb02476a750f1cb13bfd0df204df8c6ec34"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:98a58c26c5b1ed17:e93b04e308913c2e",
           "pair_key": "ufcstats:98a58c26c5b1ed17|e93b04e308913c2e",
@@ -3419,7 +2910,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:5c637af9472ae7cc:e872e9a9a902c045",
           "pair_key": "ufcstats:5c637af9472ae7cc|e872e9a9a902c045",
@@ -3442,7 +2933,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:1897b7b913736a7c:5fa2974cbd18e05c",
           "pair_key": "ufcstats:1897b7b913736a7c|5fa2974cbd18e05c",
@@ -3465,7 +2956,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-10-2026|fighters:2f181c0467965b98:a93f94c923c3a9cb",
           "pair_key": "ufcstats:2f181c0467965b98|a93f94c923c3a9cb",
@@ -3488,7 +2979,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:9c393e836a852f30:eae48ff31db420c2",
           "pair_key": "ufcstats:9c393e836a852f30|eae48ff31db420c2",
@@ -3511,30 +3002,30 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:5ef94841c4bc3f86:c96d9178c9ed9e62",
-          "pair_key": "ufcstats:5ef94841c4bc3f86|c96d9178c9ed9e62",
+          "fight_key_after": "e43b80bd5ec4484c175c86c95e6f993bc372fc18af28c0baba12a14ac16bcece",
+          "pair_key": "unresolved:cody chovancek|suyoung you",
           "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
+          "event_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026",
           "event_date_before": "",
-          "event_date_after": "2026-09-12",
+          "event_date_after": "2026-10-17",
           "scheduled_start_utc_before": "",
           "scheduled_start_utc_after": "",
           "fighter_a_before": "",
           "fighter_a_id_before": "",
-          "fighter_a_after": "Tim Elliott",
-          "fighter_a_id_after": "c96d9178c9ed9e62",
+          "fighter_a_after": "Cody Chovancek",
+          "fighter_a_id_after": "3c4320a1b6106611",
           "fighter_b_before": "",
           "fighter_b_id_before": "",
-          "fighter_b_after": "Edgar Chairez",
-          "fighter_b_id_after": "5ef94841c4bc3f86",
-          "change_id": "4932e29bea4c0116d77effeb1e471234047851d0cea57d41a0b2ea065ae6a517"
+          "fighter_b_after": "SuYoung You",
+          "fighter_b_id_after": "",
+          "change_id": "4a9c804a758b34fe61b219007cd7b91534efdd265366aa574cebbf95dca3074f"
         },
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "5bb98b0180890c6c709ce6b2fee998a3352f154d1dcc11cdc5b44d33d8c3c63d",
           "pair_key": "unresolved:joseph kropschot|nicholas klein",
@@ -3557,7 +3048,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:69898645d600abdb:f5d82eccdea4e2dd",
           "pair_key": "ufcstats:69898645d600abdb|f5d82eccdea4e2dd",
@@ -3580,30 +3071,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:34ff304266360297:e8b731feff72294b",
-          "pair_key": "ufcstats:34ff304266360297|e8b731feff72294b",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Manon Fiorot",
-          "fighter_a_id_after": "34ff304266360297",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Alexa Grasso",
-          "fighter_b_id_after": "e8b731feff72294b",
-          "change_id": "5a7f9d418f4cb784215aee61cedffaea7450adec3a09ecfdc1705f8f625db203"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:140567899d98978a:c62fbc117d57b943",
           "pair_key": "ufcstats:140567899d98978a|c62fbc117d57b943",
@@ -3626,7 +3094,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:5987b2458f4b5290:cc1a8b4b38b92c6d",
           "pair_key": "ufcstats:5987b2458f4b5290|cc1a8b4b38b92c6d",
@@ -3649,7 +3117,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:04c8b08b16a5b99e:25f9a5f3e8a52618",
           "pair_key": "ufcstats:04c8b08b16a5b99e|25f9a5f3e8a52618",
@@ -3672,7 +3140,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:04835018f90b118c:de594b35c45c2e9a",
           "pair_key": "ufcstats:04835018f90b118c|de594b35c45c2e9a",
@@ -3695,7 +3163,30 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
+          "fight_key_before": "",
+          "fight_key_after": "964b8c4dd25b3d0045c8a1449196f2ae759b3edaea3527fdcb895d095c53a91a",
+          "pair_key": "unresolved:javad mahjoub|louie sutherland",
+          "event_key_before": "",
+          "event_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026",
+          "event_date_before": "",
+          "event_date_after": "2026-10-17",
+          "scheduled_start_utc_before": "",
+          "scheduled_start_utc_after": "",
+          "fighter_a_before": "",
+          "fighter_a_id_before": "",
+          "fighter_a_after": "Javad Mahjoub",
+          "fighter_a_id_after": "",
+          "fighter_b_before": "",
+          "fighter_b_id_before": "",
+          "fighter_b_after": "Louie Sutherland",
+          "fighter_b_id_after": "cdb7b38b1b357f26",
+          "change_id": "7a1313044b7fdeff7fcca43720de814da41610bba1d12bf50a019253b02dd250"
+        },
+        {
+          "schema_version": 1,
+          "change_type": "fight_added",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:6a96ad1bc34fb113:7acbb0972e75281a",
           "pair_key": "ufcstats:6a96ad1bc34fb113|7acbb0972e75281a",
@@ -3718,30 +3209,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:82a5152216251682:9a97acbfd5a08bfa",
-          "pair_key": "ufcstats:82a5152216251682|9a97acbfd5a08bfa",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "David Martinez",
-          "fighter_a_id_after": "9a97acbfd5a08bfa",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Dan Ige",
-          "fighter_b_id_after": "82a5152216251682",
-          "change_id": "7f4088b55ca4ae4aadf8b38f128f64a79dc4b39786d9012c57966f8c256f6c04"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "c35c7b86fd65f78c3f5048bf3afa7e5521dfddfa8de669e7bbeca43230cc1c13",
           "pair_key": "unresolved:melissa amaya|valesca machado",
@@ -3764,7 +3232,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:b6c37948cb226e8c:c0ac37a4a1133da9",
           "pair_key": "ufcstats:b6c37948cb226e8c|c0ac37a4a1133da9",
@@ -3787,30 +3255,30 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:447f9858ae78f921:e4a47b07044ddd72",
-          "pair_key": "ufcstats:447f9858ae78f921|e4a47b07044ddd72",
+          "fight_key_after": "9f95afe9dbc290db3a897ab6d2ce4725718e8794adc40426f68a11528329fba7",
+          "pair_key": "unresolved:khaos williams|roberto soldic",
           "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
+          "event_key_after": "url:ufc.com/event/ufc-332",
           "event_date_before": "",
-          "event_date_after": "2026-09-12",
+          "event_date_after": "2026-10-03",
           "scheduled_start_utc_before": "",
           "scheduled_start_utc_after": "",
           "fighter_a_before": "",
           "fighter_a_id_before": "",
-          "fighter_a_after": "Ignacio Bahamondes",
-          "fighter_a_id_after": "e4a47b07044ddd72",
+          "fighter_a_after": "Roberto Soldic",
+          "fighter_a_id_after": "",
           "fighter_b_before": "",
           "fighter_b_id_before": "",
-          "fighter_b_after": "Muslim Salikhov",
-          "fighter_b_id_after": "447f9858ae78f921",
-          "change_id": "8920641b395fff633200e8a64c6595b58de562c19feb5c79285d38d771d66b7b"
+          "fighter_b_after": "Khaos Williams",
+          "fighter_b_id_after": "2558ae2e5671e318",
+          "change_id": "8ec41a136392730fa7ffd4a1244a640fb6f9f169cd2b29621aa35867b4bdd9fe"
         },
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:b9f28e7045fdfce7:fe2babf95de24fb1",
           "pair_key": "ufcstats:b9f28e7045fdfce7|fe2babf95de24fb1",
@@ -3833,7 +3301,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:5e9ca8dd7d783a75:6e8349a0a0476d60",
           "pair_key": "ufcstats:5e9ca8dd7d783a75|6e8349a0a0476d60",
@@ -3856,7 +3324,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:76e2870ffafbe38f:e1248941344b3288",
           "pair_key": "ufcstats:76e2870ffafbe38f|e1248941344b3288",
@@ -3879,30 +3347,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:fa6796c55d6c5440:fc08099550072fe4",
-          "pair_key": "ufcstats:fa6796c55d6c5440|fc08099550072fe4",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Waldo Cortes Acosta",
-          "fighter_a_id_after": "fc08099550072fe4",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Curtis Blaydes",
-          "fighter_b_id_after": "fa6796c55d6c5440",
-          "change_id": "985203ba828e641522d120b3708f2889cba12851cc239f73e2b4dab667245423"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:48a9a128784d53d1:e5864a42c80294f6",
           "pair_key": "ufcstats:48a9a128784d53d1|e5864a42c80294f6",
@@ -3925,7 +3370,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:6967153c7edb4d87:e463ce0a2ca474f4",
           "pair_key": "ufcstats:6967153c7edb4d87|e463ce0a2ca474f4",
@@ -3948,7 +3393,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:8e9eb3fc86db0f7d:d6c0cdd7e467c440",
           "pair_key": "ufcstats:8e9eb3fc86db0f7d|d6c0cdd7e467c440",
@@ -3971,7 +3416,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:2c483cf443f38ece:40cb680ae1cd331f",
           "pair_key": "ufcstats:2c483cf443f38ece|40cb680ae1cd331f",
@@ -3994,7 +3439,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:1c23ec2f1b71be40:a495f599e787614f",
           "pair_key": "ufcstats:1c23ec2f1b71be40|a495f599e787614f",
@@ -4017,7 +3462,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "86c9c129439580223eee3e72817068aea30ec90d37127047e94212acd7b0fb66",
           "pair_key": "unresolved:lucia szabova|tainara lisboa",
@@ -4040,7 +3485,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:262d32ebda89efc4:2997e7fe3c9d3d4a",
           "pair_key": "ufcstats:262d32ebda89efc4|2997e7fe3c9d3d4a",
@@ -4063,7 +3508,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:523fa774700d7d3f:64b12fe31be7560c",
           "pair_key": "ufcstats:523fa774700d7d3f|64b12fe31be7560c",
@@ -4086,53 +3531,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:6fd953151d981979:9f5609dba6584ab2",
-          "pair_key": "ufcstats:6fd953151d981979|9f5609dba6584ab2",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "JJ Aldrich",
-          "fighter_a_id_after": "6fd953151d981979",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Regina Tarin",
-          "fighter_b_id_after": "9f5609dba6584ab2",
-          "change_id": "b6ae657cd6bf9f75f1339e4c4ae5ebce67d176c353fb0ec42a3b219f8159a779"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026|fighters:2fe9032955c2e013:792be9a24df82ed6",
-          "pair_key": "ufcstats:2fe9032955c2e013|792be9a24df82ed6",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Brandon Moreno",
-          "fighter_a_id_after": "792be9a24df82ed6",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Joseph Morales",
-          "fighter_b_id_after": "2fe9032955c2e013",
-          "change_id": "bfc0fd5d850ec895b3ac1d1885a69d8351bca4df228f4db2023c104406c1f786"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:36b8f265bcd1b7a4:8ebc3a8da015d70c",
           "pair_key": "ufcstats:36b8f265bcd1b7a4|8ebc3a8da015d70c",
@@ -4155,7 +3554,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:6e743a33d56bdaa4:aa72b0f831d0bfe5",
           "pair_key": "ufcstats:6e743a33d56bdaa4|aa72b0f831d0bfe5",
@@ -4178,7 +3577,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:323d4ca260dfa0ba:887961364be5ceb3",
           "pair_key": "ufcstats:323d4ca260dfa0ba|887961364be5ceb3",
@@ -4201,30 +3600,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "9f95afe9dbc290db3a897ab6d2ce4725718e8794adc40426f68a11528329fba7",
-          "pair_key": "unresolved:khaos williams|roberto soldic",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-332",
-          "event_date_before": "",
-          "event_date_after": "2026-10-03",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Khaos Williams",
-          "fighter_a_id_after": "2558ae2e5671e318",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Roberto Soldic",
-          "fighter_b_id_after": "",
-          "change_id": "cc7f44879e581ffa492716dd9643be7dd09c83593fdbb8b78a5d4639ca1a7365"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:2e19380f34871c6a:e90a2f22417af68e",
           "pair_key": "ufcstats:2e19380f34871c6a|e90a2f22417af68e",
@@ -4247,7 +3623,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:7c7332319c14094c:f1d64ae34e088832",
           "pair_key": "ufcstats:7c7332319c14094c|f1d64ae34e088832",
@@ -4270,7 +3646,30 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
+          "fight_key_before": "",
+          "fight_key_after": "bfc46a64e619d7e407108bf71437f4e7f3bbc6caa04c74537ac801ec473904c2",
+          "pair_key": "unresolved:ilimbek akylbek|mehemmedeli osmanli",
+          "event_key_before": "",
+          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026",
+          "event_date_before": "",
+          "event_date_after": "2026-09-26",
+          "scheduled_start_utc_before": "",
+          "scheduled_start_utc_after": "",
+          "fighter_a_before": "",
+          "fighter_a_id_before": "",
+          "fighter_a_after": "Mehemmedeli Osmanli",
+          "fighter_a_id_after": "",
+          "fighter_b_before": "",
+          "fighter_b_id_before": "",
+          "fighter_b_after": "Ilimbek Akylbek",
+          "fighter_b_id_after": "",
+          "change_id": "d208ef04309d4e1b4b7e3987bddf5bb9940c6396bbfed61768472446864c4240"
+        },
+        {
+          "schema_version": 1,
+          "change_type": "fight_added",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-september-26-2026|fighters:7af33fc4435017f1:d8c811df0386d5e8",
           "pair_key": "ufcstats:7af33fc4435017f1|d8c811df0386d5e8",
@@ -4293,7 +3692,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:262a7d06203657e6:6a2f7c151031653d",
           "pair_key": "ufcstats:262a7d06203657e6|6a2f7c151031653d",
@@ -4316,7 +3715,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:2f815ed5f8278ba6:9d83f6da776ff7d6",
           "pair_key": "ufcstats:2f815ed5f8278ba6|9d83f6da776ff7d6",
@@ -4339,7 +3738,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:040a74bb0a465c54:5537efc6e496dd84",
           "pair_key": "ufcstats:040a74bb0a465c54|5537efc6e496dd84",
@@ -4362,7 +3761,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:b9437600497350f3:dd6103dd7127db1d",
           "pair_key": "ufcstats:b9437600497350f3|dd6103dd7127db1d",
@@ -4385,7 +3784,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-333|fighters:279566840aa55bf2:739fd4fbb5d862f4",
           "pair_key": "ufcstats:279566840aa55bf2|739fd4fbb5d862f4",
@@ -4408,7 +3807,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-332|fighters:22e07d3da1aa3475:fdd22e895a70e4a8",
           "pair_key": "ufcstats:22e07d3da1aa3475|fdd22e895a70e4a8",
@@ -4431,30 +3830,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
-          "fight_key_before": "",
-          "fight_key_after": "ea1180f61676d7bc16262f0eb3f92894aea9e37d237eee3f68a4551a47b17cf6",
-          "pair_key": "unresolved:jessie rosas|sean king",
-          "event_key_before": "",
-          "event_key_after": "url:ufc.com/event/ufc-fight-night-september-12-2026",
-          "event_date_before": "",
-          "event_date_after": "2026-09-12",
-          "scheduled_start_utc_before": "",
-          "scheduled_start_utc_after": "",
-          "fighter_a_before": "",
-          "fighter_a_id_before": "",
-          "fighter_a_after": "Sean King",
-          "fighter_a_id_after": "",
-          "fighter_b_before": "",
-          "fighter_b_id_before": "",
-          "fighter_b_after": "Jessie Rosas",
-          "fighter_b_id_after": "d1026588fa65693f",
-          "change_id": "f5e79dc10aaed28caa3117a4f424b708ffbddefe06ffce7c3f51d3087d68ed51"
-        },
-        {
-          "schema_version": 1,
-          "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/cryptocom-ufc-331|fighters:b6452706b373eea1:def8166ff24bd237",
           "pair_key": "ufcstats:b6452706b373eea1|def8166ff24bd237",
@@ -4477,7 +3853,7 @@
         {
           "schema_version": 1,
           "change_type": "fight_added",
-          "observed_at_utc": "2026-09-06T09:44:59.835510Z",
+          "observed_at_utc": "2026-09-13T10:41:31.834818Z",
           "fight_key_before": "",
           "fight_key_after": "url:ufc.com/event/ufc-fight-night-october-17-2026|fighters:51e2f44a8dbf6984:af9efbfd63d39734",
           "pair_key": "ufcstats:51e2f44a8dbf6984|af9efbfd63d39734",
@@ -4502,9 +3878,9 @@
     },
     {
       "schema_version": 1,
-      "generated_at_utc": "2026-09-06T09:44:48.042001Z",
+      "generated_at_utc": "2026-09-13T10:41:21.410652Z",
       "status": "complete",
-      "candidate_count": 178,
+      "candidate_count": 182,
       "issue_count": 0,
       "warning_codes": [],
       "queue_path": "data/raw/practical_forward_collection_v1/pre-ufc-candidate-queue.csv",
@@ -4529,7 +3905,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "55ee0596d5b526b3dedf183e8b00a7cc94511081bb159aff4894ed40d87e3e65"
         },
         {
@@ -4540,7 +3916,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "07a7646df935002be6674c61fdb43f3b954a8b159c684403799ace8ffc1f6d9c"
         },
         {
@@ -4551,7 +3927,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "0de074ead9c2d4a704cbfa0eb070c64da4d77985206e32dabdb8a74f98925bbc"
         },
         {
@@ -4562,7 +3938,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "4fcc2fb32148ca8386f320d7e422c8859faceeb2693936e0924de208e3aab1bc"
         },
         {
@@ -4573,7 +3949,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "dbbcfb5347e765d8c76504b05db162218714300366bf6f4666cbb8efdd7a96f4"
         },
         {
@@ -4595,7 +3971,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "c44e01f6e35685b1a59d6b533a4ddf4c28636c04e3a6e164b338dbaddc5d8fb9"
         },
         {
@@ -4606,7 +3982,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "99cc5c52ac081ac77a39badc2cf54ec8cf1436089dbfde897dc1805ae9c93c60"
         },
         {
@@ -4617,7 +3993,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "48294a645369e13b6b58558b2e4f617173bf86909d95295fb448647faf3e4a8e"
         },
         {
@@ -4628,7 +4004,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "2b79be606a38a051870e9e4a2eeec1b80dce7e681292adcae6c072ffa99758fe"
         },
         {
@@ -4639,7 +4015,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "cf299c3ec50c0fb316f1ae3d6c81b0980eac3f0f62ba4d8cb635459d786228b0"
         },
         {
@@ -4650,7 +4026,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "1b8197ca5b97c42bfedc12328ab3450f4fb0ec919a376ccca26118da7c50ddff"
         },
         {
@@ -4661,7 +4037,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "4a2c5de2bc81366f6e105542652c3737bb47dfa58190fb77c892e4b3b7b09000"
         },
         {
@@ -4694,7 +4070,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "7ebd41380075ced3af6b9139165dafcdeecd0f874844d0d30a9c71c49f034977"
         },
         {
@@ -4727,7 +4103,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "bc5967bf858bd08afaed1d5dad870e70b7317a96a51ca11d204d44a3582f4036"
         },
         {
@@ -4738,7 +4114,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "aed068574fe1993a9c29c451d5a9fe2f6bb0b411f3bd772309205e52d71531f7"
         },
         {
@@ -4749,7 +4125,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8f691572225b3cbe288b94a8cf3f92340b19aebe70699687e26d3446ef27e70f"
         },
         {
@@ -4760,7 +4136,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8fc6206c595f0f317161669ecffbf8ba3b8bed030c3b3b2da26b0a5b537bd14b"
         },
         {
@@ -4771,7 +4147,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "abe90c726494b17b825ec6296979f420c6462bc985ddc149353a53b850814244"
         },
         {
@@ -4782,7 +4158,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "6bebd801db0a309db27e68374c24d222cf3ee0a67901fb97cdbac9232ccddbe1"
         },
         {
@@ -4793,7 +4169,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "49fa1fbe6829aef7d5d30149d1ec39318dee8f3e68389594776e3f727848ebca"
         },
         {
@@ -4804,7 +4180,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "51c7f967ef5336339e79e632fce2a9ddf6fb5d0731c6930ae482ab71489a641a"
         },
         {
@@ -4815,7 +4191,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "484c82cbcbeb04a9ce72839f16a2dfd3a68321a8eb4b0a7e2ae5d9c4cbc47452"
         },
         {
@@ -4848,7 +4224,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "a9488ea230468cd7c9233ddbb85c57d7a6942684525811afe4735511ee3ad0b2"
         },
         {
@@ -4859,7 +4235,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-31-2026\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "6927d906643a49fb6b9081121dcfabd2185ffe0db26a32e7997bd1a3e9b507bf"
         },
         {
@@ -4870,7 +4246,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "cf6d18472da43b04fa8e9c0933fc0783f60a70924d105ca54735abe6cfc9baf6"
         },
         {
@@ -4881,7 +4257,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-10-2026\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "2205e73a0e172e7e481cc0ec7ade3ca381dca986a2c25459f146af2089bcf02d"
         },
         {
@@ -4903,7 +4279,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "ca5066150791e6e865d75ae522c15178ced777727150f99d5daa793a5aa8eed5"
         },
         {
@@ -4936,7 +4312,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "bf1e28f33a407076ef9c0f873093ca3a5860dfba1d39b57853e5bbf1fabadf9a"
         },
         {
@@ -4991,7 +4367,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "395651cd36035d4e385f63757b2a323a06d063a28972bdf6fc4df5a674af690d"
         },
         {
@@ -5004,6 +4380,17 @@
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
           "last_seen_at_utc": "2026-08-30T10:46:18.738473Z",
           "input_fingerprint": "9112735035bd200cf79c8d495fc980ad1bc156289a6910ffe8ef622ceb61d3f2"
+        },
+        {
+          "fighter_id": "3c4320a1b6106611",
+          "fighter_name": "Cody Chovancek",
+          "first_ufc_date": "2026-08-03",
+          "aliases": "[\"Cody Chovancek\"]",
+          "reason": "fight_added",
+          "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
+          "first_seen_at_utc": "2026-09-13T10:41:21.410652Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
+          "input_fingerprint": "9d635f35a9b5b57376e25bbe9ad94bdc38a4661b175a5f11bcf5b2ee601b855d"
         },
         {
           "fighter_id": "3cf18e01cb6cbde3",
@@ -5024,7 +4411,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "2105215a0d4947309c95b44f86be30e975dcd635c3a311393e9630a8f1937442"
         },
         {
@@ -5035,7 +4422,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "851b30e8d1bf95980b93f7399d827f9096c8dfbd5cb276f186f67c2df85d2bbd"
         },
         {
@@ -5112,7 +4499,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "c7cfb90910c8390f2b1a9c953039720573fac1774a9087a65ce7f94db64abf15"
         },
         {
@@ -5134,7 +4521,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "c86ee2a7b76ded35a73932bdd97faae46011c642f448174308165b00e74e04ac"
         },
         {
@@ -5145,7 +4532,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "c0f110f8723f6feaf75fe3b63054e710246a23dbc8f6d978f37fc60aa4307780"
         },
         {
@@ -5156,7 +4543,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8c032bf5aff7154ea596b173668bfa9648d847b398cac16e49cc214156e3ed10"
         },
         {
@@ -5167,7 +4554,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "b685a967d211c2c98d07bb20a10cb45ee5578469be75fdcb1201b5eb2c60af01"
         },
         {
@@ -5178,7 +4565,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "b9ab0d9469fd9b9d27fc36ef64c06f9a82ffdfde5d840b8306cdae36bab736da"
         },
         {
@@ -5211,7 +4598,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8a570dd53e075ef7134fd69fd0eafcba1ee2eddb18f23426c0ac4d250206e599"
         },
         {
@@ -5222,7 +4609,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "a0a5416010638238712eead9c04549360869922d090d5059fc62777c81e9f043"
         },
         {
@@ -5244,7 +4631,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "c34dfce815e3a75dac855a3a17af48d2cbea41eea81a72b17aed020ee530a356"
         },
         {
@@ -5255,7 +4642,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "b0fdc4e04a60691f27bd75b19e5f240f8e89175adf03fccb1baa9fdfd4ae40e1"
         },
         {
@@ -5277,7 +4664,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "60b6444be997a394e239fed400b4ec6c67c78421d166380952eb4e7ab37c7ac3"
         },
         {
@@ -5288,7 +4675,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "3b9fa863937fef2493a82f290fb742a4559c1aab6a052ad73b8f42a07f1cea89"
         },
         {
@@ -5299,7 +4686,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "27f4e15079da3bbfeaecd83f66fb994d8ffc801a0103f55c6c731e137ee1554b"
         },
         {
@@ -5310,7 +4697,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "db6b67dd443766f45ebc43a93f23c14058e4f3df7d5f0ac98792e8d0c5f8dc6e"
         },
         {
@@ -5321,7 +4708,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "4ca61b8b7ca76072e0986a5a61164296c59810b9e20edfbcb8292223c997e6f1"
         },
         {
@@ -5343,7 +4730,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "4e547a71a64e869311b376edca4aa363d2c43bc63532a5be34f73d0a417cf33d"
         },
         {
@@ -5354,7 +4741,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "245f3c7852ef3154bc8c313d0dfc3f1dee801db53e3dbd892a8ca945bfcaf822"
         },
         {
@@ -5398,7 +4785,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "00c25c31e4fa16bb35d0b766057576f478baee2a3b040ec39cc2d1c751a24436"
         },
         {
@@ -5420,7 +4807,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "5f6df4116a64cf58b8286014dfd79ae412da9436f9130f5a92ea048adc0234f7"
         },
         {
@@ -5431,7 +4818,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "ce2919ee794bcce0b9af40df1a3201314109876cfa605522fe352ec35499f3fd"
         },
         {
@@ -5453,7 +4840,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "43a7f8e3f15ac9a71422ef7ee6928a015e7eb604544a27facb80a897ba52ce08"
         },
         {
@@ -5464,7 +4851,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "df332aa27ae11a2551c8c36e6e210b63b36a7f712954471c2f55518e75886300"
         },
         {
@@ -5475,7 +4862,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "84de77ce96d4895fca7b0d6bab0d03ca524a38358fdc21d63f5bb83be628960b"
         },
         {
@@ -5497,7 +4884,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "e9c449c2bf4b5bd9e75840e4ab017e7647dee20214ed632e032c98dd35067004"
         },
         {
@@ -5530,7 +4917,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-31-2026\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "66e06fd9c8357d1974356a29ea58f5fa82773efd8f6be5ae5879a8cc59cef33e"
         },
         {
@@ -5543,6 +4930,17 @@
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
           "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
           "input_fingerprint": "df39c5b9527cd1d92b34af75d88aa9d5a8dde504df5b5ce12e9bd1cdd14b08eb"
+        },
+        {
+          "fighter_id": "84512339473dd300",
+          "fighter_name": "Steven Koslow",
+          "first_ufc_date": "2022-12-10",
+          "aliases": "[\"Steven Koslow\"]",
+          "reason": "fight_added",
+          "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
+          "first_seen_at_utc": "2026-09-13T10:41:21.410652Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
+          "input_fingerprint": "0a0d59d427dc9e13175ebb1fd034730a74c2b88df0d8b1b032ab3619a2b840c1"
         },
         {
           "fighter_id": "86bace9e4ad85542",
@@ -5563,7 +4961,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "90a88971049b78a8fe49cd77dd84ebee6d1fdd201483ebaad9f6bae145dd9ba5"
         },
         {
@@ -5607,7 +5005,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "f65c0176985dd7448e38ccafb7d6a60186081ae3f6fd484e6722975de59f8ecd"
         },
         {
@@ -5618,7 +5016,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "02ef3ba072b2a6ff42c0d21cdbea107f6e68a6a274c8fd2d7ae6fa6c6ff9633c"
         },
         {
@@ -5629,7 +5027,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "740be2a631eb7796eb4cd428f2cfc8a424d1cf5bd5bc0bf1b72d613dbc85838a"
         },
         {
@@ -5640,7 +5038,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "3c6f5ebd2e140ccec65027e3a850cc75cece186d67542b7b0536bbf7a6001620"
         },
         {
@@ -5673,7 +5071,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8d6fdfced2841299ab85618c8bb5fad3177a66278dbc8837d66578caedb5f718"
         },
         {
@@ -5684,7 +5082,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "89f2d918c2706c7a441db68163c842dcc0280a2dc918f2dd1febe2c019dcf8af"
         },
         {
@@ -5695,7 +5093,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8ecb4a1316907f09f99854eb0409f432a476c8b2b96d364e6b71a0b93603677f"
         },
         {
@@ -5706,7 +5104,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "b9e00e618c325d26919ba21c0c716b5bafad6556b439b9c8e2cd16607309fa60"
         },
         {
@@ -5728,7 +5126,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "0b05fe3e212d57d48c756daa0a67e3603446bedcda09d0a7938aaeeb2c5539b1"
         },
         {
@@ -5750,7 +5148,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "3371360eedbea56ef8dc341b15990ffb606f45b4d0de1a517e0cfd13d9ff0c57"
         },
         {
@@ -5783,7 +5181,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8a5662156dbe3ab1f7dc9f3c68135440b009b6e1a08082431db370aeeb16305a"
         },
         {
@@ -5827,7 +5225,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "c575529ad53e4dc93a8c5b1936d0acee2662faa0957c052c456f93090afa402a"
         },
         {
@@ -5849,7 +5247,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-10-2026\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "bbcdb76a8a386102c46202ad3d94ff3b9074bd7d39337d04c1cc0e75b27e52d6"
         },
         {
@@ -5871,7 +5269,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "9581b9dfa852fb3197a53c55b4aba2c629f3a29f22a2f5c281710776b9f9b90d"
         },
         {
@@ -5882,7 +5280,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "7cfb19cd7aa977762fcafc1d82eba742f3449558798e18384f05431711f30354"
         },
         {
@@ -5915,7 +5313,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "e47331d9f0a11d99dec059823b667be846bd4cb0aecbbaad448c5d4d40e8eb14"
         },
         {
@@ -5926,7 +5324,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "5dc5222f93db346a205a38ce06c79e3f36ee1175cc90fa70fb338c8b84ca0f49"
         },
         {
@@ -5959,7 +5357,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "fca9265e460e4875efe894a10d3a2cd3a6a46a034c0513615a5a849410fc7bff"
         },
         {
@@ -5970,7 +5368,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "9317a13843e92fb8eb09281c4a9fecb5800f679375cc227c884a7bf88176fdd8"
         },
         {
@@ -5981,7 +5379,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "80a320e46919e801eb36455d4a13598990c38bd0dc958673e0b4c945c09e6544"
         },
         {
@@ -5992,7 +5390,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "c052f10f56b602096be8e67861ab9ea5f6b3c2aeaee9b520ea199f1119124c3c"
         },
         {
@@ -6003,7 +5401,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "70d3822fb531685869b9a096d6ea8e1154ac1c6ea8d3bcd9dd611f6e01aae0a7"
         },
         {
@@ -6014,7 +5412,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "9a202f7550c0441cc6075aa819a41c3fe65482593564252f8aa0888e5a983307"
         },
         {
@@ -6025,7 +5423,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-09-06T09:44:48.042001Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "426602dcdb65fd21df48073b3f7f4e7f7418c55f370e52c95f1f54fbb15913e0"
         },
         {
@@ -6047,7 +5445,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8b7a6f57d891c06ca87ec906379afe0ff891b6cd17c41f1a9159237b9c0fc822"
         },
         {
@@ -6058,8 +5456,19 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "f53b01627be0c6275b8955fb74accb771463300fe981991041c638a542d24644"
+        },
+        {
+          "fighter_id": "c7c39e2fb70248b3",
+          "fighter_name": "Chad Anheliger",
+          "first_ufc_date": "2022-02-19",
+          "aliases": "[\"Chad Anheliger\"]",
+          "reason": "fight_added",
+          "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
+          "first_seen_at_utc": "2026-09-13T10:41:21.410652Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
+          "input_fingerprint": "532941264c21032ac4b78fd677794d10f63460c893bf650d7e67ad42735fda37"
         },
         {
           "fighter_id": "c96d9178c9ed9e62",
@@ -6080,7 +5489,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "c6589122df1aba83b8649f527891e06b649150c6af711625fa155f88a4230444"
         },
         {
@@ -6102,7 +5511,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "e37176ca00c9d588d72451e5aa9111f72480dcbb893f540137a138572dd7c6f0"
         },
         {
@@ -6113,8 +5522,19 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "d907e74e483f4d53b6a1aaf2d50dbacb01d165bd2843bb8822c00aa723ffea82"
+        },
+        {
+          "fighter_id": "cdb7b38b1b357f26",
+          "fighter_name": "Louie Sutherland",
+          "first_ufc_date": "2025-09-27",
+          "aliases": "[\"Louie Sutherland\"]",
+          "reason": "fight_added",
+          "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
+          "first_seen_at_utc": "2026-09-13T10:41:21.410652Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
+          "input_fingerprint": "60a19a6db0cf8903330520d29930cb5d55e2fed86986ef18c92a8540022ffd83"
         },
         {
           "fighter_id": "cffb87059e645bd1",
@@ -6157,7 +5577,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "0f210c60cc2ca4051369612d9f1d4cb79ad16b486b29ed91285b4904bc6853a7"
         },
         {
@@ -6168,7 +5588,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "26c6c8b5f8ac9b2222e2e45ed3c3cacb699f94fe79ec0c212f97f91b6b9e53eb"
         },
         {
@@ -6179,7 +5599,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "963f0b869d2d93e736c4a03e88950984728cf14a21d32c37885e863d98ff762d"
         },
         {
@@ -6190,7 +5610,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "590d3948af3b007a20761e7e20299fe5d98966207c916433eb3e884f9f8fb98e"
         },
         {
@@ -6201,7 +5621,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "63ce30368845dc375ba8ecc7e756420e7d47b6f36fcba81bfd2c480d585603c7"
         },
         {
@@ -6212,7 +5632,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "45417d97d0fbba862f1508f4a7aefaf743ec21aa8f036b1da36aca6143bfe5ba"
         },
         {
@@ -6234,7 +5654,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "602afa3b9b5f7c1548d7d4efe6126bd45c5adc6aaad71b52f8eaba118f11383a"
         },
         {
@@ -6256,7 +5676,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "bfb7350981810fac7ed8657ca90503e520301b2bbd8a92100bdd15f6bacf6160"
         },
         {
@@ -6278,7 +5698,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "b2f4db8961dbaba5c4ecc51a29bf81a884cf75c9b0963dbd671a2c96c0517b00"
         },
         {
@@ -6300,7 +5720,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "3d7e9e81dea6d289b50ca6ca68bd415a0f65c1ffa938cdacd0512646b60e8c3c"
         },
         {
@@ -6311,7 +5731,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-october-17-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "627056ef47c59db377ef7c32747b21e864c894f4427b5222928f7d3c33a42b8f"
         },
         {
@@ -6333,7 +5753,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-333\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "db745247391cebf71fa77ec4adef37b7e289d6d372ef18f5c6e914a7605a1a0e"
         },
         {
@@ -6344,7 +5764,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "8a7b5bb841a9a087d9b7dc15e702089d7c1bbeca40721d53d4cdc8f61915b51b"
         },
         {
@@ -6355,7 +5775,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "a1535ee1ae941299d4312e5c7af5e893113d848254843a8f6aecc4355a21deee"
         },
         {
@@ -6377,7 +5797,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "9bc62c84e3b204b95992858a0dc787246ecd0197d0d77121491a30e0fc41ee85"
         },
         {
@@ -6399,7 +5819,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "6c74089ec630177926befb8cb9eaec01aed10792a69feb08091af22acad2f9d5"
         },
         {
@@ -6410,7 +5830,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/cryptocom-ufc-331\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "655546995ee7168d156ff283ad5eb2c3e84635da49a22ebbd4c2c6b466f3653d"
         },
         {
@@ -6421,7 +5841,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-30T10:46:18.738473Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "bb90e9ada744ebbc0a0fe86f11429274ad931ea2551db69a01a9b7deef240559"
         },
         {
@@ -6454,7 +5874,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-332\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "22388a57c23cf3d53b4d381fdeacf72b41ea417ceb22ac98f74d126e865e2dea"
         },
         {
@@ -6465,7 +5885,7 @@
           "reason": "fight_added",
           "event_keys_json": "[\"url:ufc.com/event/ufc-fight-night-september-26-2026\"]",
           "first_seen_at_utc": "2026-08-23T06:18:41.675923Z",
-          "last_seen_at_utc": "2026-09-06T09:44:48.042001Z",
+          "last_seen_at_utc": "2026-09-13T10:41:21.410652Z",
           "input_fingerprint": "7a4d5d3f9230710446e4b2e79c99c473ef0361469bf7816ca9e241f891f360ae"
         }
       ],
@@ -6478,15 +5898,15 @@
         "pre_ufc_incomplete"
       ],
       "candidate_source": "data/raw/practical_forward_collection_v1/pre-ufc-candidate-queue.csv",
-      "candidate_count": 178,
-      "queued_count": 107,
+      "candidate_count": 182,
+      "queued_count": 24,
       "ambiguous_names_rejected": [],
       "checkpoint_fingerprint_resets": 0,
       "max_retry_attempts": 3,
       "pro": {
-        "attempted": 26,
-        "with_rows": 13,
-        "zero_rows": 13,
+        "attempted": 8,
+        "with_rows": 7,
+        "zero_rows": 1,
         "transient_failures": 0,
         "incomplete": [
           {
@@ -6598,64 +6018,30 @@
             "updated_at": "2026-09-06T10:04:22.560657+00:00"
           },
           {
-            "identity_key": "ufcstats:7d6ceff6747f2de2",
-            "fighter_id": "7d6ceff6747f2de2",
-            "fighter_name": "Jose Miguel Delgado",
-            "first_ufc_date": "2025-02-15",
-            "input_fingerprint": "cebb582513162b7677da2e6b0f487d5391cbd954db2ada4f43bf7c3fe3ad1b24",
-            "attempts": 2,
-            "row_count": 0,
-            "status": "zero_rows",
-            "last_error": "",
-            "updated_at": "2026-09-06T09:54:09.832904+00:00"
-          },
-          {
-            "identity_key": "ufcstats:2558ae2e5671e318",
-            "fighter_id": "2558ae2e5671e318",
-            "fighter_name": "Khaos Williams",
-            "first_ufc_date": "2020-02-08",
-            "input_fingerprint": "8f691572225b3cbe288b94a8cf3f92340b19aebe70699687e26d3446ef27e70f",
+            "identity_key": "ufcstats:c7c39e2fb70248b3",
+            "fighter_id": "c7c39e2fb70248b3",
+            "fighter_name": "Chad Anheliger",
+            "first_ufc_date": "2022-02-19",
+            "input_fingerprint": "532941264c21032ac4b78fd677794d10f63460c893bf650d7e67ad42735fda37",
             "attempts": 1,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:46:24.952886+00:00"
-          },
-          {
-            "identity_key": "ufcstats:b6c37948cb226e8c",
-            "fighter_id": "b6c37948cb226e8c",
-            "fighter_name": "Benardo Sopaj",
-            "first_ufc_date": "2026-08-03",
-            "input_fingerprint": "9317a13843e92fb8eb09281c4a9fecb5800f679375cc227c884a7bf88176fdd8",
-            "attempts": 1,
-            "row_count": 0,
-            "status": "zero_rows",
-            "last_error": "",
-            "updated_at": "2026-09-06T09:59:51.906719+00:00"
-          },
-          {
-            "identity_key": "ufcstats:de83f920fd302871",
-            "fighter_id": "de83f920fd302871",
-            "fighter_name": "Tommy Gantt",
-            "first_ufc_date": "2026-05-16",
-            "input_fingerprint": "dc7cafc824afca4a9a43c586eb5df3951e2b50ba29235f32ff410ff0ed4b07e9",
-            "attempts": 1,
-            "row_count": 0,
-            "status": "zero_rows",
-            "last_error": "",
-            "updated_at": "2026-09-06T10:03:06.962174+00:00"
+            "updated_at": "2026-09-13T10:57:02.639454+00:00"
           }
         ],
         "existing_row_count": 33845,
-        "saved_row_count": 33845,
+        "saved_row_count": 33893,
         "guard_preserved": [],
         "allowed_reductions": [],
-        "new_fighters_added": []
+        "new_fighters_added": [
+          "Jose Miguel Delgado"
+        ]
       },
       "amateur": {
-        "attempted": 107,
-        "with_rows": 7,
-        "zero_rows": 100,
+        "attempted": 24,
+        "with_rows": 4,
+        "zero_rows": 20,
         "transient_failures": 0,
         "incomplete": [
           {
@@ -7624,11 +7010,11 @@
             "fighter_name": "Gabriel Bonfim",
             "first_ufc_date": "2023-01-21",
             "input_fingerprint": "872cedc9cdc499f81dd82acff610d4fdf4b1ba3335cce61d945370265a51533b",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:45:19.038354+00:00"
+            "updated_at": "2026-09-13T10:42:20.566383+00:00"
           },
           {
             "identity_key": "ufcstats:1897b7b913736a7c",
@@ -7636,11 +7022,11 @@
             "fighter_name": "Alatengheili",
             "first_ufc_date": "2019-08-31",
             "input_fingerprint": "4a2c5de2bc81366f6e105542652c3737bb47dfa58190fb77c892e4b3b7b09000",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:46:00.690398+00:00"
+            "updated_at": "2026-09-13T10:42:58.557478+00:00"
           },
           {
             "identity_key": "ufcstats:260e9e0d4954aea6",
@@ -7648,11 +7034,11 @@
             "fighter_name": "Rodolfo Vieira",
             "first_ufc_date": "2019-08-10",
             "input_fingerprint": "abe90c726494b17b825ec6296979f420c6462bc985ddc149353a53b850814244",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:46:49.895103+00:00"
+            "updated_at": "2026-09-13T10:43:56.350698+00:00"
           },
           {
             "identity_key": "ufcstats:48a9a128784d53d1",
@@ -7660,11 +7046,11 @@
             "fighter_name": "Elves Brener",
             "first_ufc_date": "2023-02-11",
             "input_fingerprint": "c7cfb90910c8390f2b1a9c953039720573fac1774a9087a65ce7f94db64abf15",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:50:06.427923+00:00"
+            "updated_at": "2026-09-13T10:48:53.314417+00:00"
           },
           {
             "identity_key": "ufcstats:69898645d600abdb",
@@ -7672,11 +7058,11 @@
             "fighter_name": "Rodolfo Bellato",
             "first_ufc_date": "2023-12-02",
             "input_fingerprint": "27f4e15079da3bbfeaecd83f66fb994d8ffc801a0103f55c6c731e137ee1554b",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:51:29.030170+00:00"
+            "updated_at": "2026-09-13T10:49:40.379726+00:00"
           },
           {
             "identity_key": "ufcstats:70dd69b6a703257e",
@@ -7684,11 +7070,11 @@
             "fighter_name": "Daniil Donchenko",
             "first_ufc_date": "2025-08-16",
             "input_fingerprint": "b53d65cb1e69eee3fe480676b4683f8d316afa69bfcdcaab63f4c8b0a1066190",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:52:27.257210+00:00"
+            "updated_at": "2026-09-13T10:52:09.049226+00:00"
           },
           {
             "identity_key": "ufcstats:7af33fc4435017f1",
@@ -7696,11 +7082,11 @@
             "fighter_name": "Brady Hiestand",
             "first_ufc_date": "2021-08-28",
             "input_fingerprint": "df332aa27ae11a2551c8c36e6e210b63b36a7f712954471c2f55518e75886300",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:53:09.019852+00:00"
+            "updated_at": "2026-09-13T10:52:26.843747+00:00"
           },
           {
             "identity_key": "ufcstats:7d6ceff6747f2de2",
@@ -7708,11 +7094,11 @@
             "fighter_name": "Jose Miguel Delgado",
             "first_ufc_date": "2025-02-15",
             "input_fingerprint": "cebb582513162b7677da2e6b0f487d5391cbd954db2ada4f43bf7c3fe3ad1b24",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:54:16.175675+00:00"
+            "updated_at": "2026-09-13T10:53:17.911838+00:00"
           },
           {
             "identity_key": "ufcstats:d3f5d33d61cd00c9",
@@ -7720,11 +7106,11 @@
             "fighter_name": "Norma Dumont",
             "first_ufc_date": "2020-02-29",
             "input_fingerprint": "0f210c60cc2ca4051369612d9f1d4cb79ad16b486b29ed91285b4904bc6853a7",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T10:02:30.853762+00:00"
+            "updated_at": "2026-09-13T10:59:01.609909+00:00"
           },
           {
             "identity_key": "ufcstats:d8c811df0386d5e8",
@@ -7732,11 +7118,11 @@
             "fighter_name": "Rinya Nakamura",
             "first_ufc_date": "2022-06-10",
             "input_fingerprint": "590d3948af3b007a20761e7e20299fe5d98966207c916433eb3e884f9f8fb98e",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T10:02:40.327254+00:00"
+            "updated_at": "2026-09-13T10:59:52.949045+00:00"
           },
           {
             "identity_key": "ufcstats:f96856f9d69fd7e4",
@@ -7744,11 +7130,11 @@
             "fighter_name": "Robert Bryczek",
             "first_ufc_date": "2024-02-10",
             "input_fingerprint": "bb90e9ada744ebbc0a0fe86f11429274ad931ea2551db69a01a9b7deef240559",
-            "attempts": 2,
+            "attempts": 3,
             "row_count": 0,
-            "status": "zero_rows",
+            "status": "exhausted_zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T10:05:11.720355+00:00"
+            "updated_at": "2026-09-13T11:01:13.614960+00:00"
           },
           {
             "identity_key": "ufcstats:2558ae2e5671e318",
@@ -7756,11 +7142,11 @@
             "fighter_name": "Khaos Williams",
             "first_ufc_date": "2020-02-08",
             "input_fingerprint": "8f691572225b3cbe288b94a8cf3f92340b19aebe70699687e26d3446ef27e70f",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:46:30.562754+00:00"
+            "updated_at": "2026-09-13T10:43:31.863520+00:00"
           },
           {
             "identity_key": "ufcstats:262d32ebda89efc4",
@@ -7768,11 +7154,11 @@
             "fighter_name": "Natalia Silva",
             "first_ufc_date": "2022-06-18",
             "input_fingerprint": "49fa1fbe6829aef7d5d30149d1ec39318dee8f3e68389594776e3f727848ebca",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:47:25.924558+00:00"
+            "updated_at": "2026-09-13T10:45:01.094996+00:00"
           },
           {
             "identity_key": "ufcstats:2997e7fe3c9d3d4a",
@@ -7780,11 +7166,11 @@
             "fighter_name": "Wang Cong",
             "first_ufc_date": "2024-08-24",
             "input_fingerprint": "484c82cbcbeb04a9ce72839f16a2dfd3a68321a8eb4b0a7e2ae5d9c4cbc47452",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:47:51.037220+00:00"
+            "updated_at": "2026-09-13T10:46:15.298763+00:00"
           },
           {
             "identity_key": "ufcstats:2c5f5749569eef66",
@@ -7792,11 +7178,11 @@
             "fighter_name": "Tainara Lisboa",
             "first_ufc_date": "2023-05-13",
             "input_fingerprint": "6927d906643a49fb6b9081121dcfabd2185ffe0db26a32e7997bd1a3e9b507bf",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:48:06.402558+00:00"
+            "updated_at": "2026-09-13T10:47:01.840960+00:00"
           },
           {
             "identity_key": "ufcstats:323d4ca260dfa0ba",
@@ -7804,11 +7190,11 @@
             "fighter_name": "Esteban Ribovics",
             "first_ufc_date": "2023-03-04",
             "input_fingerprint": "bf1e28f33a407076ef9c0f873093ca3a5860dfba1d39b57853e5bbf1fabadf9a",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:48:52.350680+00:00"
+            "updated_at": "2026-09-13T10:47:47.576936+00:00"
           },
           {
             "identity_key": "ufcstats:6a2f7c151031653d",
@@ -7816,11 +7202,11 @@
             "fighter_name": "Rafael Dos Anjos",
             "first_ufc_date": "2008-11-15",
             "input_fingerprint": "db6b67dd443766f45ebc43a93f23c14058e4f3df7d5f0ac98792e8d0c5f8dc6e",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:51:44.457257+00:00"
+            "updated_at": "2026-09-13T10:51:51.916560+00:00"
           },
           {
             "identity_key": "ufcstats:887961364be5ceb3",
@@ -7828,11 +7214,11 @@
             "fighter_name": "King Green",
             "first_ufc_date": "2012-05-20",
             "input_fingerprint": "90a88971049b78a8fe49cd77dd84ebee6d1fdd201483ebaad9f6bae145dd9ba5",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:54:55.384810+00:00"
+            "updated_at": "2026-09-13T10:55:25.477082+00:00"
           },
           {
             "identity_key": "ufcstats:b6c37948cb226e8c",
@@ -7840,11 +7226,11 @@
             "fighter_name": "Benardo Sopaj",
             "first_ufc_date": "2026-08-03",
             "input_fingerprint": "9317a13843e92fb8eb09281c4a9fecb5800f679375cc227c884a7bf88176fdd8",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T09:59:58.438382+00:00"
+            "updated_at": "2026-09-13T10:55:51.117294+00:00"
           },
           {
             "identity_key": "ufcstats:de83f920fd302871",
@@ -7852,20 +7238,20 @@
             "fighter_name": "Tommy Gantt",
             "first_ufc_date": "2026-05-16",
             "input_fingerprint": "dc7cafc824afca4a9a43c586eb5df3951e2b50ba29235f32ff410ff0ed4b07e9",
-            "attempts": 1,
+            "attempts": 2,
             "row_count": 0,
             "status": "zero_rows",
             "last_error": "",
-            "updated_at": "2026-09-06T10:03:12.492351+00:00"
+            "updated_at": "2026-09-13T11:00:31.846506+00:00"
           }
         ],
         "existing_row_count": 3434,
-        "saved_row_count": 3434,
-        "guard_preserved": [
-          "Andreas Gustafsson (11 rows kept, new had 10)"
-        ],
+        "saved_row_count": 3439,
+        "guard_preserved": [],
         "allowed_reductions": [],
-        "new_fighters_added": []
+        "new_fighters_added": [
+          "Cody Chovancek"
+        ]
       },
       "exit_code": 2,
       "stage": "pre_ufc"

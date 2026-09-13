@@ -2686,7 +2686,8 @@
     "Jose Miguel Delgado": 0,
     "Christian Edwards": 3,
     "Jessie Rosas": 7,
-    "Tommy Gantt": 0
+    "Tommy Gantt": 0,
+    "Cody Chovancek": 5
   },
   "failed": [],
   "identity_state": {
@@ -4235,11 +4236,11 @@
       "fighter_name": "Gabriel Bonfim",
       "first_ufc_date": "2023-01-21",
       "input_fingerprint": "872cedc9cdc499f81dd82acff610d4fdf4b1ba3335cce61d945370265a51533b",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:45:19.038354+00:00"
+      "updated_at": "2026-09-13T10:42:20.566383+00:00"
     },
     "ufcstats:06e4245d16fc5315": {
       "fighter_id": "06e4245d16fc5315",
@@ -4257,22 +4258,22 @@
       "fighter_name": "Alatengheili",
       "first_ufc_date": "2019-08-31",
       "input_fingerprint": "4a2c5de2bc81366f6e105542652c3737bb47dfa58190fb77c892e4b3b7b09000",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:46:00.690398+00:00"
+      "updated_at": "2026-09-13T10:42:58.557478+00:00"
     },
     "ufcstats:260e9e0d4954aea6": {
       "fighter_id": "260e9e0d4954aea6",
       "fighter_name": "Rodolfo Vieira",
       "first_ufc_date": "2019-08-10",
       "input_fingerprint": "abe90c726494b17b825ec6296979f420c6462bc985ddc149353a53b850814244",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:46:49.895103+00:00"
+      "updated_at": "2026-09-13T10:43:56.350698+00:00"
     },
     "ufcstats:2c483cf443f38ece": {
       "fighter_id": "2c483cf443f38ece",
@@ -4323,11 +4324,11 @@
       "fighter_name": "Elves Brener",
       "first_ufc_date": "2023-02-11",
       "input_fingerprint": "c7cfb90910c8390f2b1a9c953039720573fac1774a9087a65ce7f94db64abf15",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:50:06.427923+00:00"
+      "updated_at": "2026-09-13T10:48:53.314417+00:00"
     },
     "ufcstats:5987b2458f4b5290": {
       "fighter_id": "5987b2458f4b5290",
@@ -4367,44 +4368,44 @@
       "fighter_name": "Rodolfo Bellato",
       "first_ufc_date": "2023-12-02",
       "input_fingerprint": "27f4e15079da3bbfeaecd83f66fb994d8ffc801a0103f55c6c731e137ee1554b",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:51:29.030170+00:00"
+      "updated_at": "2026-09-13T10:49:40.379726+00:00"
     },
     "ufcstats:70dd69b6a703257e": {
       "fighter_id": "70dd69b6a703257e",
       "fighter_name": "Daniil Donchenko",
       "first_ufc_date": "2025-08-16",
       "input_fingerprint": "b53d65cb1e69eee3fe480676b4683f8d316afa69bfcdcaab63f4c8b0a1066190",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:52:27.257210+00:00"
+      "updated_at": "2026-09-13T10:52:09.049226+00:00"
     },
     "ufcstats:7af33fc4435017f1": {
       "fighter_id": "7af33fc4435017f1",
       "fighter_name": "Brady Hiestand",
       "first_ufc_date": "2021-08-28",
       "input_fingerprint": "df332aa27ae11a2551c8c36e6e210b63b36a7f712954471c2f55518e75886300",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:53:09.019852+00:00"
+      "updated_at": "2026-09-13T10:52:26.843747+00:00"
     },
     "ufcstats:7d6ceff6747f2de2": {
       "fighter_id": "7d6ceff6747f2de2",
       "fighter_name": "Jose Miguel Delgado",
       "first_ufc_date": "2025-02-15",
       "input_fingerprint": "cebb582513162b7677da2e6b0f487d5391cbd954db2ada4f43bf7c3fe3ad1b24",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:54:16.175675+00:00"
+      "updated_at": "2026-09-13T10:53:17.911838+00:00"
     },
     "ufcstats:cc1a8b4b38b92c6d": {
       "fighter_id": "cc1a8b4b38b92c6d",
@@ -4422,22 +4423,22 @@
       "fighter_name": "Norma Dumont",
       "first_ufc_date": "2020-02-29",
       "input_fingerprint": "0f210c60cc2ca4051369612d9f1d4cb79ad16b486b29ed91285b4904bc6853a7",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T10:02:30.853762+00:00"
+      "updated_at": "2026-09-13T10:59:01.609909+00:00"
     },
     "ufcstats:d8c811df0386d5e8": {
       "fighter_id": "d8c811df0386d5e8",
       "fighter_name": "Rinya Nakamura",
       "first_ufc_date": "2022-06-10",
       "input_fingerprint": "590d3948af3b007a20761e7e20299fe5d98966207c916433eb3e884f9f8fb98e",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T10:02:40.327254+00:00"
+      "updated_at": "2026-09-13T10:59:52.949045+00:00"
     },
     "ufcstats:e5864a42c80294f6": {
       "fighter_id": "e5864a42c80294f6",
@@ -4466,22 +4467,22 @@
       "fighter_name": "Robert Bryczek",
       "first_ufc_date": "2024-02-10",
       "input_fingerprint": "bb90e9ada744ebbc0a0fe86f11429274ad931ea2551db69a01a9b7deef240559",
-      "attempts": 2,
+      "attempts": 3,
       "row_count": 0,
-      "status": "zero_rows",
+      "status": "exhausted_zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T10:05:11.720355+00:00"
+      "updated_at": "2026-09-13T11:01:13.614960+00:00"
     },
     "ufcstats:2558ae2e5671e318": {
       "fighter_id": "2558ae2e5671e318",
       "fighter_name": "Khaos Williams",
       "first_ufc_date": "2020-02-08",
       "input_fingerprint": "8f691572225b3cbe288b94a8cf3f92340b19aebe70699687e26d3446ef27e70f",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:46:30.562754+00:00"
+      "updated_at": "2026-09-13T10:43:31.863520+00:00"
     },
     "ufcstats:262a7d06203657e6": {
       "fighter_id": "262a7d06203657e6",
@@ -4499,33 +4500,33 @@
       "fighter_name": "Natalia Silva",
       "first_ufc_date": "2022-06-18",
       "input_fingerprint": "49fa1fbe6829aef7d5d30149d1ec39318dee8f3e68389594776e3f727848ebca",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:47:25.924558+00:00"
+      "updated_at": "2026-09-13T10:45:01.094996+00:00"
     },
     "ufcstats:2997e7fe3c9d3d4a": {
       "fighter_id": "2997e7fe3c9d3d4a",
       "fighter_name": "Wang Cong",
       "first_ufc_date": "2024-08-24",
       "input_fingerprint": "484c82cbcbeb04a9ce72839f16a2dfd3a68321a8eb4b0a7e2ae5d9c4cbc47452",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:47:51.037220+00:00"
+      "updated_at": "2026-09-13T10:46:15.298763+00:00"
     },
     "ufcstats:2c5f5749569eef66": {
       "fighter_id": "2c5f5749569eef66",
       "fighter_name": "Tainara Lisboa",
       "first_ufc_date": "2023-05-13",
       "input_fingerprint": "6927d906643a49fb6b9081121dcfabd2185ffe0db26a32e7997bd1a3e9b507bf",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:48:06.402558+00:00"
+      "updated_at": "2026-09-13T10:47:01.840960+00:00"
     },
     "ufcstats:2f181c0467965b98": {
       "fighter_id": "2f181c0467965b98",
@@ -4543,22 +4544,22 @@
       "fighter_name": "Esteban Ribovics",
       "first_ufc_date": "2023-03-04",
       "input_fingerprint": "bf1e28f33a407076ef9c0f873093ca3a5860dfba1d39b57853e5bbf1fabadf9a",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:48:52.350680+00:00"
+      "updated_at": "2026-09-13T10:47:47.576936+00:00"
     },
     "ufcstats:6a2f7c151031653d": {
       "fighter_id": "6a2f7c151031653d",
       "fighter_name": "Rafael Dos Anjos",
       "first_ufc_date": "2008-11-15",
       "input_fingerprint": "db6b67dd443766f45ebc43a93f23c14058e4f3df7d5f0ac98792e8d0c5f8dc6e",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:51:44.457257+00:00"
+      "updated_at": "2026-09-13T10:51:51.916560+00:00"
     },
     "ufcstats:7cbf7c78d3b34218": {
       "fighter_id": "7cbf7c78d3b34218",
@@ -4587,11 +4588,11 @@
       "fighter_name": "King Green",
       "first_ufc_date": "2012-05-20",
       "input_fingerprint": "90a88971049b78a8fe49cd77dd84ebee6d1fdd201483ebaad9f6bae145dd9ba5",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:54:55.384810+00:00"
+      "updated_at": "2026-09-13T10:55:25.477082+00:00"
     },
     "ufcstats:a93f94c923c3a9cb": {
       "fighter_id": "a93f94c923c3a9cb",
@@ -4609,11 +4610,11 @@
       "fighter_name": "Benardo Sopaj",
       "first_ufc_date": "2026-08-03",
       "input_fingerprint": "9317a13843e92fb8eb09281c4a9fecb5800f679375cc227c884a7bf88176fdd8",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T09:59:58.438382+00:00"
+      "updated_at": "2026-09-13T10:55:51.117294+00:00"
     },
     "ufcstats:c0ac37a4a1133da9": {
       "fighter_id": "c0ac37a4a1133da9",
@@ -4642,11 +4643,55 @@
       "fighter_name": "Tommy Gantt",
       "first_ufc_date": "2026-05-16",
       "input_fingerprint": "dc7cafc824afca4a9a43c586eb5df3951e2b50ba29235f32ff410ff0ed4b07e9",
-      "attempts": 1,
+      "attempts": 2,
       "row_count": 0,
       "status": "zero_rows",
       "last_error": "",
-      "updated_at": "2026-09-06T10:03:12.492351+00:00"
+      "updated_at": "2026-09-13T11:00:31.846506+00:00"
+    },
+    "ufcstats:3c4320a1b6106611": {
+      "fighter_id": "3c4320a1b6106611",
+      "fighter_name": "Cody Chovancek",
+      "first_ufc_date": "2026-08-03",
+      "input_fingerprint": "9d635f35a9b5b57376e25bbe9ad94bdc38a4661b175a5f11bcf5b2ee601b855d",
+      "attempts": 1,
+      "row_count": 5,
+      "status": "success",
+      "last_error": "",
+      "updated_at": "2026-09-13T10:48:21.299801+00:00"
+    },
+    "ufcstats:84512339473dd300": {
+      "fighter_id": "84512339473dd300",
+      "fighter_name": "Steven Koslow",
+      "first_ufc_date": "2022-12-10",
+      "input_fingerprint": "0a0d59d427dc9e13175ebb1fd034730a74c2b88df0d8b1b032ab3619a2b840c1",
+      "attempts": 1,
+      "row_count": 3,
+      "status": "success",
+      "last_error": "",
+      "updated_at": "2026-09-13T10:54:08.989299+00:00"
+    },
+    "ufcstats:c7c39e2fb70248b3": {
+      "fighter_id": "c7c39e2fb70248b3",
+      "fighter_name": "Chad Anheliger",
+      "first_ufc_date": "2022-02-19",
+      "input_fingerprint": "532941264c21032ac4b78fd677794d10f63460c893bf650d7e67ad42735fda37",
+      "attempts": 1,
+      "row_count": 1,
+      "status": "success",
+      "last_error": "",
+      "updated_at": "2026-09-13T10:57:27.439811+00:00"
+    },
+    "ufcstats:cdb7b38b1b357f26": {
+      "fighter_id": "cdb7b38b1b357f26",
+      "fighter_name": "Louie Sutherland",
+      "first_ufc_date": "2025-09-27",
+      "input_fingerprint": "60a19a6db0cf8903330520d29930cb5d55e2fed86986ef18c92a8540022ffd83",
+      "attempts": 1,
+      "row_count": 1,
+      "status": "success",
+      "last_error": "",
+      "updated_at": "2026-09-13T10:57:49.688939+00:00"
     }
   },
   "schema_version": 2
