@@ -279,12 +279,12 @@ def scientific_graph(tmp_path):
 
 def test_incremental_scientific_211_contract_matches_complete_context_and_excludes_future(tmp_path):
     from src.features.build_features import build_features, build_new_features
-    from src.model.training_spec import NamedModelTrainingSpec, materialize_and_validate_spec_features
+    from src.model.training_spec import full_live_contract_v6_durability_2022_spec, materialize_and_validate_spec_features
     history, targets = scientific_graph(tmp_path)
     observed = pd.concat([history, targets], ignore_index=True)
     full = build_features(observed)
     incremental = build_new_features(history, targets)
-    spec = NamedModelTrainingSpec.load(Path(__file__).resolve().parents[1] / "release_payload" / "models" / "full_live_contract_v6_durability_2022_spec.json")
+    spec = full_live_contract_v6_durability_2022_spec()
     assert len(spec.feature_cols) == 211
     expected = materialize_and_validate_spec_features(full.iloc[-len(targets):], spec)[spec.feature_cols].reset_index(drop=True)
     actual = materialize_and_validate_spec_features(incremental, spec)[spec.feature_cols].reset_index(drop=True)

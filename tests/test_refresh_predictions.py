@@ -15,6 +15,7 @@ from src.data.refresh_predictions import (
     MODEL_CONTRACT, UPCOMING_URL, RefreshPredictionError, parse_event_card,
     parse_fighter_profile, parse_upcoming_events, run_refresh_predictions,
 )
+from src.model.training_spec import full_live_contract_v6_durability_2022_spec
 
 IDS = ("1111111111111111", "2222222222222222")
 EVENT = "http://ufcstats.com/event-details/aaaaaaaaaaaaaaaa"
@@ -71,8 +72,8 @@ def inputs(tmp_path, monkeypatch):
     artifacts = {}
     for name in ("features.csv", "fights_cleaned.csv"):
         artifacts[name] = {**write(processed / name, pair), "rows": 1}
-    base_spec_path = Path(__file__).resolve().parents[1] / "release_payload/models/full_live_contract_v6_durability_2022_spec.json"
-    spec = json.loads(base_spec_path.read_bytes())
+    spec = json.loads(full_live_contract_v6_durability_2022_spec().to_json())
+    assert len(spec["feature_cols"]) == 211
     odds = {"a_implied_prob", "b_implied_prob", "diff_implied_prob", "a_ko_odds_prob",
             "a_sub_odds_prob", "a_dec_odds_prob", "b_ko_odds_prob", "b_sub_odds_prob", "b_dec_odds_prob"}
     models = {}
@@ -450,19 +451,53 @@ def test_release_and_job_relocation_rehydrates_selected_manifest(inputs, tmp_pat
 
 def test_fresh_profiles_cannot_replace_permanent_owner_dates(tmp_path):
     from dataclasses import replace
+    import pandas as pd
+    from src.data.profile_integrity import PROFILE_DECISION_COLUMNS, empty_profile_decisions
     from src.data.refresh_predictions import _merged_profiles
     from src.data.selected_source_inputs import SelectedSourceInputs
     from src.data.ufc_refresh import _load_scraped_fighter_lookup
-    root = Path(__file__).resolve().parents[1] / "release_payload"
-    sources = SelectedSourceInputs.from_manifest(root / "selected-source-manifest.json",
-                                                processed_data_dir=root / "processed")
+
+    # All profile observations and owner authority below are offline fixtures.
+    # Keep the public registry so Ethyn's real permanent-lock path is exercised.
+    root = tmp_path / "selected"
+    profiles = "name,fighter_url,height,reach,weight,stance,dob\n"
+    profiles += "Javad Mahjoub,http://ufcstats.com/fighter-details/e9f9add1481fc11c,180,182,155,Orthodox,1992-05-26\n"
+    profiles += "Ethyn Ewing,http://ufcstats.com/fighter-details/d776b5814f2400b4,180,182,155,Orthodox,1998-02-16\n"
+    files = {"profiles": write(root / "profiles.csv", profiles)}
+    url = "http://ufcstats.com/fighter-details/e9f9add1481fc11c"
+    decision = {column: "" for column in PROFILE_DECISION_COLUMNS}
+    decision.update(
+        stable_ufcstats_id="e9f9add1481fc11c", ufcstats_url=url,
+        canonical_name="Javad Mahjoub", field="dob", raw_current_value="2000-01-01",
+        model_safe_value="1992-05-26", decision_status="owner_adjudicated",
+        primary_source="ufcstats", primary_source_entity_id="e9f9add1481fc11c",
+        primary_requested_url=url, primary_source_url=url, primary_canonical_url=url,
+        primary_redirect_chain="[]", primary_display_name="Javad Mahjoub",
+        primary_raw_value="1992-05-26", primary_normalized_value="1992-05-26",
+        primary_identity_status="reviewed", primary_name_match_status="exact",
+        primary_identity_basis="stable_ufcstats_url", primary_identity_evidence_url=url,
+        sources_agree="false", trusted_conflict="true", retrieved_at_utc="2026-10-10T15:00:00Z",
+        reason="Offline fixture: preserve a reviewed owner date against a conflicting fresh profile.",
+        owner_adjudicated_at_utc="2026-10-10T15:00:00Z",
+        owner_adjudication_text="Offline fixture owner selects the recorded 1992-05-26 observation.",
+        independent_verification_status="synthetic offline fixture",
+    )
+    files["profile_decisions"] = write(root / "decisions.csv", pd.DataFrame([decision]).to_csv(index=False))
+    files["prior_profile_decisions"] = write(root / "prior.csv", empty_profile_decisions().to_csv(index=False))
+    files["roster_recovery_registry"] = pin(
+        Path(__file__).resolve().parents[1] / "config/ufc_roster_recovery_decisions_v1.json"
+    )
+    manifest = root / "selected-source-manifest.json"
+    write(manifest, json.dumps({"files": files}))
+    sources = SelectedSourceInputs.from_manifest(manifest, processed_data_dir=root / "processed")
     observations = [
         {"name": "Javad Mahjoub", "fighter_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
-         "dob": "2000-01-01", "height": "77 in", "reach": "77 in", "stance": "Orthodox"},
+         "dob": "2000-01-01", "height": "77 in", "reach": "77 in", "weight": "170 lbs", "stance": "Orthodox"},
         {"name": "Ethyn Ewing", "fighter_url": "http://ufcstats.com/fighter-details/d776b5814f2400b4",
-         "dob": "1996-02-19", "height": "77 in", "reach": "77 in", "stance": "Orthodox"},
+         "dob": "1996-02-19", "height": "77 in", "reach": "77 in", "weight": "170 lbs", "stance": "Orthodox"},
     ]
     fresh = _merged_profiles(sources, observations, tmp_path / "current_profiles.csv")
+    assert pd.read_csv(fresh["path"])["dob"].tolist() == ["2000-01-01", "1996-02-19"]
     selected = replace(sources, files={**sources.files, "profiles": fresh})
     with selected.activate():
         bank = _load_scraped_fighter_lookup(selected.path("profiles"),
@@ -471,6 +506,7 @@ def test_fresh_profiles_cannot_replace_permanent_owner_dates(tmp_path):
     assert bank["ufcstats:e9f9add1481fc11c"]["dob"].date().isoformat() == "1992-05-26"
     assert bank["ufcstats:d776b5814f2400b4"]["dob"].date().isoformat() == "1998-02-16"
     assert np.isnan(bank["ufcstats:e9f9add1481fc11c"]["weight"])
+    assert np.isnan(bank["ufcstats:d776b5814f2400b4"]["weight"])
 
 
 def test_original_completion_is_not_replaced_by_current_pointer(inputs):

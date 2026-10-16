@@ -99,3 +99,8 @@ data/processed/backup_pre_durability_*/
 data/processed/ufc_refresh_generations/
 data/processed/candidates/full_live_contract_v5_fullfit_retrain/
 data/processed/candidates/v6_eval/
+
+# Private operational handoffs remain local and in private backups.
+/docs/PRACTICAL_MODEL_DATA_RESET_LIVING_HANDOFF.md
+/docs/MASTER_COMPLETION_AND_PRODUCTION_RELEASE_PLAN.md
+/docs/REFRESH_TO_LIVE_BETTING_HANDOFF_2026-10-11.md

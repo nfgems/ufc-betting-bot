@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   saved-production-source:
@@ -19,19 +18,12 @@ jobs:
         run: |
           python tools/verify_release_source.py
           python scripts/check_tracked_artifact_integrity.py
-      - name: Authenticate to the immutable private base image
-        env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-      - name: Build and verify the saved production source
-        run: docker build --network none -t ufc-saved-source:test .
+      - name: Build the public test environment
+        run: docker build -f Dockerfile.ci -t ufc-public-tests .
       - name: Compile and test without network or application startup
         run: |
-          docker run --rm --network none --entrypoint python \
-            -e LIVE_TRADING_MODE=off -e PYTHONDONTWRITEBYTECODE=1 \
-            -e PYTHONPATH=/app -e PYTHONPYCACHEPREFIX=/tmp/ci-pyc \
-            -v "$PWD/tests:/checks:ro" ufc-saved-source:test -c \
-            "import compileall,shutil,pytest; shutil.copytree('/checks','/app/tests',dirs_exist_ok=True); assert compileall.compile_dir('/app/src',quiet=1) and compileall.compile_dir('/app/tests',quiet=1); raise SystemExit(pytest.main(['-q','-p','no:cacheprovider','/app/tests']))"
+          docker run --rm --network none --entrypoint python ufc-public-tests -c \
+            "import compileall,pytest; assert compileall.compile_dir('src',quiet=1) and compileall.compile_dir('tests',quiet=1); raise SystemExit(pytest.main(['-q','-p','no:cacheprovider','tests']))"
       - name: Check dashboard display scripts
         run: |
           node tests/check_dashboard_display.cjs
