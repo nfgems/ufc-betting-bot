@@ -21,6 +21,10 @@ data/logs/
 data/models/
 railway_logs_*.jsonl
 .codex_stage/
+.integrity-runtime/
+data/operator/decision_log.jsonl
+data/operator/tennis_veto_log.jsonl
+data/raw/tennis/wta/wta_rankings_snapshot_resolution.json
 data/operator/decision_cache.json
 data/operator/gemini_pick_cache.json
 data/operator/gemini_research_cache.json
