@@ -1,0 +1,88 @@
+{
+  "positions": [
+    {
+      "avgPrice": 0.2,
+      "curPrice": 1,
+      "endDate": "2027-03-07",
+      "eventSlug": "ufc-synthetic-red-versus-blue",
+      "oppositeOutcome": "Option Blue",
+      "outcome": "Option Red",
+      "outcomeIndex": 0,
+      "realizedPnl": 12.5,
+      "slug": "synthetic-option-red",
+      "timestamp": 1800000000,
+      "title": "Synthetic UFC: Option Red versus Option Blue",
+      "totalBought": 75
+    },
+    {
+      "avgPrice": 0.35,
+      "curPrice": 0.4,
+      "endDate": "2028-11-08",
+      "eventSlug": "synthetic-project-harbor-choice",
+      "oppositeOutcome": "Option Delta",
+      "outcome": "Option Alpha",
+      "outcomeIndex": 0,
+      "realizedPnl": 3.25,
+      "slug": "synthetic-project-harbor-alpha",
+      "timestamp": 1800000600,
+      "title": "Synthetic Project Harbor: Option Alpha",
+      "totalBought": 40
+    },
+    {
+      "avgPrice": 0.6,
+      "curPrice": 0.15,
+      "endDate": "2028-11-08",
+      "eventSlug": "synthetic-project-harbor-alternative",
+      "oppositeOutcome": "Option Gamma",
+      "outcome": "Option Beta",
+      "outcomeIndex": 0,
+      "realizedPnl": -4.75,
+      "slug": "synthetic-project-harbor-beta",
+      "timestamp": 1800001200,
+      "title": "Synthetic Project Harbor: Option Beta",
+      "totalBought": 25
+    }
+  ],
+  "fixture_note": "Synthetic examples only; no account records or identifiers.",
+  "render_rows": [
+    {
+      "fighter": "Option Red",
+      "event": "Synthetic UFC: Option Red versus Option Blue",
+      "amount": 15,
+      "shares": 75,
+      "result_pnl": 12.5,
+      "status": "closed_profit",
+      "resolution_confirmed": false,
+      "resolution_source": null,
+      "placed_at": null,
+      "settled_at": null,
+      "market_end_date": "2027-03-07"
+    },
+    {
+      "fighter": "Option Alpha",
+      "event": "Synthetic Project Harbor: Option Alpha",
+      "amount": 14,
+      "shares": 40,
+      "result_pnl": 3.25,
+      "status": "closed_profit",
+      "resolution_confirmed": false,
+      "resolution_source": null,
+      "placed_at": null,
+      "settled_at": null,
+      "market_end_date": "2028-11-08"
+    },
+    {
+      "fighter": "Option Beta",
+      "event": "Synthetic Project Harbor: Option Beta",
+      "amount": 15,
+      "shares": 25,
+      "result_pnl": -4.75,
+      "status": "closed_loss",
+      "resolution_confirmed": false,
+      "resolution_source": null,
+      "placed_at": null,
+      "settled_at": null,
+      "market_end_date": "2028-11-08"
+    }
+  ]
+}

@@ -1,0 +1,251 @@
+{
+  "schema": 1,
+  "created_utc": "2026-09-20T23:12:14.697547+00:00",
+  "reviewer": "saved_seven agent independent of saved_other proposal",
+  "pass": true,
+  "proposal_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\saved-six-proposals01.json",
+    "bytes": 51905,
+    "sha256": "f1cf8a776186626387da0e39f2a4e4f477c1171ce5c8717d70c9d43993eb9b2a"
+  },
+  "algorithm_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-seven\\review_saved_six.py",
+    "bytes": 9832,
+    "sha256": "a216de8f0e1951b0d10b285f306038eaada53039db2da1d4305afa00546378a4"
+  },
+  "selected_input_pins": {
+    "roster": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\active_roster\\ufc_active_roster_official.csv",
+      "bytes": 358499,
+      "sha256": "a17cc92fdab735673128425b6330395c19a251d7c7b64e52d80431664f9f7270"
+    },
+    "accepted_roster": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\accepted_active_roster\\accepted-active-roster.csv",
+      "bytes": 357056,
+      "sha256": "f1e7d9fbd00e61a2104e66a3461ba672e180656d18fba18edb8c7d1110d57a73"
+    },
+    "profiles": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+      "bytes": 673721,
+      "sha256": "9d054fb8c03209baedeb44d9e69ef577adef90d81cff38b0e10488c67c00b2eb"
+    }
+  },
+  "supplemental_profiles_pin": {
+    "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\supplemental_profiles\\ufc_fighters_profile_supplement.csv",
+    "bytes": 26516,
+    "sha256": "acb0dea6194394dfc77741ffb2874a98491c599adef60b02ba7ba4736b54093b"
+  },
+  "selected_fights_pin": {
+    "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\processed\\fights_cleaned.csv",
+    "bytes": 16543108,
+    "sha256": "bb9de5b25456fc6a74c965b28bef682b5f70aac4205d1cddad0b2667ccaaf2f6"
+  },
+  "entries": [
+    {
+      "name": "Gilbert Urbina",
+      "athlete_url": "https://www.ufc.com/athlete/kiruhato-uruhina",
+      "fighter_id": "b12fb759e02378de",
+      "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-athletes\\b12fb759e02378de-gilbert-urbina.html",
+        "bytes": 130556,
+        "sha256": "4b221bcf4e6245544a6cc3656d94ddf79f76af683f31a23ec50687e5fd5b3e18"
+      },
+      "verified_current_card_appearance": {
+        "card_index": 3,
+        "bout_index": 11,
+        "side": "b"
+      },
+      "verified_bridge": {
+        "exact_source_language_alternates": [
+          {
+            "hreflang": "ja",
+            "url": "https://www.ufc.com/athlete/kiruhato-uruhina"
+          },
+          {
+            "hreflang": "ru",
+            "url": "https://www.ufc.com/athlete/kiruhato-uruhina"
+          }
+        ],
+        "dob_match": "1996-04-05",
+        "selected_owner": {
+          "athlete_url": "https://www.ufc.com/athlete/gilbert-urbina",
+          "name": "Gilbert Urbina",
+          "fighter_id": "b12fb759e02378de"
+        }
+      },
+      "selected_owner": {
+        "athlete_url": "https://www.ufc.com/athlete/gilbert-urbina",
+        "name": "Gilbert Urbina",
+        "fighter_id": "b12fb759e02378de"
+      },
+      "runtime_binding_eligible": true,
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule."
+    },
+    {
+      "name": "Vanessa Demopoulos",
+      "athlete_url": "https://www.ufc.com/athlete/vanessa-demopulos",
+      "fighter_id": "2c483cf443f38ece",
+      "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-athletes\\2c483cf443f38ece-vanessa-demopoulos.html",
+        "bytes": 145129,
+        "sha256": "48cc5a66f37a3547e0631310f357b27f79079f6068e82040bd84a87c73030af8"
+      },
+      "verified_current_card_appearance": {
+        "card_index": 0,
+        "bout_index": 10,
+        "side": "a"
+      },
+      "verified_bridge": {
+        "exact_source_language_alternates": [
+          {
+            "hreflang": "ru",
+            "url": "https://www.ufc.com/athlete/vanessa-demopulos"
+          }
+        ],
+        "dob_match": "1988-09-22",
+        "selected_owner": {
+          "athlete_url": "https://www.ufc.com/athlete/vanessa-demopoulos",
+          "name": "Vanessa Demopoulos",
+          "fighter_id": "2c483cf443f38ece"
+        }
+      },
+      "selected_owner": {
+        "athlete_url": "https://www.ufc.com/athlete/vanessa-demopoulos",
+        "name": "Vanessa Demopoulos",
+        "fighter_id": "2c483cf443f38ece"
+      },
+      "runtime_binding_eligible": true,
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule."
+    },
+    {
+      "name": "Jamey-Lyn Horth",
+      "athlete_url": "https://www.ufc.com/athlete/jamey-lyn-horth",
+      "fighter_id": "5c637af9472ae7cc",
+      "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-athletes\\2c483cf443f38ece-vanessa-demopoulos.html",
+        "bytes": 145129,
+        "sha256": "48cc5a66f37a3547e0631310f357b27f79079f6068e82040bd84a87c73030af8"
+      },
+      "verified_current_card_appearance": {
+        "card_index": 3,
+        "bout_index": 6,
+        "side": "a"
+      },
+      "verified_bridge": {
+        "dated_result_card_text": "Win Horth vs Demopoulos Jun. 14, 2025 Round 3 Time 5:00 Method Decision - Unanimous Watch Replay Fight Card",
+        "historical_bout": {
+          "event_date": "2025-06-14",
+          "event_name": "UFC Fight Night: Usman vs. Buckley",
+          "fighter_a": "Jamey-Lyn Horth",
+          "fighter_b": "Vanessa Demopoulos",
+          "fighter_a_id": "5c637af9472ae7cc",
+          "fighter_b_id": "2c483cf443f38ece",
+          "winner": "Jamey-Lyn Horth",
+          "method": "Decision - Unanimous "
+        },
+        "history_literal": "UFC on ESPN (6/14/25) Demopoulos lost a three round unanimous decision to Jamey-Lyn Horth"
+      },
+      "selected_owner": null,
+      "runtime_binding_eligible": true,
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule."
+    },
+    {
+      "name": "Marcus McGhee",
+      "athlete_url": "https://www.ufc.com/athlete/marcus-mcghee",
+      "fighter_id": "c0ac37a4a1133da9",
+      "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-athletes\\450bcab0968562c4-john-yannis.html",
+        "bytes": 105475,
+        "sha256": "11664a21ecc0b6c324be131bba5fab7e9ac1daa9da72343375aed8cdbe9e98c0"
+      },
+      "verified_current_card_appearance": {
+        "card_index": 1,
+        "bout_index": 7,
+        "side": "a"
+      },
+      "verified_bridge": {
+        "dated_result_card_text": "Win McGhee vs Yannis Jun. 6, 2026 Round 3 Time 5:00 Method Decision - Unanimous Watch Replay Fight Card",
+        "historical_bout": {
+          "event_date": "2026-06-06",
+          "event_name": "UFC Fight Night: Muhammad vs. Bonfim",
+          "fighter_a": "Marcus McGhee",
+          "fighter_b": "John Yannis",
+          "fighter_a_id": "c0ac37a4a1133da9",
+          "fighter_b_id": "450bcab0968562c4",
+          "winner": "Marcus McGhee",
+          "method": "Decision - Unanimous"
+        },
+        "history_literal": "UFC Fight Night (6/6/26) Yannis lost a three round unanimous decision to Marcus McGhee"
+      },
+      "selected_owner": null,
+      "runtime_binding_eligible": true,
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule."
+    },
+    {
+      "name": "Wang Cong",
+      "athlete_url": "https://www.ufc.com/athlete/wang-cong",
+      "fighter_id": "2997e7fe3c9d3d4a",
+      "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\immutable_b\\wang_cong_ufc_official.html",
+        "bytes": 132193,
+        "sha256": "cfd9a553415c004c40460bd318ca6c0bdad535d5716c50607487d3e462d96ed6"
+      },
+      "verified_current_card_appearance": {
+        "card_index": 1,
+        "bout_index": 0,
+        "side": "b"
+      },
+      "verified_bridge": {
+        "historical_bout": {
+          "event_date": "2026-07-11",
+          "event_name": "UFC 329: McGregor vs. Holloway 2",
+          "fighter_a": "Tracy Cortez",
+          "fighter_b": "Wang Cong",
+          "fighter_a_id": "68d4a891e5cf2029",
+          "fighter_b_id": "2997e7fe3c9d3d4a",
+          "winner": "Wang Cong",
+          "method": "Decision - Unanimous"
+        },
+        "history_literal": "UFC 329 (7/11/26) Wang won a three round unanimous decision over Tracy Cortez"
+      },
+      "selected_owner": null,
+      "runtime_binding_eligible": true,
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule."
+    },
+    {
+      "name": "Lucia Szabova",
+      "athlete_url": "https://www.ufc.com/athlete/lucia-szabova",
+      "fighter_id": "184f6ec4ee712e9f",
+      "decision": "ACCEPT_IDENTITY_EVIDENCE_WITHHOLD_RUNTIME_SELECTED_PROFILE_MISSING",
+      "source_pin": {
+        "path": "C:\\Temp\\u31r1\\network\\ufccom-athletes-01\\02-a1-decoded.bin",
+        "bytes": 70553,
+        "sha256": "434e22f70a7f3673f0f1406406e63f917efa6aa5d45eb23bda4b5e80c58100f2"
+      },
+      "verified_current_card_appearance": {
+        "card_index": 5,
+        "bout_index": 1,
+        "side": "a"
+      },
+      "verified_bridge": {},
+      "selected_owner": null,
+      "runtime_binding_eligible": false,
+      "qualification": "Lucia canonical/name/DOB independently match exact UFCStats profile and roster carrier, but selected primary and supplemental profiles both lack a record; do not fabricate profile, change selected data, or count as runtime-supported."
+    }
+  ],
+  "counts": {
+    "identities_supported": 6,
+    "runtime_binding_eligible": 5,
+    "runtime_withheld_selected_profile_missing": 1
+  },
+  "limits": [
+    "Evidence acceptance only; exact isolated artifact integration and testing remain required.",
+    "Original card names/URLs retained; two language-alternate routes require exact reviewed selected_owner.",
+    "Method evidence, timing, market coverage and hosted acceptance are not established."
+  ]
+}

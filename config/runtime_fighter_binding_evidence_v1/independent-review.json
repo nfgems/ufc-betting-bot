@@ -1,0 +1,482 @@
+{
+  "reviewer": "independent seal_review subagent",
+  "reviewed_utc": "2026-09-20T16:37:31.023520+00:00",
+  "scope": "Read-only saved-file evidence review; no provider/web/hosted calls, application imports, app edits or runtime-binding publication",
+  "input_evidence_index_sha256": "4ff84a48805719e7d546025b7f3137186251b3cdb316723b19b4bdc8877bee69",
+  "source_pin_checks": [
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\src\\bot.py",
+      "sha256": "4ea736f07425daad52b66b7abd2401af9e48d97e6a655d119588487b97d7ba72",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\src\\data\\live_monitor.py",
+      "sha256": "9c0884c252b6e86b8d3180898cc423a9c9a8fe73f5ea092e847357d93adf056a",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\src\\data\\runtime_selected_inputs.py",
+      "sha256": "a3229f5626c4cae9c2a8af7fdaa7c31e874eed82e110cf3feee29d70e1e87be3",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\src\\data\\selected_source_inputs.py",
+      "sha256": "b43604e4880fda1ceba49295e95eea60b6cc452712a15f68cacf8f369e9aeec5",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\src\\data\\ufc_active_roster.py",
+      "sha256": "fa3bf17118785f05da8b9a297ed0f0be00fb4995948984b6c4ee764a98cfdd9b",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\src\\data\\reviewed_roster_identity.py",
+      "sha256": "ca7423517ae39f87c8e800e243b81978f0d8b1e93beea9effd31f705dd1883df",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\src\\data\\reviewed_roster_recovery.py",
+      "sha256": "c964e3727a8990bebdad1a7480dcf0bd3cfe0698c5358f297ad88c69306da5b0",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\src\\data\\name_utils.py",
+      "sha256": "73d3ad162645aa56d24b5c132aa5b73ac7c363372d4942d1f399708a2e1bb0f6",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\config\\ufc_roster_identity_links_v1.json",
+      "sha256": "653cc598ea85a2e47fbbd393b5fe6eb4948d0c3b0e21032e176fcc4aaa5a4f26",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-rollout-readiness-20260920-01\\identity\\source\\config\\ufc_roster_recovery_decisions_v1.json",
+      "sha256": "fd54a3f70b1c261b3e4a9683af75bcf531e8148f3fc7361f51ed53c6e8b45394",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\processed\\fights_cleaned.csv",
+      "sha256": "bb9de5b25456fc6a74c965b28bef682b5f70aac4205d1cddad0b2667ccaaf2f6",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\source_request_log.csv",
+      "sha256": "4d09f2f9ed89e6b397250a841eeb4559b700263fa275f8c1de1836ab50659c12",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\evidence_inventory.csv",
+      "sha256": "d43f4ef699966cf6f3429df3c108955a2b60d063fdfa23e8831ea9e9f3ce7f21",
+      "matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+      "image_path": "/app/release_payload/inputs/profiles/ufc_fighters_scraped.csv",
+      "sha256": "9d054fb8c03209baedeb44d9e69ef577adef90d81cff38b0e10488c67c00b2eb",
+      "image_pin_matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\accepted_active_roster\\accepted-active-roster.csv",
+      "image_path": "/app/release_payload/inputs/accepted_active_roster/accepted-active-roster.csv",
+      "sha256": "f1e7d9fbd00e61a2104e66a3461ba672e180656d18fba18edb8c7d1110d57a73",
+      "image_pin_matches": true
+    },
+    {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\processed\\fights_cleaned.csv",
+      "image_path": "/app/release_payload/processed/fights_cleaned.csv",
+      "sha256": "bb9de5b25456fc6a74c965b28bef682b5f70aac4205d1cddad0b2667ccaaf2f6",
+      "image_pin_matches": true
+    }
+  ],
+  "articles": [
+    {
+      "canonical_name": "Ailin Perez",
+      "ufcstats_id": "06e4245d16fc5315",
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2022-09-03-ufc-fight-night-gane-vs-tuivasa-1.html",
+      "bytes": 104279,
+      "sha256": "6565e72839db210b6e3471612a0db804c074e7119eb8202ed74f2f24e1aed1f0",
+      "inventory_matches": true,
+      "original_receipt_exact": true,
+      "transport_success": true,
+      "receipt": {
+        "retrieved_at_utc": "2026-08-29T04:39:44.160675Z",
+        "route": "ufc_official_weighin_article_https",
+        "requested_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-gane-vs-tuivasa-paris",
+        "final_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-gane-vs-tuivasa-paris",
+        "attempt": "1",
+        "status_code": "200",
+        "redirect_chain_json": "[]",
+        "response_bytes": "104279",
+        "response_sha256": "6565e72839db210b6e3471612a0db804c074e7119eb8202ed74f2f24e1aed1f0",
+        "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2022-09-03-ufc-fight-night-gane-vs-tuivasa-1.html",
+        "outcome": "ok",
+        "error": ""
+      },
+      "canonical_urls": [
+        "https://www.ufc.com/news/weigh-results-ufc-fight-night-gane-vs-tuivasa-paris"
+      ],
+      "canonical_matches_receipt": true,
+      "article_date_metadata": [
+        {
+          "property": "article:published_time",
+          "content": "2022-09-02T02:00:53-0400"
+        },
+        {
+          "property": "article:modified_time",
+          "content": "2022-09-02T13:25:27-0400"
+        }
+      ],
+      "exact_route_anchors": [],
+      "selected_bout_matches": [
+        {
+          "event_date": "2022-09-03",
+          "event_name": "UFC Fight Night: Gane vs. Tuivasa",
+          "fighter_a": "Stephanie Egger",
+          "fighter_b": "Ailin Perez",
+          "fighter_a_id": "5e6294b37bbef029",
+          "fighter_b_id": "06e4245d16fc5315"
+        }
+      ],
+      "unique_exact_selected_bout": true,
+      "both_fighter_names_in_article_body": true,
+      "selected_profile": [
+        {
+          "name": "Ailin Perez",
+          "fighter_url": "http://ufcstats.com/fighter-details/06e4245d16fc5315",
+          "dob": "Oct 05, 1994"
+        }
+      ],
+      "selected_profile_unique": true,
+      "selected_roster_unique_owner": true,
+      "article_pin_matches": true
+    },
+    {
+      "canonical_name": "Norma Dumont",
+      "ufcstats_id": "d3f5d33d61cd00c9",
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2024-04-06-ufc-fight-night-allen-vs-curtis-2-1.html",
+      "bytes": 94386,
+      "sha256": "cff75d1999fe072de2a5d9266e353ce8e0d2bf0fdbdd291eb38c68a9ec73e0be",
+      "inventory_matches": true,
+      "original_receipt_exact": true,
+      "transport_success": true,
+      "receipt": {
+        "retrieved_at_utc": "2026-08-29T04:40:42.393051Z",
+        "route": "ufc_official_weighin_article_https",
+        "requested_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-allen-vs-curtis-2-vegas-90",
+        "final_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-allen-vs-curtis-2-vegas-90",
+        "attempt": "1",
+        "status_code": "200",
+        "redirect_chain_json": "[]",
+        "response_bytes": "94386",
+        "response_sha256": "cff75d1999fe072de2a5d9266e353ce8e0d2bf0fdbdd291eb38c68a9ec73e0be",
+        "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2024-04-06-ufc-fight-night-allen-vs-curtis-2-1.html",
+        "outcome": "ok",
+        "error": ""
+      },
+      "canonical_urls": [
+        "https://www.ufc.com/news/weigh-results-ufc-fight-night-allen-vs-curtis-2-vegas-90"
+      ],
+      "canonical_matches_receipt": true,
+      "article_date_metadata": [
+        {
+          "property": "article:published_time",
+          "content": "2024-04-05T13:55:00-0400"
+        },
+        {
+          "property": "article:modified_time",
+          "content": "2024-04-05T15:30:50-0400"
+        }
+      ],
+      "exact_route_anchors": [
+        {
+          "href": "https://www.ufc.com/athlete/norma-dumont",
+          "text": "Norma Dumont"
+        }
+      ],
+      "selected_bout_matches": [
+        {
+          "event_date": "2024-04-06",
+          "event_name": "UFC Fight Night: Allen vs. Curtis 2",
+          "fighter_a": "Norma Dumont",
+          "fighter_b": "Germaine de Randamie",
+          "fighter_a_id": "d3f5d33d61cd00c9",
+          "fighter_b_id": "1d239d571e342453"
+        }
+      ],
+      "unique_exact_selected_bout": true,
+      "both_fighter_names_in_article_body": true,
+      "selected_profile": [
+        {
+          "name": "Norma Dumont",
+          "fighter_url": "http://ufcstats.com/fighter-details/d3f5d33d61cd00c9",
+          "dob": "Oct 01, 1990"
+        }
+      ],
+      "selected_profile_unique": true,
+      "selected_roster_unique_owner": true,
+      "article_pin_matches": true
+    },
+    {
+      "canonical_name": "Movsar Evloev",
+      "ufcstats_id": "76e2870ffafbe38f",
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2022-06-04-ufc-fight-night-volkov-vs-rozenstruik-1.html",
+      "bytes": 94234,
+      "sha256": "2630362586cc8d4e1d58b96e251fc1105681528f6e6468a90d4fd4e5d378d125",
+      "inventory_matches": true,
+      "original_receipt_exact": true,
+      "transport_success": true,
+      "receipt": {
+        "retrieved_at_utc": "2026-08-29T04:39:35.328800Z",
+        "route": "ufc_official_weighin_article_https",
+        "requested_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-volkov-vs-rozenstruik-vegas-56",
+        "final_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-volkov-vs-rozenstruik-vegas-56",
+        "attempt": "1",
+        "status_code": "200",
+        "redirect_chain_json": "[]",
+        "response_bytes": "94234",
+        "response_sha256": "2630362586cc8d4e1d58b96e251fc1105681528f6e6468a90d4fd4e5d378d125",
+        "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2022-06-04-ufc-fight-night-volkov-vs-rozenstruik-1.html",
+        "outcome": "ok",
+        "error": ""
+      },
+      "canonical_urls": [
+        "https://www.ufc.com/news/weigh-results-ufc-fight-night-volkov-vs-rozenstruik-vegas-56"
+      ],
+      "canonical_matches_receipt": true,
+      "article_date_metadata": [
+        {
+          "property": "article:published_time",
+          "content": "2022-06-03T09:00:00-0400"
+        },
+        {
+          "property": "article:modified_time",
+          "content": "2022-06-03T13:56:58-0400"
+        }
+      ],
+      "exact_route_anchors": [
+        {
+          "href": "https://www.ufc.com/athlete/movsar-evloev",
+          "text": "Movsar Evloev"
+        }
+      ],
+      "selected_bout_matches": [
+        {
+          "event_date": "2022-06-04",
+          "event_name": "UFC Fight Night: Volkov vs. Rozenstruik",
+          "fighter_a": "Dan Ige",
+          "fighter_b": "Movsar Evloev",
+          "fighter_a_id": "82a5152216251682",
+          "fighter_b_id": "76e2870ffafbe38f"
+        }
+      ],
+      "unique_exact_selected_bout": true,
+      "both_fighter_names_in_article_body": true,
+      "selected_profile": [
+        {
+          "name": "Movsar Evloev",
+          "fighter_url": "http://ufcstats.com/fighter-details/76e2870ffafbe38f",
+          "dob": "Feb 11, 1994"
+        }
+      ],
+      "selected_profile_unique": true,
+      "selected_roster_unique_owner": true,
+      "article_pin_matches": true
+    },
+    {
+      "canonical_name": "Alexander Volkanovski",
+      "ufcstats_id": "e1248941344b3288",
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-04-12-ufc-314-volkanovski-vs-lopes-1.html",
+      "bytes": 97275,
+      "sha256": "e74186338a50a33fe0d829719de5b13647a85820539621f36a073bd78f91b73b",
+      "inventory_matches": true,
+      "original_receipt_exact": true,
+      "transport_success": true,
+      "receipt": {
+        "retrieved_at_utc": "2026-08-29T04:41:21.965878Z",
+        "route": "ufc_official_weighin_article_https",
+        "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-314-volkanovski-vs-lopes",
+        "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-314-volkanovski-vs-lopes",
+        "attempt": "1",
+        "status_code": "200",
+        "redirect_chain_json": "[]",
+        "response_bytes": "97275",
+        "response_sha256": "e74186338a50a33fe0d829719de5b13647a85820539621f36a073bd78f91b73b",
+        "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-04-12-ufc-314-volkanovski-vs-lopes-1.html",
+        "outcome": "ok",
+        "error": ""
+      },
+      "canonical_urls": [
+        "https://www.ufc.com/news/official-weigh-results-ufc-314-volkanovski-vs-lopes"
+      ],
+      "canonical_matches_receipt": true,
+      "article_date_metadata": [
+        {
+          "property": "article:published_time",
+          "content": "2025-04-11T08:57:03-0400"
+        },
+        {
+          "property": "article:modified_time",
+          "content": "2025-04-14T12:29:15-0400"
+        }
+      ],
+      "exact_route_anchors": [
+        {
+          "href": "https://www.ufc.com/athlete/alexander-volkanovski",
+          "text": "Alexander Volkanovski"
+        }
+      ],
+      "selected_bout_matches": [
+        {
+          "event_date": "2025-04-12",
+          "event_name": "UFC 314: Volkanovski vs. Lopes",
+          "fighter_a": "Alexander Volkanovski",
+          "fighter_b": "Diego Lopes",
+          "fighter_a_id": "e1248941344b3288",
+          "fighter_b_id": "f166e93d04a8c274"
+        }
+      ],
+      "unique_exact_selected_bout": true,
+      "both_fighter_names_in_article_body": true,
+      "selected_profile": [
+        {
+          "name": "Alexander Volkanovski",
+          "fighter_url": "http://ufcstats.com/fighter-details/e1248941344b3288",
+          "dob": "Sep 29, 1988"
+        }
+      ],
+      "selected_profile_unique": true,
+      "selected_roster_unique_owner": true,
+      "article_pin_matches": true
+    },
+    {
+      "canonical_name": "Alexander Volkanovski",
+      "ufcstats_id": "e1248941344b3288",
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2023-07-08-ufc-290-volkanovski-vs-rodriguez-1.html",
+      "bytes": 81293,
+      "sha256": "f81f34642ce9e005c99d8e6994ade0720a76b2be3d336800b1f01af8de40e836",
+      "inventory_matches": true,
+      "original_receipt_exact": true,
+      "transport_success": true,
+      "receipt": {
+        "retrieved_at_utc": "2026-08-29T04:40:13.137060Z",
+        "route": "ufc_official_weighin_article_https",
+        "requested_url": "https://www.ufc.com/news/weigh-results-ufc-290-volkanovski-vs-rodriguez",
+        "final_url": "https://www.ufc.com/news/weigh-results-ufc-290-volkanovski-vs-rodriguez",
+        "attempt": "1",
+        "status_code": "200",
+        "redirect_chain_json": "[]",
+        "response_bytes": "81293",
+        "response_sha256": "f81f34642ce9e005c99d8e6994ade0720a76b2be3d336800b1f01af8de40e836",
+        "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2023-07-08-ufc-290-volkanovski-vs-rodriguez-1.html",
+        "outcome": "ok",
+        "error": ""
+      },
+      "canonical_urls": [
+        "https://www.ufc.com/news/weigh-results-ufc-290-volkanovski-vs-rodriguez"
+      ],
+      "canonical_matches_receipt": true,
+      "article_date_metadata": [
+        {
+          "property": "article:published_time",
+          "content": "2023-07-07T12:00:08-0400"
+        },
+        {
+          "property": "article:modified_time",
+          "content": "2023-07-07T14:39:08-0400"
+        }
+      ],
+      "exact_route_anchors": [],
+      "selected_bout_matches": [
+        {
+          "event_date": "2023-07-08",
+          "event_name": "UFC 290: Volkanovski vs. Rodriguez",
+          "fighter_a": "Alexander Volkanovski",
+          "fighter_b": "Yair Rodriguez",
+          "fighter_a_id": "e1248941344b3288",
+          "fighter_b_id": "cbf5e6f231b55443"
+        }
+      ],
+      "unique_exact_selected_bout": true,
+      "both_fighter_names_in_article_body": true,
+      "selected_profile": [
+        {
+          "name": "Alexander Volkanovski",
+          "fighter_url": "http://ufcstats.com/fighter-details/e1248941344b3288",
+          "dob": "Sep 29, 1988"
+        }
+      ],
+      "selected_profile_unique": true,
+      "selected_roster_unique_owner": true,
+      "exact_alt_evidence": [
+        "Alex Volkanovski and Yair Rodriguez"
+      ],
+      "alias_decision": "ACCEPT_EXACT_RUNTIME_ALIAS_EVIDENCE_ONLY",
+      "article_pin_matches": true
+    }
+  ],
+  "integrity_errors": [],
+  "route_decisions": [
+    {
+      "name": "Ailin Perez",
+      "athlete_url": "https://www.ufc.com/athlete/ailin-perez",
+      "ufcstats_id": "06e4245d16fc5315",
+      "decision": "WITHHOLD_ROUTE_PENDING_ORIGINAL_CUSTODY_EVIDENCE",
+      "basis": "Historical name/bout/ID established; exact route link found only in ranking capture whose original acquisition/custody receipt is not established."
+    },
+    {
+      "name": "Norma Dumont",
+      "athlete_url": "https://www.ufc.com/athlete/norma-dumont",
+      "ufcstats_id": "d3f5d33d61cd00c9",
+      "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "basis": "Exact official route/name anchor with retained successful source receipt + unique selected profile and exact historical bout/opponent side IDs"
+    },
+    {
+      "name": "Movsar Evloev",
+      "athlete_url": "https://www.ufc.com/athlete/movsar-evloev",
+      "ufcstats_id": "76e2870ffafbe38f",
+      "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "basis": "Exact official route/name anchor with retained successful source receipt + unique selected profile and exact historical bout/opponent side IDs"
+    },
+    {
+      "name": "Alexander Volkanovski",
+      "athlete_url": "https://www.ufc.com/athlete/alexander-volkanovski",
+      "ufcstats_id": "e1248941344b3288",
+      "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "basis": "Exact official route/name anchor with retained successful source receipt + unique selected profile and exact historical bout/opponent side IDs"
+    }
+  ],
+  "alias_decision": {
+    "raw_alias": "Alex Volkanovski",
+    "canonical_selected_name": "Alexander Volkanovski",
+    "ufcstats_id": "e1248941344b3288",
+    "decision": "ACCEPT_EXACT_RUNTIME_ALIAS_EVIDENCE_ONLY",
+    "basis": "Literal image alt Alex Volkanovski and Yair Rodriguez in successfully captured original official UFC290 article; same article names Alexander Volkanovski versusYair Rodriguez, uniquely matched selected2023-07-08 bout/profile; canonical route independently established in UFC314 article.",
+    "excluded": "No generic Alex-to-Alexander rule, other spellings, suffixes, case policy changes, other IDs or training data modifications."
+  },
+  "ailin_gap": {
+    "saved_ranking_pin_matches": true,
+    "saved_ranking_exact_anchor": [
+      {
+        "href": "/web/20260317191850/https://www.ufc.com/athlete/ailin-perez",
+        "text": "Ailin Perez"
+      }
+    ],
+    "original_ranking_transport_receipt_found": false,
+    "local_search_scope": [
+      "C:/Temp/d5c2 JSON/CSV/MD/log records for exact archive timestamp/hash",
+      "C:/Temp/u7pi1/sources/weights/raw official weighin and sitemap article links",
+      "C:/Temp/u7pi1/sources/weights/source_request_log.csv and evidence_inventory.csv for exact athlete URL/ID"
+    ],
+    "other_official_ailin_article_links": "Retained UFC311 and sitemap articles link/news/under-the-radar-ailin-perez..., /news/ailin-perez-happy... and /news/ailin-perez-brash...; these are not athlete-route anchors.",
+    "precise_prerequisite": "One retained authoritative original raw official response tying displayed Ailin Perez to exacthttps://www.ufc.com/athlete/ailin-perez, with successful requested/final official URL, retrieval timestamp, status, redirect chain and response-byte SHA256 matched to the saved raw bytes; or locate that provenance for the already-pinned archived ranking capture. Then join only to the independently checked unique selected Ailin profile and Egger bout. No guessed certificate from legacy valid flag."
+  },
+  "implementation_constraints": [
+    "No app changes before approved check ends paused and root authorizes isolated implementation.",
+    "New runtime-only binding artifact may encode the three accepted routes and exact alias with pins/review decisions; Ailin must remain explicitly withheld until prerequisite is reviewed.",
+    "Keep immutable selected model/data/roster files and historical fixed-count registry unchanged.",
+    "Bind copied raw contexts after shared cache retrieval and before athlete URLs are dropped, across CLI/eager/lazy paths.",
+    "Both method and feature name-ID validation must consume same exact runtime alias; conflicting supplied IDs or duplicate route owners fail closed.",
+    "Actual saved-card replays and cache/orientation conflict tests remain implementation prerequisites; this evidence review is not successful hosted prediction delivery."
+  ],
+  "verdict": "PASS_THREE_ROUTE_BINDINGS_AND_EXACT_ALIAS_AILIN_ROUTE_PENDING"
+}

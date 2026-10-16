@@ -183,6 +183,10 @@ SCHEDULED_POLICY_HEALTH_LIMIT_KEYS = frozenset(
         "maximum_drawdown_multiplier",
         "maximum_clv_absolute_regression",
         "maximum_snapshot_age_days",
+        "entry_coverage_recent_window_days",
+        "minimum_entry_coverage_recent_rows",
+        "minimum_verified_entry_coverage",
+        "maximum_verified_entry_event_lag_days",
     }
 )
 SCHEDULED_REFIT_MANIFEST_KEYS = frozenset(

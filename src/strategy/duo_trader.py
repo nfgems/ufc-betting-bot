@@ -19,6 +19,7 @@ from typing import Callable, Optional
 import pandas as pd
 
 from src.betting_window import bet_window_status, parse_event_timestamp
+from src.data.rosterwatch_identity import pending_fighters_for_prediction, prediction_identities_confirmed
 from src.config import (
     BLEND_WEIGHT,
     CONVICTION_MAX_BET_FRACTION,
@@ -974,6 +975,8 @@ def _append_tracker_outcome(trader: str, bet: pd.Series | dict, order: dict | No
         ).strip()
 
     order_status = str(order.get("status", "") or "").strip() if isinstance(order, dict) else "skipped"
+    if trader == "M" and order_status == "placed" and not bool(order.get("dry_run")):
+        recover_model_tracker_issues(bet_dict)
     tracker_decisions.log_tracker_decision(
         {
             "type": "outcome",
@@ -998,6 +1001,68 @@ def _append_tracker_outcome(trader: str, bet: pd.Series | dict, order: dict | No
             "error": order.get("error") if isinstance(order, dict) else "skipped_by_executor",
         }
     )
+
+
+_MODEL_TRACKER_ACTIONABLE_REASONS = (
+    "identity_unconfirmed", "history_unavailable", "missing_model_prob", "data_quality_withheld",
+)
+
+
+def _model_tracker_incident_key(row, reason: str) -> str:
+    fighters = sorted(" ".join(str(row.get(f"fighter_{side}", "") or "").casefold().split()) for side in ("a", "b"))
+    event_time = row.get("commence_time") or row.get("event_date") or row.get("market_event_date")
+    parsed = parse_event_timestamp(event_time)
+    event_date = parsed.date().isoformat() if parsed is not None else str(event_time or "")[:10]
+    material = "|".join([event_date, *fighters])
+    return f"model-tracker:{hashlib.sha256(material.encode()).hexdigest()}:{reason}"
+
+
+def record_model_tracker_skip(row, reason: str, detail: str, *, fighters=None, audit_callback=None) -> dict:
+    """Record an actionable M skip even when the upstream gate withholds the row."""
+    if reason not in _MODEL_TRACKER_ACTIONABLE_REASONS:
+        raise ValueError("Unknown Model Tracker actionable skip")
+    clears = {
+        "identity_unconfirmed": "An evidence-backed identity link clears this issue.",
+        "history_unavailable": "Available verified fight history and a successful tracker bet clear this issue.",
+        "missing_model_prob": "Valid model probabilities and a successful tracker bet clear this issue.",
+        "data_quality_withheld": "Passing live data quality and a successful tracker bet clear this issue.",
+    }[reason]
+    names = ", ".join(fighters or [str(row.get("fighter_a", "")), str(row.get("fighter_b", ""))])
+    rationale = f"Model Tracker (M): {row.get('fighter_a', '')} vs {row.get('fighter_b', '')}; fighter(s) {names}: {detail} {clears}"
+    record = {
+        **_tracker_decision_record(trader="M", decision_id=_tracker_decision_id("M", row), row=row, event_title=str(row.get("event_title", "") or "")),
+        "status": reason,
+        "summary": "identity unconfirmed, skip" if reason == "identity_unconfirmed" else reason.replace("_", " "),
+        "rationale": rationale,
+        "what_clears": clears,
+    }
+    tracker_decisions.log_tracker_decision(record)
+    logger.error(rationale, extra={"alert_incident_key": _model_tracker_incident_key(row, reason)})
+    if callable(audit_callback):
+        audit_callback("M", row, record)
+    return record
+
+
+def recover_model_tracker_issues(row, *, reasons=_MODEL_TRACKER_ACTIONABLE_REASONS) -> None:
+    logger.info("Model Tracker (M) recovery for %s vs %s: %s", row.get("fighter_a", ""), row.get("fighter_b", ""), ", ".join(reasons),
+                extra={"alert_recovered_incident_keys": [_model_tracker_incident_key(row, reason) for reason in reasons]})
+
+
+def _model_tracker_history_unavailable(row) -> list[str]:
+    provenance = row.get("feature_provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    quality = row.get("data_quality")
+    quality = quality if isinstance(quality, dict) else {}
+    quality_fighters = quality.get("fighters")
+    quality_fighters = quality_fighters if isinstance(quality_fighters, dict) else {}
+    unavailable = []
+    for side in ("a", "b"):
+        fighter_quality = quality_fighters.get(side)
+        fighter_quality = fighter_quality if isinstance(fighter_quality, dict) else {}
+        status = provenance.get(f"fighter_{side}_fight_history_status") or fighter_quality.get("fight_history_status") or row.get(f"fighter_{side}_fight_history_status")
+        if str(status or "").casefold() == "unavailable":
+            unavailable.append(str(row.get(f"fighter_{side}", "")))
+    return unavailable
 
 
 def find_flat_model_bets(
@@ -1063,17 +1128,25 @@ def find_flat_model_bets(
             )
             continue
 
+        pending = pending_fighters_for_prediction(row)
+        if pending:
+            record_model_tracker_skip(row, "identity_unconfirmed", "identity unconfirmed, skip", fighters=pending, audit_callback=audit_callback)
+            continue
+        if prediction_identities_confirmed(row):
+            recover_model_tracker_issues(row, reasons=("identity_unconfirmed",))
+        unavailable = _model_tracker_history_unavailable(row)
+        if unavailable:
+            record_model_tracker_skip(row, "history_unavailable", "verified fight history unavailable, skip", fighters=unavailable, audit_callback=audit_callback)
+            continue
+        quality = row.get("data_quality")
+        quality = quality if isinstance(quality, dict) else {}
+        if str(row.get("trade_blocked", "")).casefold() == "true" or quality.get("blocked") is True:
+            record_model_tracker_skip(row, "data_quality_withheld", str(row.get("trade_block_reason") or "; ".join(quality.get("reasons") or []) or "withheld by live data-quality gate"), audit_callback=audit_callback)
+            continue
         model_a = _coerce_probability(row.get("prob_a"))
         model_b = _coerce_probability(row.get("prob_b"))
         if model_a is None or model_b is None:
-            _emit(
-                {
-                    **decision,
-                    "status": "missing_model_prob",
-                    "summary": "Missing model probabilities",
-                    "rationale": "Model Tracker skipped this fight because one or both model probabilities were unavailable.",
-                }
-            )
+            record_model_tracker_skip(row, "missing_model_prob", "one or both model probabilities unavailable, skip", audit_callback=audit_callback)
             continue
 
         bet_side = "a" if model_a >= model_b else "b"

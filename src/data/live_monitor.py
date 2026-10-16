@@ -74,6 +74,7 @@ UPSTREAM_FETCH_RETRY_DELAY_SECONDS = 1.0
 UPSTREAM_HTML_CACHE_TTL_SECONDS = 180.0
 UPSTREAM_FETCH_FAILURE_TTL_SECONDS = 60.0
 _UPSTREAM_HTML_CACHE: dict[str, tuple[float, str, str]] = {}
+_UPSTREAM_RESPONSE_METADATA_CACHE: dict[str, dict] = {}
 _UPSTREAM_FETCH_FAILURE_CACHE: dict[str, float] = {}
 _UPSTREAM_FETCH_ALERT_ACTIVE_URLS: set[str] = set()
 _UPSTREAM_FETCH_RECOVERY_PROBED_URLS: set[str] = set()
@@ -81,11 +82,12 @@ _UPSTREAM_CACHE_LOCK = threading.RLock()
 _UPSTREAM_FETCH_LOCK = threading.Lock()
 _UFCSTATS_SESSION: requests.Session | None = None
 _UFCSTATS_FETCH_LOCK = threading.Lock()
+_ACTIVE_ROSTER_ID_CACHE: tuple[int, dict[str, str]] | None = None
 UPCOMING_EVENT_CARD_REQUEST_DELAY_SECONDS = 1.5
 _UPCOMING_EVENT_CARDS_LOCK = threading.Lock()
 _UPCOMING_EVENT_CARDS_CACHE: tuple[
     float,
-    tuple[int, int],
+    tuple[object, ...],
     list[dict],
     bool,
     str,
@@ -107,7 +109,22 @@ _UFC_COM_EVENT_CTA_TEXT = {
 
 
 class _EventCardResult(list):
-    """List-compatible card result that preserves source-health for empty cards."""
+    """List-compatible card result that preserves card-source completeness."""
+
+    def __init__(
+        self,
+        rows=(),
+        *,
+        source_healthy: bool,
+        empty_card_proof: str = "",
+    ):
+        super().__init__(rows)
+        self.source_healthy = bool(source_healthy)
+        self.empty_card_proof = str(empty_card_proof or "").strip()
+
+
+class _UpcomingEventsResult(list):
+    """List-compatible schedule result that preserves primary-source health."""
 
     def __init__(self, rows=(), *, source_healthy: bool):
         super().__init__(rows)
@@ -116,6 +133,8 @@ class _EventCardResult(list):
 
 def _method_odds_snapshot_log_message(snapshot: dict) -> tuple[int, str]:
     status = str(snapshot.get("status", "") or "unknown").lower()
+    if status == "blocked":
+        return logging.ERROR, "Method-odds snapshot blocked: " + str(snapshot.get("error", "reviewed observation context unavailable"))
     try:
         record_count = int(snapshot.get("record_count", 0) or 0)
     except (TypeError, ValueError):
@@ -282,15 +301,48 @@ def _cached_upstream_html(url: str) -> Optional[str]:
     with _UPSTREAM_CACHE_LOCK:
         cached = _UPSTREAM_HTML_CACHE.get(url)
         if cached is None:
+            _UPSTREAM_RESPONSE_METADATA_CACHE.pop(url, None)
             return None
         cached_at, _retrieved_at_utc, cached_html = cached
         if time.monotonic() - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS:
             _UPSTREAM_HTML_CACHE.pop(url, None)
+            _UPSTREAM_RESPONSE_METADATA_CACHE.pop(url, None)
             return None
         return cached_html
 
 
-def _store_upstream_html(url: str, html: str) -> None:
+def _cached_upstream_response_metadata(url: str) -> dict:
+    with _UPSTREAM_CACHE_LOCK:
+        if _cached_upstream_html(url) is None:
+            return {}
+        return copy.deepcopy(_UPSTREAM_RESPONSE_METADATA_CACHE.get(url) or {})
+
+
+def _response_metadata(url: str, response: object) -> dict:
+    redirect_chain = []
+    for redirect in tuple(getattr(response, "history", ()) or ()):
+        headers = getattr(redirect, "headers", {}) or {}
+        redirect_chain.append(
+            {
+                "url": str(getattr(redirect, "url", "") or "").strip(),
+                "status_code": int(getattr(redirect, "status_code", 0) or 0),
+                "location": str(headers.get("Location", "") or "").strip(),
+            }
+        )
+    return {
+        "requested_url": str(url or "").strip(),
+        "effective_url": str(getattr(response, "url", "") or url or "").strip(),
+        "status_code": int(getattr(response, "status_code", 0) or 0),
+        "redirect_chain": redirect_chain,
+    }
+
+
+def _store_upstream_html(
+    url: str,
+    html: str,
+    *,
+    response_metadata: dict | None = None,
+) -> None:
     with _UPSTREAM_CACHE_LOCK:
         now = time.monotonic()
         # Prune on write: event-card URLs for completed cards are never read again,
@@ -303,14 +355,19 @@ def _store_upstream_html(url: str, html: str) -> None:
             if now - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS
         ]:
             _UPSTREAM_HTML_CACHE.pop(key, None)
+            _UPSTREAM_RESPONSE_METADATA_CACHE.pop(key, None)
         _UPSTREAM_HTML_CACHE[url] = (
             now,
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             html,
         )
+        if response_metadata:
+            _UPSTREAM_RESPONSE_METADATA_CACHE[url] = copy.deepcopy(response_metadata)
+        else:
+            _UPSTREAM_RESPONSE_METADATA_CACHE.pop(url, None)
 
 
-def _upcoming_source_responses(event_cards: list[dict]) -> list[dict[str, str]]:
+def _upcoming_source_responses(event_cards: list[dict]) -> list[dict]:
     """Return cached source bodies and their original retrieval timestamps."""
     source_urls = {UFC_COM_EVENTS_URL, UFCSTATS_UPCOMING_URL}
     for event_card in event_cards:
@@ -320,7 +377,7 @@ def _upcoming_source_responses(event_cards: list[dict]) -> list[dict[str, str]]:
             if event_url:
                 source_urls.add(event_url)
 
-    responses: list[dict[str, str]] = []
+    responses: list[dict] = []
     with _UPSTREAM_CACHE_LOCK:
         for url in sorted(source_urls):
             cached = _UPSTREAM_HTML_CACHE.get(url)
@@ -336,6 +393,9 @@ def _upcoming_source_responses(event_cards: list[dict]) -> list[dict[str, str]]:
                     "body": body,
                 }
             )
+            response_metadata = _UPSTREAM_RESPONSE_METADATA_CACHE.get(url)
+            if response_metadata:
+                responses[-1]["response_metadata"] = copy.deepcopy(response_metadata)
     return responses
 
 
@@ -396,6 +456,7 @@ def _fetch_upstream_html(
         ):
             with _UPSTREAM_CACHE_LOCK:
                 _UPSTREAM_HTML_CACHE.pop(url, None)
+                _UPSTREAM_RESPONSE_METADATA_CACHE.pop(url, None)
             cached_html = None
         if cached_html is not None:
             return cached_html
@@ -420,7 +481,11 @@ def _fetch_upstream_html(
                     raise RuntimeError(
                         f"{label} response missing expected markup: {required_selector}"
                     )
-                _store_upstream_html(url, response_html)
+                _store_upstream_html(
+                    url,
+                    response_html,
+                    response_metadata=_response_metadata(url, resp),
+                )
                 # Signal the first real success in every process so a durable alert
                 # from before a restart can close. Later healthy successes stay
                 # quiet unless this process observed a new failure.
@@ -521,6 +586,7 @@ def _fetch_ufcstats_html(
         if cached_validation_error:
             with _UPSTREAM_CACHE_LOCK:
                 _UPSTREAM_HTML_CACHE.pop(url, None)
+                _UPSTREAM_RESPONSE_METADATA_CACHE.pop(url, None)
             logger.info(
                 "Discarding invalid cached %s HTML: %s",
                 label,
@@ -738,7 +804,7 @@ def scrape_upcoming_events() -> list[dict]:
     """
     events = _scrape_ufc_com_upcoming_events()
     if events:
-        return events
+        return _UpcomingEventsResult(events, source_healthy=True)
 
     fallback_events = _scrape_ufcstats_upcoming_events()
     if events is None:
@@ -753,7 +819,10 @@ def scrape_upcoming_events() -> list[dict]:
             "UFC.com upcoming events fetched but parsed zero event rows; %s UFCStats fallback",
             "no events found from" if not fallback_events else "using",
         )
-    return fallback_events
+    # A fallback remains useful to the live display, but it cannot prove that a
+    # publication-gating schedule scan was complete after the primary source
+    # failed or unexpectedly parsed zero rows.
+    return _UpcomingEventsResult(fallback_events, source_healthy=False)
 
 
 def _extract_ufc_com_event_location(soup: BeautifulSoup) -> str:
@@ -794,6 +863,66 @@ def _extract_ufc_com_corner_athlete_url(fight, selector: str) -> str:
     if not parsed.path.rstrip("/").casefold().startswith("/athlete/"):
         return ""
     return candidate
+
+
+def _active_roster_ids_by_athlete_url() -> dict[str, str]:
+    """Resolve UFC.com athlete URLs through the reviewed active-roster map."""
+    global _ACTIVE_ROSTER_ID_CACHE
+    from src.data.name_utils import CURRENT_UFCSTATS_ID_OVERRIDES
+    from src.data.reviewed_roster_recovery import (
+        reviewed_mma_identity_binding,
+        reviewed_mma_identity_registry_record,
+    )
+    from src.data.ufc_active_roster import (
+        OFFICIAL_ACTIVE_ROSTER_PATH,
+        _official_url_identity_positively_trusted,
+    )
+
+    try:
+        mtime_ns = OFFICIAL_ACTIVE_ROSTER_PATH.stat().st_mtime_ns
+    except OSError:
+        return {}
+    if _ACTIVE_ROSTER_ID_CACHE is not None and _ACTIVE_ROSTER_ID_CACHE[0] == mtime_ns:
+        return _ACTIVE_ROSTER_ID_CACHE[1]
+
+    try:
+        roster = pd.read_csv(OFFICIAL_ACTIVE_ROSTER_PATH)
+    except (OSError, ValueError, pd.errors.ParserError):
+        return {}
+    required_columns = {"official_name", "official_athlete_url", "ufcstats_url"}
+    if not required_columns.issubset(roster.columns):
+        return {}
+
+    resolved: dict[str, str] = {}
+    for row in roster.to_dict("records"):
+        if not _official_url_identity_positively_trusted(row):
+            continue
+        athlete_path = (
+            urlparse(str(row.get("official_athlete_url") or ""))
+            .path.rstrip("/")
+            .casefold()
+        )
+        if not athlete_path:
+            continue
+        recovery_binding = reviewed_mma_identity_binding(row)
+        if (
+            recovery_binding is None
+            and reviewed_mma_identity_registry_record(row) is not None
+        ):
+            continue
+        reviewed_id = (
+            recovery_binding["stable_ufcstats_id"]
+            if recovery_binding is not None
+            else CURRENT_UFCSTATS_ID_OVERRIDES.get(
+                normalize_person_name(row.get("official_name"))
+            )
+        )
+        fighter_id = reviewed_id or normalize_ufcstats_id(row.get("ufcstats_url"))
+        if fighter_id:
+            resolved[athlete_path] = fighter_id
+
+    _ACTIVE_ROSTER_ID_CACHE = (mtime_ns, resolved)
+    return resolved
 
 
 def _extract_ufc_com_weight_class(fight) -> str:
@@ -921,7 +1050,9 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
     soup = BeautifulSoup(html, "lxml")
     event_location = _extract_ufc_com_event_location(soup)
     fights = []
+    incomplete_fight_blocks = 0
     fight_blocks = soup.select(".c-listing-fight")
+    roster_ids = _active_roster_ids_by_athlete_url()
 
     for fight in fight_blocks:
         red_selector = ".c-listing-fight__corner-name--red"
@@ -929,6 +1060,7 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
         fighter_a = _extract_ufc_com_corner_name(fight, red_selector)
         fighter_b = _extract_ufc_com_corner_name(fight, blue_selector)
         if not fighter_a or not fighter_b:
+            incomplete_fight_blocks += 1
             continue
         fighter_a_athlete_url = _extract_ufc_com_corner_athlete_url(
             fight, red_selector
@@ -958,6 +1090,18 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
             card_row["fighter_a_athlete_url"] = fighter_a_athlete_url
         if fighter_b_athlete_url:
             card_row["fighter_b_athlete_url"] = fighter_b_athlete_url
+        if fighter_a_athlete_url:
+            fighter_a_id = roster_ids.get(
+                urlparse(fighter_a_athlete_url).path.rstrip("/").casefold()
+            )
+            if fighter_a_id:
+                card_row["fighter_a_id"] = fighter_a_id
+        if fighter_b_athlete_url:
+            fighter_b_id = roster_ids.get(
+                urlparse(fighter_b_athlete_url).path.rstrip("/").casefold()
+            )
+            if fighter_b_id:
+                card_row["fighter_b_id"] = fighter_b_id
         fights.append(card_row)
 
     if not fights and not fight_blocks and _ufc_com_event_page_is_valid_empty(
@@ -970,14 +1114,24 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
     if not fights:
         with _UPSTREAM_CACHE_LOCK:
             _UPSTREAM_HTML_CACHE.pop(event_url, None)
+            _UPSTREAM_RESPONSE_METADATA_CACHE.pop(event_url, None)
         _record_upstream_fetch_failure(event_url)
         logger.warning(
             "UFC.com event card fetched but parsed zero complete fighter rows: %s",
             event_url,
         )
         return _EventCardResult(source_healthy=False)
+    source_healthy = incomplete_fight_blocks == 0
+    if not source_healthy:
+        logger.warning(
+            "UFC.com event card parsed %d complete fight rows but skipped %d "
+            "incomplete row(s): %s",
+            len(fights),
+            incomplete_fight_blocks,
+            event_url,
+        )
     logger.info(f"Found {len(fights)} fights on UFC.com card")
-    return _EventCardResult(fights, source_healthy=True)
+    return _EventCardResult(fights, source_healthy=source_healthy)
 
 
 def scrape_event_card(event_url: str) -> list[dict]:
@@ -1003,20 +1157,24 @@ def scrape_event_card(event_url: str) -> list[dict]:
             required_selector="tr.b-fight-details__table-row",
         )
     if html is None:
-        return []
+        return _EventCardResult(source_healthy=False)
 
     soup = BeautifulSoup(html, "lxml")
     fights = []
+    incomplete_fight_rows = 0
     event_location = _extract_event_location(soup)
 
     for row in soup.select("tr.b-fight-details__table-row"):
         cols = row.select("td")
         if len(cols) < 2:
+            if cols:
+                incomplete_fight_rows += 1
             continue
 
         # Fighter names are in the first column
         fighters = row.select("a.b-link")
         if len(fighters) < 2:
+            incomplete_fight_rows += 1
             continue
 
         fighter_a = fighters[0].text.strip()
@@ -1056,8 +1214,15 @@ def scrape_event_card(event_url: str) -> list[dict]:
             card_row["fighter_b_id"] = fighter_b_id
         fights.append(card_row)
 
+    source_healthy = bool(fights) and incomplete_fight_rows == 0
+    if incomplete_fight_rows:
+        logger.warning(
+            "UFCStats event card skipped %d incomplete fight row(s): %s",
+            incomplete_fight_rows,
+            event_url,
+        )
     logger.info(f"Found {len(fights)} fights on card")
-    return fights
+    return _EventCardResult(fights, source_healthy=source_healthy)
 
 
 def _extract_event_location(soup: BeautifulSoup) -> str:
@@ -1202,7 +1367,13 @@ def clear_upcoming_event_cards_cache() -> None:
         _UPCOMING_EVENT_CARDS_CACHE = None
 
 
-def collect_upcoming_event_cards(*, force_refresh: bool = False) -> list[dict]:
+def collect_upcoming_event_cards(
+    *,
+    force_refresh: bool = False,
+    not_before: str | None = None,
+    not_after: str | None = None,
+    max_events: int | None = None,
+) -> list[dict]:
     """Fetch all upcoming cards once and share them across monitor/betting loops.
 
     The lock covers the producer call, providing single-flight behavior when the
@@ -1210,9 +1381,17 @@ def collect_upcoming_event_cards(*, force_refresh: bool = False) -> list[dict]:
     10-minute betting cadence, preserving that loop's card freshness. Failed or
     structurally uncertain scans are shared only for the short failure cooldown;
     a positively validated announced card with zero bouts is a complete scan.
+    One reviewed unannounced shell additionally requires both its exact official
+    schedule marker and its exact request/redirect/no-result response proof.
     """
     global _UPCOMING_EVENT_CARDS_CACHE
-    producer_identity = (id(scrape_upcoming_events), id(scrape_event_card))
+    producer_identity = (
+        id(scrape_upcoming_events),
+        id(scrape_event_card),
+        str(not_before or ""),
+        str(not_after or ""),
+        max_events,
+    )
     now = time.monotonic()
     with _UPCOMING_EVENT_CARDS_LOCK:
         if not force_refresh and _UPCOMING_EVENT_CARDS_CACHE is not None:
@@ -1234,9 +1413,30 @@ def collect_upcoming_event_cards(*, force_refresh: bool = False) -> list[dict]:
         scan_complete = True
         card_request_count = 0
         events = scrape_upcoming_events()
-        if not events:
+        if not events or getattr(events, "source_healthy", True) is not True:
             scan_complete = False
+        selected_events: list[dict] = []
         for event in events:
+            if not_before or not_after:
+                parsed_event_date = pd.to_datetime(
+                    event.get("date"), errors="coerce"
+                )
+                if pd.isna(parsed_event_date):
+                    scan_complete = False
+                    continue
+                event_date = parsed_event_date.date().isoformat()
+                if not_before and event_date <= str(not_before):
+                    continue
+                if not_after and event_date > str(not_after):
+                    continue
+            selected_events.append(event)
+        if max_events is not None and len(selected_events) > max_events:
+            # Never exceed the request ceiling.  The incomplete marker prevents
+            # a truncated safety-net scan from becoming publication-eligible.
+            scan_complete = False
+            selected_events = selected_events[:max_events]
+
+        for event in selected_events:
             event_url = event.get("url", "")
             if not event_url:
                 scan_complete = False
@@ -1247,6 +1447,8 @@ def collect_upcoming_event_cards(*, force_refresh: bool = False) -> list[dict]:
             card = scrape_event_card(event_url)
             if card:
                 collected.append({"event": dict(event), "fights": list(card)})
+                if getattr(card, "source_healthy", True) is not True:
+                    scan_complete = False
             elif not bool(getattr(card, "source_healthy", False)):
                 scan_complete = False
 
@@ -1268,9 +1470,20 @@ def collect_upcoming_event_cards(*, force_refresh: bool = False) -> list[dict]:
         return copy.deepcopy(collected)
 
 
-def collect_upcoming_event_cards_snapshot(*, force_refresh: bool = False) -> dict:
+def collect_upcoming_event_cards_snapshot(
+    *,
+    force_refresh: bool = False,
+    not_before: str | None = None,
+    not_after: str | None = None,
+    max_events: int | None = None,
+) -> dict:
     """Return card rows with explicit completeness and raw-source evidence."""
-    cards = collect_upcoming_event_cards(force_refresh=force_refresh)
+    cards = collect_upcoming_event_cards(
+        force_refresh=force_refresh,
+        not_before=not_before,
+        not_after=not_after,
+        max_events=max_events,
+    )
     with _UPCOMING_EVENT_CARDS_LOCK:
         cached = _UPCOMING_EVENT_CARDS_CACHE
         if cached is None:
@@ -2379,6 +2592,32 @@ def _update_short_notice_event_state(
 # Full monitoring pass
 # ---------------------------------------------------------------------------
 
+def _bind_monitoring_fight_contexts(contexts: list[dict]) -> list[dict]:
+    """Apply the validated hosted selection to copies of raw monitoring cards."""
+    from src.model.production_bundle import (
+        is_hosted_runtime,
+        load_production_bundle,
+        validate_production_bundle,
+    )
+
+    raw = copy.deepcopy(contexts)
+    if not is_hosted_runtime():
+        return raw
+
+    bundle = load_production_bundle()
+    summary = validate_production_bundle(bundle)
+    from src.data.runtime_selected_inputs import RuntimeSelectedInputs
+
+    # Full production validation above checks the model bytes and embedded
+    # training specs. Identity binding needs only their validated path roles.
+    selected = RuntimeSelectedInputs.from_summary(
+        summary,
+        model_result={"artifact_path": str(bundle.model_path.resolve())},
+        no_odds_result={"artifact_path": str(bundle.no_odds_model_path.resolve())},
+    )
+    return raw if selected is None else selected.bind_live_contexts(raw)
+
+
 def run_monitoring_pass() -> dict:
     """
     Run a complete monitoring pass:
@@ -2401,6 +2640,7 @@ def run_monitoring_pass() -> dict:
         "card_changes": [],
         "rankings_snapshot": None,
         "method_odds_snapshot": None,
+        "stage_errors": [],
     }
 
     event_cards = collect_upcoming_event_cards()
@@ -2463,32 +2703,49 @@ def run_monitoring_pass() -> dict:
                 {
                     "event_title": event.get("title", ""),
                     "event_date": event.get("date", ""),
+                    "event_url": event.get("url", ""),
                     "fighter_a": fight.get("fighter_a", ""),
                     "fighter_b": fight.get("fighter_b", ""),
+                    "fighter_a_id": fight.get("fighter_a_id", ""),
+                    "fighter_b_id": fight.get("fighter_b_id", ""),
+                    "fighter_a_athlete_url": fight.get("fighter_a_athlete_url", ""),
+                    "fighter_b_athlete_url": fight.get("fighter_b_athlete_url", ""),
                     "weight_class": fight.get("weight_class", ""),
                     "event_id": fight.get("event_id", "") or event.get("event_id", ""),
                     "commence_time": fight.get("commence_time", "") or event.get("commence_time", ""),
                 }
             )
-    tracked_fights = _attach_event_identity(tracked_fights)
-
     try:
-        from src.data.rankings_scraper import collect_rankings_snapshot
+        from src.data.observation_collection import collect_reviewed_rankings_snapshot
 
-        rankings_snapshot = collect_rankings_snapshot()
+        rankings_snapshot = collect_reviewed_rankings_snapshot()
         signals["rankings_snapshot"] = {
             "status": rankings_snapshot.get("status"),
             "source": rankings_snapshot.get("source"),
             "snapshot_time": rankings_snapshot.get("snapshot_time"),
             "snapshot_path": rankings_snapshot.get("snapshot_path"),
         }
+        from src.data.observation_collection import observation_snapshot_error
+        failure = observation_snapshot_error("rankings", rankings_snapshot)
+        if failure is not None:
+            signals["rankings_snapshot"]["stage_error"] = failure
+            signals["stage_errors"].append(failure)
     except Exception as e:
         logger.error(f"Rankings snapshot collection failed: {e}")
+        from src.data.observation_collection import observation_stage_error
+        failure = observation_stage_error("rankings", e)
+        signals["rankings_snapshot"] = failure
+        signals["stage_errors"].append(failure)
 
     try:
-        from src.data.method_odds import collect_method_odds_snapshot
+        from src.data.observation_collection import collect_reviewed_method_snapshot
 
-        method_snapshot = collect_method_odds_snapshot(tracked_fights=tracked_fights)
+        tracked_fights = _bind_monitoring_fight_contexts(tracked_fights)
+        tracked_fights = _attach_event_identity(tracked_fights)
+        # Preserve the exact complete collector inventory, including refusals,
+        # source routes and runtime timing, separately from the raw card cache.
+        signals["method_tracked_fights"] = copy.deepcopy(tracked_fights)
+        method_snapshot = collect_reviewed_method_snapshot(tracked_fights=tracked_fights)
         method_snapshot_summary = {
             "status": method_snapshot.get("status"),
             "record_count": method_snapshot.get("record_count", 0),
@@ -2509,6 +2766,7 @@ def run_monitoring_pass() -> dict:
             "expected_event_count",
             "expected_events",
             "missing_expected_fights",
+            "bout_outcomes",
         ):
             if key in method_snapshot:
                 method_snapshot_summary[key] = method_snapshot.get(key)
@@ -2516,12 +2774,24 @@ def run_monitoring_pass() -> dict:
         if isinstance(latest_usable, dict) and latest_usable:
             method_snapshot_summary["latest_usable_snapshot"] = latest_usable
         signals["method_odds_snapshot"] = method_snapshot_summary
+        from src.data.observation_collection import observation_snapshot_error
+        failure = observation_snapshot_error("method_odds", method_snapshot)
+        if failure is not None:
+            # Normalize only this derived view. Retained collector checkpoints
+            # keep their original bytes/status, exposed here as snapshot_status.
+            signals["method_odds_snapshot"].update(failure)
+            signals["method_odds_snapshot"]["stage_error"] = failure
+            signals["stage_errors"].append(failure)
     except Exception as e:
         logger.error(
             "Method-odds snapshot collection failed: %s",
             e,
             extra={"alert_incident_key": _METHOD_ODDS_ALERT_INCIDENT_KEY},
         )
+        from src.data.observation_collection import observation_stage_error
+        failure = observation_stage_error("method_odds", e)
+        signals["method_odds_snapshot"] = failure
+        signals["stage_errors"].append(failure)
 
     # Summary
     logger.info(f"\n{'='*60}")
@@ -2566,7 +2836,8 @@ def run_monitoring_pass() -> dict:
                 extra=recovery_context,
             )
 
-    # Save full signals
+    signals["status"] = "incomplete" if signals["stage_errors"] else "complete"
+    # Save full signals, including collection refusals; a log line alone is insufficient.
     signals_path = LOGS_DIR / "latest_signals.json"
     serializable = {
         k: v if not isinstance(v, pd.DataFrame) else v.to_dict()

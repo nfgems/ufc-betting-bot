@@ -1,0 +1,29 @@
+{
+  "intent_sha256": "c6511695a9efcfef4a66253af9dbc4fce8ce4cdafd1e24e9f93d46f16d404208",
+  "requested_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+  "started_utc": "2026-09-20T23:13:54.277206+00:00",
+  "transport_attempts": 1,
+  "redirect_chain": [],
+  "status_code": 200,
+  "final_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+  "response_headers": {
+    "Server": "nginx/1.10.1",
+    "Date": "Sun, 20 Sep 2026 23:11:12 GMT",
+    "Content-Type": "text/html; charset=utf-8",
+    "Transfer-Encoding": "chunked",
+    "Connection": "keep-alive",
+    "Vary": "Accept-Encoding",
+    "Status": "200 OK",
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+    "X-XSS-Protection": "1; mode=block",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Content-Encoding": "gzip"
+  },
+  "outcome": "complete_response",
+  "response_path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan05-000\\response.html",
+  "response_bytes": 2998,
+  "response_sha256": "ccd26b41e40476858a8974364794db230cbd6b26444a107127f9e5224f16a398",
+  "completed_utc": "2026-09-20T23:13:54.462036+00:00"
+}

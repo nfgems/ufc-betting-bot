@@ -1,0 +1,554 @@
+{
+  "schema_version": 1,
+  "canonical_queue_sha256": "0d874b7931fe72ecca355a51e2c6454729eae418d25de6c57b09f7ae4d75a6a2",
+  "decision_report_sha256": "0c33a16d9076a143f1bbcfd117fd7cd6f225c82e211269b6d61e72ed520fc2d3",
+  "permanent_profile_locks": [
+    {
+      "canonical_name": "Ethyn Ewing",
+      "stable_ufcstats_id": "d776b5814f2400b4",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/d776b5814f2400b4",
+      "field": "dob",
+      "normalized_value": "1998-02-16",
+      "artifact_value": "Feb 16, 1998",
+      "rejected_value": "1996-02-19",
+      "decision_status": "owner_locked",
+      "automatic_replacement_allowed": false,
+      "evidence_sha256": "e6c47ad40851371bddbc3326737f478111e07d6fd27f56415a61157cb211322d"
+    }
+  ],
+  "profile_field_holds": [
+    {
+      "canonical_name": "Wendri Patilima",
+      "reviewed_names": ["Wendri Patilima", "Windri Patilima"],
+      "stable_ufcstats_id": "66d42e9503fa108e",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/66d42e9503fa108e",
+      "field": "height",
+      "conflicting_normalized_values": ["167.64 cm", "175.26 cm"],
+      "queue_index": 115,
+      "decision_status": "conflicting_field_hold",
+      "automatic_release_allowed": false,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "reason": "Independently bound sources conflict: UFCStats and Sherdog report 167.64 cm while ESPN reports 175.26 cm; keep height unavailable until separately re-reviewed.",
+      "evidence_urls": [
+        "http://ufcstats.com/fighter-details/66d42e9503fa108e",
+        "https://www.espn.com/mma/fighter/_/id/5137017/windri-patilima",
+        "https://www.sherdog.com/fighter/Windri-Patilima-323519"
+      ],
+      "evidence_sha256": "0c33a16d9076a143f1bbcfd117fd7cd6f225c82e211269b6d61e72ed520fc2d3"
+    }
+  ],
+  "unbound_simultaneous_route_quarantines": [
+    {
+      "official_name": "Casey Kenney",
+      "alternate_official_athlete_url": "https://www.ufc.com/athlete/casey-kenney-0",
+      "alternate_official_source_entity_id": "athlete:casey-kenney-0",
+      "alternate_observed_profile": {
+        "profile_name": "Casey Kenney",
+        "canonical_athlete_url": "https://www.ufc.com/athlete/casey-kenney-0",
+        "profile_division": "Bantamweight Division",
+        "profile_record": "",
+        "profile_status": "Not Fighting",
+        "profile_source_tag": "",
+        "birthplace": "",
+        "age": "",
+        "height": "",
+        "reach": "",
+        "weight": "",
+        "octagon_debut": "Aug. 25, 2026",
+        "alternate_slug_names": "casey kenney 0"
+      },
+      "companion_official_athlete_url": "https://www.ufc.com/athlete/casey-kenney",
+      "companion_official_source_entity_id": "athlete:casey-kenney",
+      "companion_stable_ufcstats_id": "e7bba7ce4d6c7b07",
+      "companion_ufcstats_url": "http://ufcstats.com/fighter-details/e7bba7ce4d6c7b07",
+      "automatic_alias_allowed": false,
+      "automatic_binding_allowed": false,
+      "automatic_redirect_allowed": false,
+      "destructive_exclusion_allowed": false,
+      "reason": "The simultaneously listed -0 route is an independently canonical, unbound Not Fighting profile that reused the established Casey Kenney UFCStats candidate through name-only discovery. Quarantine only that exact observation; never merge, alias, bind, redirect, or destructively exclude either identity.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/casey-kenney",
+        "https://www.ufc.com/athlete/casey-kenney-0",
+        "http://ufcstats.com/fighter-details/e7bba7ce4d6c7b07"
+      ]
+    }
+  ],
+  "non_mma_identity_exclusions": [
+    {
+      "official_name": "Cory Corbin",
+      "official_athlete_url": "https://www.ufc.com/athlete/cory-corbin",
+      "official_source_entity_id": "athlete:cory-corbin",
+      "reason": "power_slap_non_mma",
+      "queue_indices": [5, 6, 7],
+      "evidence_entity_ids": ["tapology:427259"],
+      "evidence_urls": [
+        "https://www.tapology.com/fightcenter/fighters/427259-cory-corbin-hamma"
+      ]
+    },
+    {
+      "official_name": "Dallas Marron",
+      "official_athlete_url": "https://www.ufc.com/athlete/dallas-marron",
+      "official_source_entity_id": "athlete:dallas-marron",
+      "reason": "power_slap_non_mma",
+      "queue_indices": [13, 14, 15, 16],
+      "evidence_entity_ids": ["tapology:473182", "tapology-bout:945905"],
+      "evidence_urls": [
+        "https://www.tapology.com/fightcenter/fighters/473182-dallas-marron",
+        "https://www.tapology.com/fightcenter/bouts/945905-power-slap-6-robert-the-real-deal-trujillo-vs-dallas-marron"
+      ]
+    },
+    {
+      "official_name": "Frank Holland",
+      "official_athlete_url": "https://www.ufc.com/athlete/frank-holland",
+      "official_source_entity_id": "athlete:frank-holland",
+      "reason": "power_slap_non_mma",
+      "queue_indices": [40],
+      "evidence_entity_ids": [
+        "ufc-article:power-slap-road-to-the-title-episode-2-recap",
+        "ufc-article:power-slap-1-rewind-rumble-wolverine-destroyer-hintz-rivero"
+      ],
+      "evidence_urls": [
+        "https://www.ufc.com/news/power-slap-road-to-the-title-episode-2-recap",
+        "https://www.ufc.com/news/power-slap-1-rewind-rumble-wolverine-destroyer-hintz-rivero"
+      ]
+    }
+  ],
+  "mma_identity_bindings": [
+    {
+      "official_name": "Abdul Azeem Badakhshi",
+      "reviewed_official_names": ["Abdul Azeem Badakhshi"],
+      "official_athlete_url": "https://www.ufc.com/athlete/abdul-azeem-badakhshi",
+      "official_source_entity_id": "athlete:abdul-azeem-badakhshi",
+      "ufcstats_name": "Abdul Azeem Badakhshi",
+      "stable_ufcstats_id": "968764372c49eab6",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/968764372c49eab6",
+      "queue_indices": [2],
+      "identity_basis": "Exact UFCStats and official names plus stable ESPN, Sherdog, Tapology, and Wikipedia entities and the official Yi Zha Road to UFC pairing bind the identity one-to-one.",
+      "evidence_urls": [
+        "https://www.ufc.com/news/road-ufc-season-2-participants-announced-ufc-performance-institute-shanghai",
+        "https://www.sherdog.com/fighter/Abdul-Azim-Badakhshi-136805",
+        "http://ufcstats.com/fighter-details/968764372c49eab6"
+      ]
+    },
+    {
+      "official_name": "Anderson Berinja",
+      "reviewed_official_names": ["Anderson Berinja"],
+      "official_athlete_url": "https://www.ufc.com/athlete/anderson-berinja",
+      "official_source_entity_id": "athlete:anderson-berinja",
+      "ufcstats_name": "Anderson Dos Santos",
+      "stable_ufcstats_id": "bbc9ab95fa766493",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/bbc9ab95fa766493",
+      "queue_indices": [3],
+      "identity_basis": "Reviewed Berinja alias plus exact Nad Narimani, Andre Ewell, Martin Day, and Miles Johns UFC bout/date/opponent anchors.",
+      "evidence_urls": [
+        "https://www.tapology.com/fightcenter/fighters/50759-anderson-berlingeri-berinja",
+        "http://ufcstats.com/fight-details/0c27552ea7bc8c8a",
+        "http://ufcstats.com/fight-details/8f1b727757a60c07"
+      ]
+    },
+    {
+      "official_name": "Cristian Perez Gonzalez",
+      "reviewed_official_names": ["Cristian Perez Gonzalez"],
+      "official_athlete_url": "https://www.ufc.com/athlete/cristian-perez-gonzalez",
+      "official_source_entity_id": "athlete:cristian-perez-gonzalez",
+      "ufcstats_name": "Cristian Perez",
+      "stable_ufcstats_id": "d84033157714ee94",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/d84033157714ee94",
+      "queue_indices": [8],
+      "identity_basis": "Exact Manoel Sousa and Logan Paxton DWCS bout/date/opponent anchors bind the reviewed shortened UFCStats name.",
+      "evidence_urls": [
+        "https://www.sherdog.com/fighter/Cristian-Perez-Gonzalez-244701",
+        "http://ufcstats.com/fight-details/d17902f646c4aad6",
+        "http://ufcstats.com/fight-details/e41a1a60137aca6a"
+      ]
+    },
+    {
+      "official_name": "Davi Costa",
+      "reviewed_official_names": ["Davi Costa"],
+      "official_athlete_url": "https://www.ufc.com/athlete/davi-costa",
+      "official_source_entity_id": "athlete:davi-costa",
+      "ufcstats_name": "Davi Bittencourt",
+      "stable_ufcstats_id": "dd6ec6f941c3a414",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/dd6ec6f941c3a414",
+      "queue_indices": [17],
+      "identity_basis": "Sherdog records Davi Costa as an alias and the exact Lucas Rocha DWCS bout/date/opponent anchor binds the identities.",
+      "evidence_urls": [
+        "https://www.sherdog.com/fighter/Davi-Bittencourt-263121",
+        "https://www.tapology.com/fightcenter/fighters/240544-davi-costa-black",
+        "http://ufcstats.com/fight-details/1e89003eac3c5dd5"
+      ]
+    },
+    {
+      "official_name": "Donavan Beard",
+      "reviewed_official_names": ["Donavan Beard"],
+      "official_athlete_url": "https://www.ufc.com/athlete/donavan-beard",
+      "official_source_entity_id": "athlete:donavan-beard",
+      "ufcstats_name": "Donovan Beard",
+      "stable_ufcstats_id": "3a6ac598320ca7f2",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/3a6ac598320ca7f2",
+      "queue_indices": [20, 21, 22],
+      "identity_basis": "Reviewed Donavan/Donovan spelling plus the exact Bo Nickal DWCS bout on 2022-09-27.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/5088537/donovan-beard",
+        "https://www.tapology.com/fightcenter/fighters/203983-donovan-beard",
+        "http://ufcstats.com/fight-details/0f06613c6e5458cc"
+      ]
+    },
+    {
+      "official_name": "Eduardo Matias Torres",
+      "reviewed_official_names": ["Eduardo Matias Torres"],
+      "official_athlete_url": "https://www.ufc.com/athlete/eduardo-matias-torres",
+      "official_source_entity_id": "athlete:eduardo-matias-torres",
+      "ufcstats_name": "Eduardo Torres Caut",
+      "stable_ufcstats_id": "c8d46028907bcece",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/c8d46028907bcece",
+      "queue_indices": [23],
+      "identity_basis": "Stable full-name entities and the exact Victor Hugo DWCS bout on 2023-10-03 bind the shortened UFCStats name.",
+      "evidence_urls": [
+        "https://www.sherdog.com/fighter/Eduardo-Torres-190429",
+        "https://www.tapology.com/fightcenter/fighters/109525-eduardo-matias-torres",
+        "http://ufcstats.com/fight-details/e6885fea4ad5c083"
+      ]
+    },
+    {
+      "official_name": "Freddy Emiliano Linares",
+      "reviewed_official_names": ["Freddy Emiliano Linares"],
+      "official_athlete_url": "https://www.ufc.com/athlete/freddy-emiliano-linares",
+      "official_source_entity_id": "athlete:freddy-emiliano-linares",
+      "ufcstats_name": "Emiliano Linares",
+      "stable_ufcstats_id": "a4ef92274a45143d",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/a4ef92274a45143d",
+      "queue_indices": [41],
+      "identity_basis": "Official full-name evidence and stable ESPN, Sherdog, and Tapology entities share the exact Jack Jenkins DWCS bout on 2022-09-27.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/5088846/emiliano-linares",
+        "https://www.sherdog.com/fighter/Emiliano-Linares-298713",
+        "http://ufcstats.com/fight-details/0d746297824efc9b"
+      ]
+    },
+    {
+      "official_name": "Lukasz Sudolski",
+      "reviewed_official_names": ["Lukasz Sudolski"],
+      "official_athlete_url": "https://www.ufc.com/athlete/lukasz-sudolski",
+      "official_source_entity_id": "athlete:lukasz-sudolski",
+      "ufcstats_name": "Lucasz Sudolski",
+      "stable_ufcstats_id": "b160e4f251283d70",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/b160e4f251283d70",
+      "queue_indices": [70],
+      "identity_basis": "Reviewed Lukasz/Lucasz spelling plus the exact Ihor Potieria DWCS bout on 2021-09-28.",
+      "evidence_urls": [
+        "https://www.sherdog.com/fighter/Lukasz-Sudolski-124729",
+        "http://ufcstats.com/fighter-details/b160e4f251283d70"
+      ]
+    },
+    {
+      "official_name": "Maiara Amajanas Dos Santos",
+      "reviewed_official_names": ["Maiara Amajanas Dos Santos"],
+      "official_athlete_url": "https://www.ufc.com/athlete/maiara-amajanas-dos-santos",
+      "official_source_entity_id": "athlete:maiara-amajanas-dos-santos",
+      "ufcstats_name": "Maiara Amanajas dos Santos",
+      "stable_ufcstats_id": "247fbbfafea60bb1",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/247fbbfafea60bb1",
+      "queue_indices": [71, 72, 74],
+      "identity_basis": "Reviewed Amajanas/Amanajas spelling plus the exact Sarah Frota DWCS Brazil bout on 2018-08-10.",
+      "evidence_urls": [
+        "https://www.sherdog.com/fighter/Maiara-Amanajas-dos-Santos-77091",
+        "http://ufcstats.com/fighter-details/247fbbfafea60bb1"
+      ]
+    },
+    {
+      "official_name": "Sang Hoon Yoo",
+      "reviewed_official_names": ["Sang Hoon Yoo"],
+      "official_athlete_url": "https://www.ufc.com/athlete/sang-hoon-yoo",
+      "official_source_entity_id": "athlete:sang-hoon-yoo",
+      "ufcstats_name": "SangHoon Yoo",
+      "stable_ufcstats_id": "00b490982afd1b17",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/00b490982afd1b17",
+      "queue_indices": [97],
+      "identity_basis": "Reviewed spacing alias plus the exact Chris Hofmann Road to UFC bout on 2023-05-28.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/4573209/sanghoon-yoo",
+        "https://www.sherdog.com/fighter/Sang-Hoon-Yoo-246531",
+        "http://ufcstats.com/fight-details/1d74f34a01169c96"
+      ]
+    },
+    {
+      "official_name": "Sang Won Kim",
+      "reviewed_official_names": ["Sang Won Kim"],
+      "official_athlete_url": "https://www.ufc.com/athlete/sang-won-kim",
+      "official_source_entity_id": "athlete:sang-won-kim",
+      "ufcstats_name": "SangWon Kim",
+      "stable_ufcstats_id": "e9712cad24948ce1",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/e9712cad24948ce1",
+      "queue_indices": [98],
+      "identity_basis": "Reviewed spacing alias plus exact Road to UFC bouts against Yizha and Keisuke Sasu in 2023.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/5073692/sangwon-kim",
+        "https://www.sherdog.com/fighter/Sang-Won-Kim-258415",
+        "http://ufcstats.com/fight-details/7d23915c459473bc"
+      ]
+    },
+    {
+      "official_name": "Steve Regman",
+      "reviewed_official_names": ["Steve Regman"],
+      "official_athlete_url": "https://www.ufc.com/athlete/steve-regman",
+      "official_source_entity_id": "athlete:steve-regman",
+      "ufcstats_name": "Stephen Regman",
+      "stable_ufcstats_id": "24d98df7556ac8af",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/24d98df7556ac8af",
+      "queue_indices": [106],
+      "identity_basis": "Reviewed Steve/Stephen alias plus the exact Antonio Arroyo DWCS bout in July 2019.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/3945573/stephen-regman",
+        "https://www.sherdog.com/fighter/Stephen-Regman-66763",
+        "http://ufcstats.com/fight-details/83128aeb6c6ded35"
+      ]
+    },
+    {
+      "official_name": "Wendri Patilima",
+      "reviewed_official_names": ["Wendri Patilima"],
+      "official_athlete_url": "https://www.ufc.com/athlete/wendri-patilima",
+      "official_source_entity_id": "athlete:wendri-patilima",
+      "ufcstats_name": "Windri Patilima",
+      "stable_ufcstats_id": "66d42e9503fa108e",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/66d42e9503fa108e",
+      "queue_indices": [116, 117],
+      "identity_basis": "Reviewed Wendri/Windri alias plus the exact Shin Haraguchi Road to UFC bout on 2023-05-28.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/5137017/windri-patilima",
+        "https://www.sherdog.com/fighter/Windri-Patilima-323519",
+        "http://ufcstats.com/fight-details/6ecb0ce98d30dd9b"
+      ]
+    }
+  ],
+  "official_identity_transitions": [
+    {
+      "source_official_name": "Anderson Berinja",
+      "source_official_athlete_url": "https://www.ufc.com/athlete/anderson-berinja",
+      "source_official_source_entity_id": "athlete:anderson-berinja",
+      "source_canonical_athlete_url": "https://www.ufc.com/athlete/anderson-berinja",
+      "source_canonical_evidence_required": false,
+      "target_official_name": "Anderson dos Santos",
+      "target_official_athlete_url": "https://www.ufc.com/athlete/anderson-dos-santos",
+      "target_official_source_entity_id": "athlete:anderson-dos-santos",
+      "target_canonical_athlete_url": "https://www.ufc.com/athlete/anderson-dos-santos",
+      "target_canonical_evidence_required": false,
+      "ufcstats_name": "Anderson Dos Santos",
+      "stable_ufcstats_id": "bbc9ab95fa766493",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/bbc9ab95fa766493",
+      "direction": "source_to_target",
+      "automatic_reverse_allowed": false,
+      "identity_basis": "The target UFC profile carries nickname Berinja, DOB 1985-07-24, and the exact Miles Johns, Martin Day, Andre Ewell, and Nad Narimani UFC history bound to stable UFCStats ID bbc9ab95fa766493; the source route is a later duplicate stub. This authorizes only the exact old-route to exact target-route transition.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/anderson-berinja",
+        "https://www.ufc.com/athlete/anderson-dos-santos",
+        "http://ufcstats.com/fighter-details/bbc9ab95fa766493",
+        "http://ufcstats.com/fight-details/9a678f346946b6a4",
+        "http://ufcstats.com/fight-details/0c27552ea7bc8c8a",
+        "http://ufcstats.com/fight-details/8f1b727757a60c07",
+        "http://ufcstats.com/fight-details/c7bc8750e9503805",
+        "https://www.ufc.com/news/blaydes-vs-lewis-fight-fight-preview-ufc-vegas-15",
+        "https://www.ufc.com/news/fight-by-fight-preview-ufc-265-lewis-vs-gane-card-breakdown"
+      ],
+      "fight_anchors": [
+        {
+          "event_date": "2021-08-07",
+          "opponent_name": "Miles Johns",
+          "opponent_ufcstats_id": "46e0d677f91bacc0",
+          "fight_url": "http://ufcstats.com/fight-details/9a678f346946b6a4"
+        },
+        {
+          "event_date": "2020-11-28",
+          "opponent_name": "Martin Day",
+          "opponent_ufcstats_id": "ea3dcc417c322064",
+          "fight_url": "http://ufcstats.com/fight-details/0c27552ea7bc8c8a"
+        },
+        {
+          "event_date": "2019-06-22",
+          "opponent_name": "Andre Ewell",
+          "opponent_ufcstats_id": "5f6f049d54728e88",
+          "fight_url": "http://ufcstats.com/fight-details/8f1b727757a60c07"
+        },
+        {
+          "event_date": "2018-11-17",
+          "opponent_name": "Nad Narimani",
+          "opponent_ufcstats_id": "776a58a67665a171",
+          "fight_url": "http://ufcstats.com/fight-details/c7bc8750e9503805"
+        }
+      ]
+    },
+    {
+      "source_official_name": "Daria Zhelezniakova",
+      "source_official_athlete_url": "https://www.ufc.com/athlete/daria-zheleznyakova",
+      "source_official_source_entity_id": "athlete:daria-zheleznyakova",
+      "source_canonical_athlete_url": "https://www.ufc.com/athlete/dariya-zheleznyakova",
+      "source_canonical_evidence_required": true,
+      "target_official_name": "Daria Zhelezniakova",
+      "target_official_athlete_url": "https://www.ufc.com/athlete/dariya-zheleznyakova",
+      "target_official_source_entity_id": "athlete:dariya-zheleznyakova",
+      "target_canonical_athlete_url": "https://www.ufc.com/athlete/dariya-zheleznyakova",
+      "target_canonical_evidence_required": false,
+      "ufcstats_name": "Daria Zhelezniakova",
+      "stable_ufcstats_id": "07047eb7d17fb0a2",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/07047eb7d17fb0a2",
+      "direction": "source_to_target",
+      "automatic_reverse_allowed": false,
+      "identity_basis": "The accepted source route names Daria Zhelezniakova and declares the exact target route as canonical; the target route retains that exact display name, Iron Lady profile, and stable UFCStats owner with the exact Montserrat Rendon, Ailin Perez, and Melissa Mullins bout anchors. This authorizes only the exact old-route to exact target-route transition.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/daria-zheleznyakova",
+        "https://www.ufc.com/athlete/dariya-zheleznyakova",
+        "http://ufcstats.com/fighter-details/07047eb7d17fb0a2",
+        "http://ufcstats.com/fight-details/f1c3abce15ef053e",
+        "http://ufcstats.com/fight-details/7ba432e218edc17d",
+        "http://ufcstats.com/fight-details/fff3218758c513b8"
+      ],
+      "fight_anchors": [
+        {
+          "event_date": "2024-03-23",
+          "opponent_name": "Montserrat Rendon",
+          "opponent_ufcstats_id": "60193e707634e560",
+          "fight_url": "http://ufcstats.com/fight-details/f1c3abce15ef053e"
+        },
+        {
+          "event_date": "2024-09-28",
+          "opponent_name": "Ailin Perez",
+          "opponent_ufcstats_id": "06e4245d16fc5315",
+          "fight_url": "http://ufcstats.com/fight-details/7ba432e218edc17d"
+        },
+        {
+          "event_date": "2025-06-21",
+          "opponent_name": "Melissa Mullins",
+          "opponent_ufcstats_id": "bd532e9a2b93870c",
+          "fight_url": "http://ufcstats.com/fight-details/fff3218758c513b8"
+        }
+      ]
+    },
+    {
+      "source_official_name": "Keiichiro Nakamura",
+      "source_official_athlete_url": "https://www.ufc.com/athlete/keiichiro-nakamura",
+      "source_official_source_entity_id": "athlete:keiichiro-nakamura",
+      "source_canonical_athlete_url": "https://www.ufc.com/athlete/keiichiro-nakamura",
+      "source_canonical_evidence_required": true,
+      "target_official_name": "Keiichiro Nakamura",
+      "target_official_athlete_url": "https://www.ufc.com/athlete/keiichiro-nakamura-0",
+      "target_official_source_entity_id": "athlete:keiichiro-nakamura-0",
+      "target_canonical_athlete_url": "https://www.ufc.com/athlete/keiichiro-nakamura-0",
+      "target_canonical_evidence_required": false,
+      "ufcstats_name": "Keiichiro Nakamura",
+      "stable_ufcstats_id": "3618e0632ecdba9c",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/3618e0632ecdba9c",
+      "direction": "source_to_target",
+      "automatic_reverse_allowed": false,
+      "identity_basis": "The two exact UFC routes carry the same Keiichiro Nakamura profile owner and are bound one-to-one to stable UFCStats ID 3618e0632ecdba9c by the exact Sebastian Szalay and Kaiwen fight anchors. This authorizes only the exact old-route to exact reviewed target-route transition and never a name or slug alias.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/keiichiro-nakamura",
+        "https://www.ufc.com/athlete/keiichiro-nakamura-0",
+        "http://ufcstats.com/fighter-details/3618e0632ecdba9c",
+        "http://ufcstats.com/fight-details/780bae82bdfc7112",
+        "http://ufcstats.com/fight-details/28648815e5f46bd9"
+      ],
+      "fight_anchors": [
+        {
+          "event_date": "2026-01-31",
+          "opponent_name": "Sebastian Szalay",
+          "opponent_ufcstats_id": "f201f21cf2c79eb2",
+          "fight_url": "http://ufcstats.com/fight-details/780bae82bdfc7112"
+        },
+        {
+          "event_date": "2025-08-22",
+          "opponent_name": "Kaiwen",
+          "opponent_ufcstats_id": "0565706b1e7f7e7c",
+          "fight_url": "http://ufcstats.com/fight-details/28648815e5f46bd9"
+        }
+      ]
+    },
+    {
+      "source_official_name": "Ravena Oliveira",
+      "source_official_athlete_url": "https://www.ufc.com/athlete/ravena-oliveira",
+      "source_official_source_entity_id": "athlete:ravena-oliveira",
+      "source_canonical_athlete_url": "https://www.ufc.com/athlete/ravena-oliveira",
+      "source_canonical_evidence_required": true,
+      "target_official_name": "Ravena Oliveira",
+      "target_official_athlete_url": "https://www.ufc.com/athlete/ravena-oliveira-morais",
+      "target_official_source_entity_id": "athlete:ravena-oliveira-morais",
+      "target_canonical_athlete_url": "https://www.ufc.com/athlete/ravena-oliveira-morais",
+      "target_canonical_evidence_required": false,
+      "ufcstats_name": "Ravena Oliveira",
+      "stable_ufcstats_id": "4948e412fa6ab67d",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/4948e412fa6ab67d",
+      "direction": "source_to_target",
+      "automatic_reverse_allowed": false,
+      "identity_basis": "The exact accepted old route and freshly observed target route carry the same Ravena Oliveira owner and are bound one-to-one to stable UFCStats ID 4948e412fa6ab67d by the exact Tainara Lisboa, Stephanie Luciano, Shanelle Dyer, and Juliana Miller UFC fight anchors. This authorizes only the exact old-route to exact live-route transition and never a name or slug alias.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/ravena-oliveira",
+        "https://www.ufc.com/athlete/ravena-oliveira-morais",
+        "http://ufcstats.com/fighter-details/4948e412fa6ab67d",
+        "http://ufcstats.com/fight-details/5b7b5b01f4dcbd9c",
+        "http://ufcstats.com/fight-details/8d9458121f0c4b95",
+        "http://ufcstats.com/fight-details/216bc9b661485017",
+        "http://ufcstats.com/fight-details/d463229133909215"
+      ],
+      "fight_anchors": [
+        {
+          "event_date": "2023-10-14",
+          "opponent_name": "Tainara Lisboa",
+          "opponent_ufcstats_id": "2c5f5749569eef66",
+          "fight_url": "http://ufcstats.com/fight-details/5b7b5b01f4dcbd9c"
+        },
+        {
+          "event_date": "2025-10-18",
+          "opponent_name": "Stephanie Luciano",
+          "opponent_ufcstats_id": "1b35af4d1529adf6",
+          "fight_url": "http://ufcstats.com/fight-details/8d9458121f0c4b95"
+        },
+        {
+          "event_date": "2026-03-21",
+          "opponent_name": "Shanelle Dyer",
+          "opponent_ufcstats_id": "cfbb3edab781dfd2",
+          "fight_url": "http://ufcstats.com/fight-details/216bc9b661485017"
+        },
+        {
+          "event_date": "2026-08-08",
+          "opponent_name": "Juliana Miller",
+          "opponent_ufcstats_id": "aa0c573da7119292",
+          "fight_url": "http://ufcstats.com/fight-details/d463229133909215"
+        }
+      ]
+    }
+  ],
+  "profile_recoveries": [
+    {
+      "canonical_name": "Abdul Azeem Badakhshi",
+      "reviewed_source_names": ["Abdul Azim Badakhshi"],
+      "official_athlete_url": "https://www.ufc.com/athlete/abdul-azeem-badakhshi",
+      "official_source_entity_id": "athlete:abdul-azeem-badakhshi",
+      "stable_ufcstats_id": "968764372c49eab6",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/968764372c49eab6",
+      "field": "stance",
+      "value": "Orthodox",
+      "source": "wikipedia",
+      "source_name": "Abdul Azim Badakhshi",
+      "source_entity_id": "page-title:Abdul_Azim_Badakhshi",
+      "source_url": "https://en.wikipedia.org/wiki/Abdul_Azim_Badakhshi",
+      "requested_url": "https://en.wikipedia.org/wiki/Abdul_Azim_Badakhshi",
+      "effective_url": "https://en.wikipedia.org/wiki/Abdul_Azim_Badakhshi",
+      "canonical_url": "https://en.wikipedia.org/wiki/Abdul_Azim_Badakhshi",
+      "redirect_chain": [],
+      "retrieval_route": "direct",
+      "retrieved_at_utc": "2026-08-29T17:49:18.021922Z",
+      "observation_id": "B01-O0014",
+      "capture_sha256": "0c991fd130c77bdf5375274ef79d7b9a41e5125963163f7f893a6e937101dc37",
+      "queue_index": 2,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "decision_status": "owner_approved_current_future_exception",
+      "identity_basis": "Reviewed Azim/Azeem alias, stable source entities, Afghan Lion nickname, matching career, and the official Yi Zha Road to UFC pairing bind the page one-to-one.",
+      "evidence_urls": [
+        "https://www.ufc.com/news/road-ufc-season-2-participants-announced-ufc-performance-institute-shanghai",
+        "https://www.sherdog.com/fighter/Abdul-Azim-Badakhshi-136805",
+        "https://www.espn.com/mma/fighter/_/id/5078261/abdul-azim-badakhshi"
+      ]
+    }
+  ]
+}

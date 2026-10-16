@@ -363,8 +363,42 @@ def load_historical_odds() -> pd.DataFrame:
 _CANONICAL_ODDS_COLS = [
     "event_date", "fighter_a", "fighter_b", "query_date", "offset_days",
     "a_fair_prob", "b_fair_prob", "a_decimal_odds", "b_decimal_odds",
-    "num_bookmakers",
+    "num_bookmakers", "source_kind", "source_file", "observed_at",
+    "hours_to_start", "verified_prefight",
 ]
+
+VERIFIED_PREFIGHT_SOURCE_KINDS = frozenset({"odds_api", "line_history"})
+
+
+def _stamp_odds_provenance(
+    frame: pd.DataFrame,
+    *,
+    source_kind: str,
+    source_file: str,
+) -> pd.DataFrame:
+    """Attach honest row-level source and timing evidence.
+
+    Only the Odds API archive currently proves its requested day offset.
+    Legacy and BFO rows remain usable as explicitly non-verified reference
+    prices, but their reconstructed offsets never qualify as T-1 evidence.
+    """
+    result = frame.copy()
+    result["source_kind"] = source_kind
+    result["source_file"] = source_file
+    result["observed_at"] = pd.to_datetime(
+        result.get("query_date", pd.Series(pd.NaT, index=result.index)),
+        errors="coerce",
+        utc=True,
+    )
+    offsets = pd.to_numeric(
+        result.get("offset_days", pd.Series(np.nan, index=result.index)),
+        errors="coerce",
+    )
+    result["hours_to_start"] = offsets * 24.0
+    result["verified_prefight"] = (
+        source_kind == "odds_api"
+    ) & offsets.notna() & offsets.gt(0.0)
+    return result
 
 
 def _drop_invalid_moneyline_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -424,36 +458,43 @@ def load_all_historical_odds() -> pd.DataFrame:
     """
     parts: list[pd.DataFrame] = []
 
+    def append_source(path: Path, source_kind: str) -> None:
+        try:
+            loaded = pd.read_csv(path)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load %s odds %s: %s",
+                source_kind,
+                path.name,
+                exc,
+            )
+            return
+        parts.append(
+            _stamp_odds_provenance(
+                loaded,
+                source_kind=source_kind,
+                source_file=path.name,
+            )
+        )
+
     # 1. Pre-2022 legacy
     pre2022_path = BACKFILL_DIR / "historical_odds_pre2022_from_cleaned.csv"
     if pre2022_path.exists():
-        try:
-            parts.append(pd.read_csv(pre2022_path))
-        except Exception as exc:
-            logger.warning("Failed to load pre-2022 odds: %s", exc)
+        append_source(pre2022_path, "legacy_pre2022")
 
     # 2. BFO scrapes (named exactly historical_odds_bfo.csv)
     bfo_path = BACKFILL_DIR / "historical_odds_bfo.csv"
     if bfo_path.exists():
-        try:
-            parts.append(pd.read_csv(bfo_path))
-        except Exception as exc:
-            logger.warning("Failed to load BFO odds: %s", exc)
+        append_source(bfo_path, "bfo")
 
     # 3. BFO recovery batches (any file matching historical_odds_bfo_recovered_*.csv)
     for recovery_path in sorted(BACKFILL_DIR.glob("historical_odds_bfo_recovered_*.csv")):
-        try:
-            parts.append(pd.read_csv(recovery_path))
-        except Exception as exc:
-            logger.warning("Failed to load BFO recovery %s: %s", recovery_path.name, exc)
+        append_source(recovery_path, "bfo")
 
     # 4. Primary Odds API backfill (highest priority)
     primary_path = BACKFILL_DIR / "historical_odds.csv"
     if primary_path.exists():
-        try:
-            parts.append(pd.read_csv(primary_path))
-        except Exception as exc:
-            logger.warning("Failed to load primary historical odds: %s", exc)
+        append_source(primary_path, "odds_api")
 
     if not parts:
         logger.warning(

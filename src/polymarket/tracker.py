@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.config import LOGS_DIR, INITIAL_BANKROLL
+from src.live_control import LIVE_MODE_OFF, resolve_live_mode_from_env
 from src.strategy.value import calculate_closing_line_value
 
 logger = logging.getLogger(__name__)
@@ -611,6 +612,8 @@ class BetLedger:
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             if os.name == "nt":
                 deadline = time.monotonic() + 2.0
                 while True:
@@ -623,6 +626,11 @@ class BetLedger:
                         time.sleep(0.05)
             else:
                 os.replace(tmp_path, self.path)
+                directory_fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         except BaseException:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
@@ -826,6 +834,10 @@ class BetLedger:
         filled_shares: float,
         *,
         cancel_reason: Optional[str] = None,
+        filled_amount: Optional[float] = None,
+        fill_price: Optional[float] = None,
+        fill_source: Optional[str] = None,
+        fill_trade_ids: Optional[list[str]] = None,
     ) -> LedgerMutationResult:
         """Preserve matched shares after a resting limit order stops resting."""
         def _convert(bets: list[dict]) -> tuple[LedgerMutationResult, bool]:
@@ -842,15 +854,28 @@ class BetLedger:
 
                 price = round(float(bet.get("price", 0.0) or 0.0), 4)
                 shares = round(max(float(filled_shares or 0.0), 0.0), 2)
-                amount = round(shares * price, 2)
+                amount = round(shares * price if filled_amount is None else float(filled_amount), 2)
+                if amount <= 0 or shares <= 0:
+                    return LedgerMutationResult(status="invalid_fill", bet=dict(bet)), False
+                bet.setdefault("submitted_amount", bet.get("amount"))
+                bet.setdefault("requested_shares", bet.get("shares"))
 
                 bet["status"] = "open"
                 bet["amount"] = amount
                 bet["shares"] = shares
                 bet["settled_at"] = None
                 bet["result_pnl"] = None
-                bet["order_id"] = None
+                # Preserve the original order/intent identities for accounting
+                # and restart reconciliation after the order becomes a holding.
                 bet["order_type"] = "filled_limit"
+                bet["placement_state"] = "filled"
+                bet["actual_filled_shares"] = shares
+                bet["actual_fill_amount"] = amount
+                bet["actual_fill_source"] = fill_source or "clob_order_reconciliation"
+                if fill_price is not None:
+                    bet["actual_fill_price"] = float(fill_price)
+                if fill_trade_ids is not None:
+                    bet["actual_fill_trade_ids"] = list(fill_trade_ids)
                 if cancel_reason:
                     bet["cancel_reason"] = cancel_reason
                 return LedgerMutationResult(status="updated", bet=dict(bet)), True
@@ -1214,6 +1239,10 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
     """
     Check Polymarket for settled markets and auto-settle matching bets.
 
+    Betting-off operation preserves real order history: account positions may
+    have changed manually since those quantities were recorded. Paper results
+    can still settle from market outcomes.
+
     Returns number of bets settled.
     """
     from src.polymarket.client import GammaClient
@@ -1222,6 +1251,8 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
     settled_count = 0
 
     for bet in ledger.get_open_bets(fresh=True):
+        if resolve_live_mode_from_env() == LIVE_MODE_OFF and bet.get("dry_run") is not True:
+            continue
         if not _has_confirmed_position(bet):
             logger.info(
                 "Skipped auto-settle for bet #%s because placement_state=%s has no confirmed fill",
@@ -1303,6 +1334,12 @@ def auto_reconcile_sold_positions(
 
     Returns number of bets cancelled.
     """
+    if resolve_live_mode_from_env() == LIVE_MODE_OFF:
+        # Absence is not evidence of a zero-P&L cancellation. During connected
+        # betting-off operation, live account views remain the current source;
+        # preserve the recorded order history rather than inventing a sale.
+        return 0
+
     cancelled_count = 0
     for bet in ledger.get_open_bets(fresh=True):
         tid = bet.get("token_id")

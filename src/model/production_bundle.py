@@ -4,6 +4,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -11,18 +13,402 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from src.config import DATA_DIR, MODELS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT
 from src.data.io_utils import write_json_atomically
+from src.data.name_utils import (
+    canonical_fighter_name_key,
+    fighter_identity_is_ambiguous,
+    normalize_person_name,
+    normalize_ufcstats_id,
+)
 
 logger = logging.getLogger(__name__)
 
 HOSTED_PROJECT_ROOT = Path("/app")
 DEFAULT_MANIFEST_PATH = PROJECT_ROOT / "models" / "current_production_model.json"
 PRODUCTION_BUNDLE_ENV = "UFC_PRODUCTION_BUNDLE_MANIFEST"
+SELECTED_INFERENCE_APPROVAL_ENV = "UFC_SELECTED_INFERENCE_APPROVAL_SHA256"
+SELECTED_INFERENCE_PREDECESSOR_ENV = "UFC_SELECTED_INFERENCE_PREDECESSOR_SHA256"
+SELECTED_INFERENCE_OWNER_DOB_CORRECTION_ENV = "UFC_SELECTED_INFERENCE_OWNER_DOB_CORRECTION_SHA256"
+
+
+def selected_release_trust_kwargs(
+    *,
+    expected_predecessor_manifest_sha256: str | None = None,
+    expected_selection_approval_sha256: str | None = None,
+    expected_owner_dob_correction_sha256: str | None = None,
+) -> dict[str, str | None]:
+    """Read trust supplied by the release operator, never by release artifacts.
+
+    The environment values must come from the separately authorized release
+    plan. Merely installing a candidate or reading a dashboard cache cannot
+    establish a trusted value. An absent approval keeps schema 2 noninstallable;
+    an owner-DOB amendment also needs its separate correction record's hash.
+    """
+    result = {
+        "expected_selection_approval_sha256": (
+            expected_selection_approval_sha256
+            if expected_selection_approval_sha256 is not None
+            else os.environ.get(SELECTED_INFERENCE_APPROVAL_ENV)
+        ),
+    }
+    predecessor = (
+        expected_predecessor_manifest_sha256
+        if expected_predecessor_manifest_sha256 is not None
+        else os.environ.get(SELECTED_INFERENCE_PREDECESSOR_ENV)
+    )
+    # Omission retains selected_release's independently pinned predecessor.
+    if predecessor is not None:
+        result["expected_predecessor_manifest_sha256"] = predecessor
+    correction = (
+        expected_owner_dob_correction_sha256
+        if expected_owner_dob_correction_sha256 is not None
+        else os.environ.get(SELECTED_INFERENCE_OWNER_DOB_CORRECTION_ENV)
+    )
+    if correction is not None:
+        result["expected_owner_dob_correction_sha256"] = correction
+    return result
+
+
+def validate_selected_bundle_manifest(
+    payload: dict[str, Any],
+    root: Path,
+    *,
+    manifest_path: Path,
+    expected_predecessor_manifest_sha256: str | None = None,
+    expected_selection_approval_sha256: str | None = None,
+    expected_owner_dob_correction_sha256: str | None = None,
+    _pending_runtime_projection: bool = False,
+) -> dict[str, Any]:
+    """Validate immutable selection, then its narrow runtime lookup projection.
+
+    Reconciliation writes a separate runtime manifest. It can relocate only
+    the unchanged processed pair and add deployment diagnostics; it cannot
+    rewrite training, selection or approval evidence in the installed release.
+    """
+    from src.model.selected_release import validate_selected_release
+
+    trust = selected_release_trust_kwargs(
+        expected_predecessor_manifest_sha256=expected_predecessor_manifest_sha256,
+        expected_selection_approval_sha256=expected_selection_approval_sha256,
+        expected_owner_dob_correction_sha256=expected_owner_dob_correction_sha256,
+    )
+    root = Path(root).resolve(strict=True)
+    path = Path(manifest_path)
+    version = payload.get("selected_candidate_schema_version")
+    if type(version) is not int or version != 2 or path.resolve(strict=not _pending_runtime_projection).parent == root:
+        return validate_selected_release(payload, root, **trust)
+
+    if (not path.is_absolute() or ".." in path.parts or path.name != "runtime_manifest.json"
+            or path.resolve(strict=not _pending_runtime_projection) != path.absolute()
+            or path.parent.resolve(strict=True).is_relative_to(root)):
+        raise ValueError("Inference runtime manifest must be a separate regular lookup manifest")
+    immutable_path = root / "manifest.json"
+    if not (root / "install_receipt.json").is_file():
+        raise ValueError("Inference runtime projection requires an installed release receipt")
+    immutable = json.loads(immutable_path.read_text(encoding="utf-8"))
+    if not isinstance(immutable, dict) or type(immutable.get("selected_candidate_schema_version")) is not int or immutable["selected_candidate_schema_version"] != 2:
+        raise ValueError("Inference runtime projection requires an immutable schema 2 release")
+    summary = validate_selected_release(immutable, root, **trust)
+    if not _pending_runtime_projection and json.dumps(payload, sort_keys=True) != json.dumps(json.loads(path.read_text(encoding="utf-8")), sort_keys=True):
+        raise ValueError("Inference runtime manifest changed while being validated")
+    diagnostics = {"processed_dir", "manifest_updated_at", "git_sha", "deployed_git_sha"}
+    if json.dumps({key: value for key, value in payload.items() if key not in diagnostics}, sort_keys=True) != json.dumps(
+        {key: value for key, value in immutable.items() if key not in diagnostics}, sort_keys=True
+    ):
+        raise ValueError("Inference runtime projection changed immutable selection or training metadata")
+    timestamp = payload.get("manifest_updated_at")
+    if not isinstance(timestamp, str):
+        raise ValueError("Inference runtime projection requires an explicit UTC update timestamp")
+    updated = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    if updated.tzinfo is None or updated.utcoffset() is None or updated.utcoffset().total_seconds() != 0:
+        raise ValueError("Inference runtime projection update timestamp must be explicit UTC")
+    deployed = _determine_deployed_git_sha(immutable)
+    if deployed is not None and not re.fullmatch(r"[0-9a-f]{40}", deployed):
+        raise ValueError("Inference runtime deployment commit must be an exact Git SHA")
+    expected_git = deployed or immutable.get("training_source_git_sha") or immutable.get("git_sha")
+    if (payload.get("git_sha") != expected_git
+            or (deployed is None and "deployed_git_sha" in payload)
+            or (deployed is not None and payload.get("deployed_git_sha") != deployed)):
+        raise ValueError("Inference runtime deployment diagnostics differ from the operator context")
+    raw_processed = payload.get("processed_dir")
+    if not isinstance(raw_processed, str):
+        raise ValueError("Inference runtime processed lookup must be an explicit path")
+    processed = Path(raw_processed)
+    if (not processed.is_absolute() or ".." in processed.parts
+            or processed.resolve(strict=True) != processed.absolute()
+            or not processed.is_dir() or not processed.is_relative_to(path.parent)
+            or processed.is_relative_to(root)):
+        raise ValueError("Inference runtime processed pair must remain inside its separate lookup")
+    for stem, filename in (("fights", "fights_cleaned.csv"), ("features", "features.csv")):
+        item = processed / filename
+        if item.resolve(strict=True) != item.absolute() or not item.is_file():
+            raise ValueError("Inference runtime processed file must be regular and confined")
+        if (item.stat().st_size != immutable[f"processed_{stem}_bytes"]
+                or _file_sha256(item) != immutable[f"processed_{stem}_sha256"]):
+            raise ValueError("Inference runtime processed pair differs from the selected immutable history")
+    return {**summary, "selected_runtime_projection_verified": True}
 
 
 class ProductionBundleError(RuntimeError):
     """Raised when the active production bundle is missing or inconsistent."""
+
+
+_OLD_JEAN_SILVA_UFCSTATS_ID = "9211aae062b799d6"
+_CURRENT_JEAN_SILVA_UFCSTATS_ID = "52ef95b5860fb28c"
+
+# Stable-ID sentinels observed in the corrected full-history source slice for
+# every collision group with multiple UFC fight histories. Requiring both
+# sides prevents a candidate from appearing green after dropping or merging a
+# namesake history wholesale.
+_REQUIRED_COLLISION_IDENTITY_SENTINELS = frozenset(
+    {
+        (canonical_fighter_name_key("Bruno Silva"), "12ebd7d157e91701"),
+        (canonical_fighter_name_key("Bruno Silva"), "294aa73dbf37d281"),
+        (canonical_fighter_name_key("Daniel Roberts"), "22edaf53ad59a967"),
+        (canonical_fighter_name_key("Danny Roberts"), "a6cba6bb66c1a8c9"),
+        (canonical_fighter_name_key("Jean Silva"), _OLD_JEAN_SILVA_UFCSTATS_ID),
+        (canonical_fighter_name_key("Jean Silva"), _CURRENT_JEAN_SILVA_UFCSTATS_ID),
+        (canonical_fighter_name_key("Lance Gibson"), "63eedfcc73071d41"),
+        (canonical_fighter_name_key("Lance Gibson Jr."), "07bc580bdf3eb9c8"),
+        (canonical_fighter_name_key("Mike Davis"), "c8661e204c66f325"),
+        (canonical_fighter_name_key("Mike Davis"), "fb3e61720be4690c"),
+        (canonical_fighter_name_key("Tommy Petersen"), "7aabd61419f747d1"),
+        (canonical_fighter_name_key("Thomas Petersen"), "764d39074a352e33"),
+        (canonical_fighter_name_key("Victor Valenzuela"), "de277a4abcfeea46"),
+        (canonical_fighter_name_key("Victor Valenzuela"), "078695e385ec2f57"),
+    }
+)
+
+
+def _processed_identity_integrity_guard(
+    processed_dir: Path,
+    *,
+    required_collision_identities: set[tuple[str, str]]
+    | frozenset[tuple[str, str]]
+    | None = None,
+) -> dict[str, object]:
+    """Reject a processed generation that loses stable collision identities."""
+    required_collision_identities = (
+        _REQUIRED_COLLISION_IDENTITY_SENTINELS
+        if required_collision_identities is None
+        else frozenset(required_collision_identities)
+    )
+    violations: list[str] = []
+    artifact_summaries: dict[str, dict[str, object]] = {}
+    identity_rows: dict[str, Counter[tuple[str, str, str, str, str]]] = {}
+
+    for filename in ("fights_cleaned.csv", "features.csv"):
+        path = Path(processed_dir) / filename
+        summary: dict[str, object] = {
+            "path": str(path),
+            "rows": 0,
+            "ambiguous_rows": 0,
+            "jean_rows": 0,
+        }
+        artifact_summaries[filename] = summary
+        if not path.is_file():
+            violations.append(f"{filename}:missing")
+            continue
+        try:
+            frame = pd.read_csv(path, low_memory=False)
+        except Exception as exc:
+            violations.append(f"{filename}:unreadable:{type(exc).__name__}")
+            continue
+        summary["rows"] = int(len(frame))
+        required = {
+            "event_date",
+            "fighter_a",
+            "fighter_b",
+            "fighter_a_id",
+            "fighter_b_id",
+        }
+        missing = sorted(required.difference(frame.columns))
+        if missing:
+            violations.append(
+                f"{filename}:missing_identity_columns:{','.join(missing)}"
+            )
+            continue
+
+        event_dates = pd.to_datetime(frame["event_date"], errors="coerce")
+        identity_rows[filename] = Counter(
+            (
+                "" if pd.isna(event_date) else pd.Timestamp(event_date).isoformat(),
+                normalize_person_name(fighter_a),
+                normalize_ufcstats_id(fighter_a_id) or "",
+                normalize_person_name(fighter_b),
+                normalize_ufcstats_id(fighter_b_id) or "",
+            )
+            for event_date, fighter_a, fighter_a_id, fighter_b, fighter_b_id in zip(
+                event_dates,
+                frame["fighter_a"],
+                frame["fighter_a_id"],
+                frame["fighter_b"],
+                frame["fighter_b_id"],
+            )
+        )
+        jean_observations: list[dict[str, object]] = []
+        collision_observations: dict[
+            tuple[str, str], list[dict[str, object]]
+        ] = {}
+        observed_collision_identities: set[tuple[str, str]] = set()
+        ambiguous_rows = 0
+        for side in ("a", "b"):
+            name_col = f"fighter_{side}"
+            id_col = f"fighter_{side}_id"
+            names = frame[name_col].fillna("").astype(str)
+            ambiguous = names.map(fighter_identity_is_ambiguous)
+            ambiguous_rows += int(ambiguous.sum())
+            normalized_ids = frame[id_col].map(normalize_ufcstats_id)
+            missing_ids = ambiguous & normalized_ids.isna()
+            if missing_ids.any():
+                violations.append(
+                    f"{filename}:{name_col}:ambiguous_identity_missing_id:"
+                    f"{int(missing_ids.sum())}"
+                )
+
+            for index in frame.index[ambiguous & normalized_ids.notna()]:
+                identity = (
+                    canonical_fighter_name_key(names.loc[index]),
+                    str(normalized_ids.loc[index]),
+                )
+                observed_collision_identities.add(identity)
+                collision_observations.setdefault(identity, []).append(
+                    {
+                        "event_date": event_dates.loc[index],
+                        "num_fights": pd.to_numeric(
+                            pd.Series([frame.at[index, f"{side}_num_fights"]])
+                            if f"{side}_num_fights" in frame.columns
+                            else pd.Series([float("nan")]),
+                            errors="coerce",
+                        ).iloc[0],
+                    }
+                )
+
+            jean_mask = names.map(normalize_person_name).eq("jean silva")
+            for index in frame.index[jean_mask]:
+                jean_observations.append(
+                    {
+                        "event_date": event_dates.loc[index],
+                        "fighter_id": normalized_ids.loc[index],
+                        "age": pd.to_numeric(
+                            pd.Series([frame.at[index, f"{side}_age"]])
+                            if f"{side}_age" in frame.columns
+                            else pd.Series([float("nan")]),
+                            errors="coerce",
+                        ).iloc[0],
+                        "num_fights": pd.to_numeric(
+                            pd.Series([frame.at[index, f"{side}_num_fights"]])
+                            if f"{side}_num_fights" in frame.columns
+                            else pd.Series([float("nan")]),
+                            errors="coerce",
+                        ).iloc[0],
+                    }
+                )
+
+        summary["ambiguous_rows"] = ambiguous_rows
+        summary["jean_rows"] = len(jean_observations)
+        missing_sentinels = sorted(
+            required_collision_identities.difference(observed_collision_identities)
+        )
+        for name_key, fighter_id in missing_sentinels:
+            violations.append(
+                f"{filename}:required_collision_identity_missing:"
+                f"{name_key}:{fighter_id}"
+            )
+        summary["collision_identities"] = len(observed_collision_identities)
+
+        if filename == "features.csv":
+            for (name_key, fighter_id), observations in sorted(
+                collision_observations.items()
+            ):
+                dated = [
+                    row for row in observations if pd.notna(row["event_date"])
+                ]
+                if not dated:
+                    continue
+                earliest_date = min(
+                    pd.Timestamp(row["event_date"]) for row in dated
+                )
+                earliest_counts = [
+                    float(row["num_fights"])
+                    for row in dated
+                    if pd.Timestamp(row["event_date"]) == earliest_date
+                    and pd.notna(row["num_fights"])
+                ]
+                if not earliest_counts or min(earliest_counts) != 0.0:
+                    violations.append(
+                        f"{filename}:collision_history_not_separated:"
+                        f"{name_key}:{fighter_id}"
+                    )
+        if not jean_observations:
+            continue
+
+        modern = [
+            row
+            for row in jean_observations
+            if pd.notna(row["event_date"])
+            and pd.Timestamp(row["event_date"]) >= pd.Timestamp("2023-01-01")
+        ]
+        historical = [
+            row
+            for row in jean_observations
+            if pd.notna(row["event_date"])
+            and pd.Timestamp(row["event_date"]) < pd.Timestamp("2010-01-01")
+        ]
+        if modern and any(
+            row["fighter_id"] != _CURRENT_JEAN_SILVA_UFCSTATS_ID
+            for row in modern
+        ):
+            violations.append(f"{filename}:modern_jean_silva_id_mismatch")
+        if historical and any(
+            row["fighter_id"] != _OLD_JEAN_SILVA_UFCSTATS_ID
+            for row in historical
+        ):
+            violations.append(f"{filename}:historical_jean_silva_id_mismatch")
+
+        earliest = (
+            min(modern, key=lambda row: pd.Timestamp(row["event_date"]))
+            if modern
+            else None
+        )
+        if earliest is not None and pd.notna(earliest["age"]):
+            earliest_age = float(earliest["age"])
+            if earliest_age < 18.0 or earliest_age > 35.0:
+                violations.append(f"{filename}:modern_jean_silva_age_implausible")
+        if filename == "features.csv" and earliest is not None:
+            if (
+                pd.isna(earliest["num_fights"])
+                or float(earliest["num_fights"]) != 0.0
+            ):
+                violations.append(
+                    f"{filename}:modern_jean_silva_history_not_separated"
+                )
+
+    if (
+        "fights_cleaned.csv" in identity_rows
+        and "features.csv" in identity_rows
+        and identity_rows["fights_cleaned.csv"] != identity_rows["features.csv"]
+    ):
+        violations.append("processed_artifacts:identity_rows_mismatch")
+
+    return {
+        "ok": not violations,
+        "violations": violations,
+        "artifacts": artifact_summaries,
+    }
+
+
+def _require_processed_identity_integrity(processed_dir: Path) -> dict[str, object]:
+    summary = _processed_identity_integrity_guard(processed_dir)
+    if summary["violations"]:
+        raise ProductionBundleError(
+            "Processed fighter identity integrity check failed: "
+            + "; ".join(str(reason) for reason in summary["violations"])
+        )
+    return summary
 
 
 @dataclass(frozen=True)
@@ -1339,7 +1725,16 @@ def _validate_staged_training_specs(
             "Staged production bundle primary training_spec is not registered: "
             f"{exc}"
         ) from exc
-    if (
+    staged_payload = _load_manifest_payload(bundle.manifest_path)
+    if "selected_candidate_schema_version" in staged_payload:
+        from src.model.selected_release import validate_selected_monthly_spec
+        try:
+            validate_selected_monthly_spec(
+                staged_payload, _rich_release_root(staged_payload, bundle.manifest_path), primary_spec
+            )
+        except (OSError, TypeError, KeyError, ValueError) as exc:
+            raise ProductionBundleError(f"Selected monthly training contract is invalid: {exc}") from exc
+    elif (
         set(primary_spec) != set(registered_spec)
         or _registered_contract_payload(primary_spec)
         != _registered_contract_payload(registered_spec)
@@ -1503,6 +1898,7 @@ def reconcile_production_bundle_manifest(
             f"Production bundle processed snapshot in {resolved_processed_dir} has no usable event_date column."
         )
     processed_fingerprints = get_processed_snapshot_fingerprints(resolved_processed_dir)
+    _require_processed_identity_integrity(resolved_processed_dir)
     model_fingerprints = get_model_artifact_fingerprints(
         resolved_model_path,
         resolved_no_odds_model_path,
@@ -1692,6 +2088,16 @@ def reconcile_production_bundle_manifest(
     else:
         payload.pop("deployed_git_sha", None)
 
+    if type(payload.get("selected_candidate_schema_version")) is int and payload["selected_candidate_schema_version"] == 2:
+        # Validate the intended runtime projection before touching its current
+        # file. Missing/revoked approval must leave the prior manifest intact.
+        try:
+            validate_selected_bundle_manifest(
+                payload, _rich_release_root(payload, target_path), manifest_path=target_path,
+                _pending_runtime_projection=True,
+            )
+        except (OSError, TypeError, KeyError, ValueError) as exc:
+            raise ProductionBundleError(f"Selected runtime projection refused before publication: {exc}") from exc
     write_json_atomically(payload, target_path)
     summary = validate_production_bundle(load_production_bundle(target_path))
     summary["source_manifest_path"] = str(source_path) if source_path is not None else None
@@ -1723,6 +2129,9 @@ def validate_production_bundle(
     expected_models_dir: str | Path | None = None,
     expected_processed_dir: str | Path | None = None,
     saved_training_spec_path: str | Path | None = None,
+    expected_predecessor_manifest_sha256: str | None = None,
+    expected_selection_approval_sha256: str | None = None,
+    expected_owner_dob_correction_sha256: str | None = None,
 ) -> dict[str, Any]:
     validation_models_dir, validation_processed_dir, staged_validation = (
         _validation_directories(
@@ -1737,6 +2146,8 @@ def validate_production_bundle(
             actual=validation_processed_dir,
         )
     processed_snapshot_summary = _validate_runtime_processed_snapshot(bundle)
+    if staged_validation:
+        _require_processed_identity_integrity(validation_processed_dir)
     _require_existing_file(bundle.model_path, label="primary model")
     _require_existing_file(bundle.no_odds_model_path, label="no-odds model")
     if bundle.logistic_model_path is not None:
@@ -1797,6 +2208,19 @@ def validate_production_bundle(
             )
 
     manifest_payload = _load_manifest_payload(bundle.manifest_path)
+    selected_identity = {}
+    selected_fields = {"selected_candidate_schema_version", "selected_runtime_manifest_path", "selected_runtime_manifest_sha256", "release_file_inventory"}
+    if selected_fields.intersection(manifest_payload):
+        try:
+            selected_identity = validate_selected_bundle_manifest(
+                manifest_payload, _rich_release_root(manifest_payload, bundle.manifest_path),
+                manifest_path=bundle.manifest_path,
+                expected_predecessor_manifest_sha256=expected_predecessor_manifest_sha256,
+                expected_selection_approval_sha256=expected_selection_approval_sha256,
+                expected_owner_dob_correction_sha256=expected_owner_dob_correction_sha256,
+            )
+        except (OSError, TypeError, KeyError, ValueError) as exc:
+            raise ProductionBundleError(f"Selected candidate release validation failed: {exc}") from exc
     rich_manifest = _validate_rich_manifest_shape(
         manifest_payload,
         label="Production bundle",
@@ -1965,6 +2389,7 @@ def validate_production_bundle(
             "logistic_sha256": actual_logistic_sha256,
         },
         "rich_manifest_validated": rich_manifest,
+        **selected_identity,
         "scheduled_refit_policy": scheduled_refit_policy,
         "staging_schema_version": (
             _optional_int(manifest_payload, "staging_schema_version")

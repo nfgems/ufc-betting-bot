@@ -19,6 +19,7 @@ from src.model.production_bundle import (
     get_processed_snapshot_fingerprints,
     get_processed_snapshot_max_event_date,
     reconcile_production_bundle_manifest,
+    _require_processed_identity_integrity,
     runtime_manifest_needs_source_bootstrap,
 )
 
@@ -426,6 +427,7 @@ def bootstrap_runtime_production_bundle(
         )
 
     if promote_source:
+        _require_processed_identity_integrity(source_processed_dir)
         _copy_processed_snapshot(
             source_processed_dir=source_processed_dir,
             target_processed_dir=target_processed_dir,

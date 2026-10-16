@@ -1,3 +1,9 @@
+# Saved production source - October 16, 2026
+
+This checkout now matches the running Railway application source. See [Current release](docs/CURRENT_RELEASE.md) for the immutable image, verification commands, and the separately preserved research. Runtime credentials, models and ledgers remain outside new source commits.
+
+---
+
 # UFC Betting Bot
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.

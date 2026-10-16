@@ -1,0 +1,1956 @@
+{
+  "schema": 1,
+  "created_utc": "2026-09-20T23:22:45.998109+00:00",
+  "reviewer": "saved_seven independent of saved_other registry screen and extraction",
+  "pass": true,
+  "screen_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\registry77-embedded-screen01.json",
+    "bytes": 175470,
+    "sha256": "8c5ded45216ea47a86ef5855503eb58483152a54f1b79bc3bde9b0c17b2a8fa0"
+  },
+  "javad_conflict_proposal_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\javad-embedded-conflict01.json",
+    "bytes": 4043,
+    "sha256": "cc1c9664be4ef25f095ad56f5fcaee8cb311ceb0dbf37684aea6b57f68f49dfc"
+  },
+  "registry_pin": {
+    "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\owner_registry\\rosterwatch_owner_registry.csv",
+    "bytes": 113647492,
+    "sha256": "d3b7427aee29caa3fc46ea95c7bc7d19fb9d6c8c4e53a8a5a0788ea43b4f417d"
+  },
+  "selected_profile_pin": {
+    "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+    "bytes": 673721,
+    "sha256": "9d054fb8c03209baedeb44d9e69ef577adef90d81cff38b0e10488c67c00b2eb"
+  },
+  "selected_roster_pin": {
+    "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\active_roster\\ufc_active_roster_official.csv",
+    "bytes": 358499,
+    "sha256": "a17cc92fdab735673128425b6330395c19a251d7c7b64e52d80431664f9f7270"
+  },
+  "predecessor_complete_inventory_pin": {
+    "path": "C:\\Temp\\v9-observation-coverage-contract-20260920-01\\linux-tests01\\results\\complete-bound-inventory.json",
+    "bytes": 78799,
+    "sha256": "1167c9d9143520ed9aa71efabd1dacf3578bc080675bfd061237ea997dfb7798"
+  },
+  "algorithm_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-seven\\review_embedded_registry.py",
+    "bytes": 11264,
+    "sha256": "e7110308ad1f89557068041dcdda8e9ecbd69c28eec2b3578b507bb59561cd27"
+  },
+  "entries": [
+    {
+      "name": "Aaron Pico",
+      "athlete_url": "https://www.ufc.com/athlete/aaron-pico",
+      "fighter_id": "5537efc6e496dd84",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1996-09-23"
+        ],
+        "official_direct_profile": [
+          "1996-09-23"
+        ],
+        "registry_current_source": [
+          "1996-09-23"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1996-09-23"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Abdul Rakhman Yakhyaev",
+      "athlete_url": "https://www.ufc.com/athlete/abdulrakhman-yakhyaev",
+      "fighter_id": "95aff2fd8d09a5f0",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "2001-01-03"
+        ],
+        "official_direct_profile": [
+          "2001-01-03"
+        ],
+        "registry_current_source": [
+          "2001-01-03"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "2001-01-03"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Abus Magomedov",
+      "athlete_url": "https://www.ufc.com/athlete/abus-magomedov",
+      "fighter_id": "36b8f265bcd1b7a4",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1990-09-02"
+        ],
+        "official_direct_profile": [
+          "1990-09-02"
+        ],
+        "registry_current_source": [
+          "1990-09-02"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1990-09-02"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Alatengheili",
+      "athlete_url": "https://www.ufc.com/athlete/heili-alateng",
+      "fighter_id": "1897b7b913736a7c",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1991-12-14"
+        ],
+        "official_direct_profile": [
+          "1991-12-14"
+        ],
+        "registry_current_source": [
+          "1991-12-14"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1991-12-14"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Alden Coria",
+      "athlete_url": "https://www.ufc.com/athlete/alden-coria",
+      "fighter_id": "5e9ca8dd7d783a75",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1998-04-24"
+        ],
+        "official_direct_profile": [
+          "1998-04-24"
+        ],
+        "registry_current_source": [
+          "1998-04-24"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1998-04-24"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Alexander Hernandez",
+      "athlete_url": "https://www.ufc.com/athlete/alexander-hernandez",
+      "fighter_id": "262a7d06203657e6",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1992-10-01"
+        ],
+        "official_direct_profile": [
+          "1992-10-01"
+        ],
+        "registry_current_source": [
+          "1992-10-01"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1992-10-01"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Andrey Pulyaev",
+      "athlete_url": "https://www.ufc.com/athlete/andrey-pulyaev",
+      "fighter_id": "22e07d3da1aa3475",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1997-09-10"
+        ],
+        "official_direct_profile": [
+          "1997-09-10"
+        ],
+        "registry_current_source": [
+          "1997-09-10"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1997-09-10"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Anthony Wint",
+      "athlete_url": "https://www.ufc.com/athlete/anthony-wint",
+      "fighter_id": "b34976c022b24568",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-09-14"
+        ],
+        "official_direct_profile": [
+          "1995-09-14"
+        ],
+        "registry_current_source": [
+          "1995-09-14"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-09-14"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Ateba Gautier",
+      "athlete_url": "https://www.ufc.com/athlete/ateba-gautier",
+      "fighter_id": "2f815ed5f8278ba6",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "2002-04-10"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "2002-04-10"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "2002-04-10"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Azamat Murzakanov",
+      "athlete_url": "https://www.ufc.com/athlete/azamat-murzakanov",
+      "fighter_id": "e90a2f22417af68e",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1989-04-12"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1989-04-12"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1989-04-12"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Benardo Sopaj",
+      "athlete_url": "https://www.ufc.com/athlete/benardo-sopaj",
+      "fighter_id": "b6c37948cb226e8c",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "2000-09-25"
+        ],
+        "official_direct_profile": [
+          "2000-09-25"
+        ],
+        "registry_current_source": [
+          "2000-09-25"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "2000-09-25"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Brady Hiestand",
+      "athlete_url": "https://www.ufc.com/athlete/brady-hiestand",
+      "fighter_id": "7af33fc4435017f1",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1999-04-30"
+        ],
+        "official_direct_profile": [
+          "1999-04-30"
+        ],
+        "registry_current_source": [
+          "1999-04-30"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1999-04-30"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Cam Rowston",
+      "athlete_url": "https://www.ufc.com/athlete/cameron-rowston",
+      "fighter_id": "8ebc3a8da015d70c",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-01-19"
+        ],
+        "official_direct_profile": [
+          "1995-01-19"
+        ],
+        "registry_current_source": [
+          "1995-01-19"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-01-19"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Chad Anheliger",
+      "athlete_url": "https://www.ufc.com/athlete/meyson-dzhons-0",
+      "fighter_id": "c7c39e2fb70248b3",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1986-12-01"
+        ],
+        "official_direct_profile": [
+          "1986-12-01"
+        ],
+        "registry_current_source": [
+          "1986-12-01"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1986-12-01"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Chelsea Chandler",
+      "athlete_url": "https://www.ufc.com/athlete/chelsea-chandler",
+      "fighter_id": "af9efbfd63d39734",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1990-11-23"
+        ],
+        "official_direct_profile": [
+          "1990-11-23"
+        ],
+        "registry_current_source": [
+          "1990-11-23"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1990-11-23"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Christian Edwards",
+      "athlete_url": "https://www.ufc.com/athlete/christian-edwards",
+      "fighter_id": "f5d82eccdea4e2dd",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1998-11-05"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1998-11-05"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1998-11-05"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Cody Chovancek",
+      "athlete_url": "https://www.ufc.com/athlete/cody-chovancek",
+      "fighter_id": "3c4320a1b6106611",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1998-07-24"
+        ],
+        "official_direct_profile": [
+          "1998-07-24"
+        ],
+        "registry_current_source": [
+          "1998-07-24"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1998-07-24"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Court McGee",
+      "athlete_url": "https://www.ufc.com/athlete/court-mcgee",
+      "fighter_id": "523fa774700d7d3f",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1984-12-12"
+        ],
+        "official_direct_profile": [
+          "1984-12-12"
+        ],
+        "registry_current_source": [
+          "1984-12-12"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1984-12-12"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Damian Pinas",
+      "athlete_url": "https://www.ufc.com/athlete/damian-pinas",
+      "fighter_id": "fdd22e895a70e4a8",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "2002-03-12"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "2002-03-12"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "2002-03-12"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Dominick Reyes",
+      "athlete_url": "https://www.ufc.com/athlete/dominick-reyes",
+      "fighter_id": "2e19380f34871c6a",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1989-12-26"
+        ],
+        "official_direct_profile": [
+          "1989-12-26"
+        ],
+        "registry_current_source": [
+          "1989-12-26"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1989-12-26"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Elves Brener",
+      "athlete_url": "https://www.ufc.com/athlete/elves-brener",
+      "fighter_id": "48a9a128784d53d1",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1997-09-27"
+        ],
+        "official_direct_profile": [
+          "1997-09-27"
+        ],
+        "registry_current_source": [
+          "1997-09-27"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1997-09-27"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Esteban Ribovics",
+      "athlete_url": "https://www.ufc.com/athlete/esteban-ribovics",
+      "fighter_id": "323d4ca260dfa0ba",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1996-04-27"
+        ],
+        "official_direct_profile": [
+          "1996-04-27"
+        ],
+        "registry_current_source": [
+          "1996-04-27"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1996-04-27"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Gilbert Urbina",
+      "athlete_url": "https://www.ufc.com/athlete/kiruhato-uruhina",
+      "fighter_id": "b12fb759e02378de",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1996-04-05"
+        ],
+        "official_direct_profile": [
+          "1996-04-05"
+        ],
+        "registry_current_source": [
+          "1996-04-05"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1996-04-05"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Grant Dawson",
+      "athlete_url": "https://www.ufc.com/athlete/grant-dawson",
+      "fighter_id": "99bd51917728c25d",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1994-02-20"
+        ],
+        "official_direct_profile": [
+          "1994-02-20"
+        ],
+        "registry_current_source": [
+          "1994-02-20"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1994-02-20"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Ilimbek Akylbek",
+      "athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek",
+      "fighter_id": "130b65b53f30f33c",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "2003-09-01"
+        ],
+        "official_direct_profile": [
+          "2003-09-01"
+        ],
+        "registry_current_source": [
+          "2003-09-01"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "2003-09-01"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Imanol Rodriguez",
+      "athlete_url": "https://www.ufc.com/athlete/imanol-rodriguez",
+      "fighter_id": "6e8349a0a0476d60",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1999-11-15"
+        ],
+        "official_direct_profile": [
+          "1999-11-15"
+        ],
+        "registry_current_source": [
+          "1999-11-15"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1999-11-15"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Ismail Naurdiev",
+      "athlete_url": "https://www.ufc.com/athlete/ismail-naurdiev",
+      "fighter_id": "6a96ad1bc34fb113",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1996-08-18"
+        ],
+        "official_direct_profile": [
+          "1996-08-18"
+        ],
+        "registry_current_source": [
+          "1996-08-18"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1996-08-18"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Jamey-Lyn Horth",
+      "athlete_url": "https://www.ufc.com/athlete/jamey-lyn-horth",
+      "fighter_id": "5c637af9472ae7cc",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1990-03-30"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1990-03-30"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1990-03-30"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Javad Mahjoub",
+      "athlete_url": "https://www.ufc.com/athlete/javad-mahjoub",
+      "fighter_id": "e9f9add1481fc11c",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 1,
+      "verified_dob_comparison": {
+        "selected": [],
+        "official_direct_profile": [
+          "1991-05-26"
+        ],
+        "registry_current_source": [
+          "1992-05-26"
+        ],
+        "embedded_ufcstats_profile": [
+          "1992-05-26"
+        ],
+        "distinct_dates": [
+          "1991-05-26",
+          "1992-05-26"
+        ],
+        "conflict": true
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Jhonata Diniz",
+      "athlete_url": "https://www.ufc.com/athlete/jhonata-diniz",
+      "fighter_id": "25f9a5f3e8a52618",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1991-06-23"
+        ],
+        "official_direct_profile": [
+          "1991-06-23"
+        ],
+        "registry_current_source": [
+          "1991-06-23"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1991-06-23"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "John Castaneda",
+      "athlete_url": "https://www.ufc.com/athlete/john-castaneda",
+      "fighter_id": "5fa2974cbd18e05c",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1991-12-18"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1991-12-18"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1991-12-18"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Joseph Kropschot",
+      "athlete_url": "https://www.ufc.com/athlete/joseph-kropschot",
+      "fighter_id": "8a81a0707350c4a8",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-06-19"
+        ],
+        "official_direct_profile": [
+          "1995-06-19"
+        ],
+        "registry_current_source": [
+          "1995-06-19"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-06-19"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Julien Leblanc",
+      "athlete_url": "https://www.ufc.com/athlete/julien-leblanc",
+      "fighter_id": "cd0dfd9846bd03b9",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1992-01-21"
+        ],
+        "official_direct_profile": [
+          "1992-01-21"
+        ],
+        "registry_current_source": [
+          "1992-01-21"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1992-01-21"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Katlyn Cerminara",
+      "athlete_url": "https://www.ufc.com/athlete/katlyn-chookagian",
+      "fighter_id": "e872e9a9a902c045",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1988-12-28"
+        ],
+        "official_direct_profile": [
+          "1988-12-28"
+        ],
+        "registry_current_source": [
+          "1988-12-28"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1988-12-28"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Khaos Williams",
+      "athlete_url": "https://www.ufc.com/athlete/khaos-williams",
+      "fighter_id": "2558ae2e5671e318",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1994-03-30"
+        ],
+        "official_direct_profile": [
+          "1994-03-30"
+        ],
+        "registry_current_source": [
+          "1994-03-30"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1994-03-30"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "King Green",
+      "athlete_url": "https://www.ufc.com/athlete/bobby-green",
+      "fighter_id": "887961364be5ceb3",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1986-09-09"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1986-09-09"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1986-09-09"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Kyle Daukaus",
+      "athlete_url": "https://www.ufc.com/athlete/kyle-daukaus",
+      "fighter_id": "d6c0cdd7e467c440",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1993-02-27"
+        ],
+        "official_direct_profile": [
+          "1993-02-27"
+        ],
+        "registry_current_source": [
+          "1993-02-27"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1993-02-27"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Lone\u2019er Kavanagh",
+      "athlete_url": "https://www.ufc.com/athlete/loneer-kavanagh",
+      "fighter_id": "bb2c3c3a466224af",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1999-06-09"
+        ],
+        "official_direct_profile": [
+          "1999-06-09"
+        ],
+        "registry_current_source": [
+          "1999-06-09"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1999-06-09"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Louis Jourdain",
+      "athlete_url": "https://www.ufc.com/athlete/louis-jourdain",
+      "fighter_id": "91cd52cb92dfdd52",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1997-03-13"
+        ],
+        "official_direct_profile": [
+          "1997-03-13"
+        ],
+        "registry_current_source": [
+          "1997-03-13"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1997-03-13"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Lucas Armand",
+      "athlete_url": "https://www.ufc.com/athlete/lucas-armand",
+      "fighter_id": "20e04625a5395a06",
+      "matching_registry_rows": 0,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-10-26"
+        ],
+        "official_direct_profile": [
+          "1995-10-26"
+        ],
+        "registry_current_source": [],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-10-26"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Lucia Szabova",
+      "athlete_url": "https://www.ufc.com/athlete/lucia-szabova",
+      "fighter_id": "184f6ec4ee712e9f",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 1,
+      "verified_dob_comparison": {
+        "selected": [],
+        "official_direct_profile": [
+          "1997-12-23"
+        ],
+        "registry_current_source": [
+          "1997-12-23"
+        ],
+        "embedded_ufcstats_profile": [
+          "1997-12-23"
+        ],
+        "distinct_dates": [
+          "1997-12-23"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Mandel Nallo",
+      "athlete_url": "https://www.ufc.com/athlete/mandel-nallo",
+      "fighter_id": "8f4528c10bd34fab",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1989-07-26"
+        ],
+        "official_direct_profile": [
+          "1989-07-26"
+        ],
+        "registry_current_source": [
+          "1989-07-26"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1989-07-26"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Marc-Andre Barriault",
+      "athlete_url": "https://www.ufc.com/athlete/marc-andre-barriault",
+      "fighter_id": "8e9eb3fc86db0f7d",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1990-02-18"
+        ],
+        "official_direct_profile": [
+          "1990-02-18"
+        ],
+        "registry_current_source": [
+          "1990-02-18"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1990-02-18"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Marcus McGhee",
+      "athlete_url": "https://www.ufc.com/athlete/marcus-mcghee",
+      "fighter_id": "c0ac37a4a1133da9",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1990-05-07"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1990-05-07"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1990-05-07"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Melissa Croden",
+      "athlete_url": "https://www.ufc.com/athlete/melissa-croden",
+      "fighter_id": "51e2f44a8dbf6984",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1991-04-12"
+        ],
+        "official_direct_profile": [
+          "1991-04-12"
+        ],
+        "registry_current_source": [
+          "1991-04-12"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1991-04-12"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Mick Parkin",
+      "athlete_url": "https://www.ufc.com/athlete/mick-parkin",
+      "fighter_id": "0d5cc0170c1a7e71",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-10-02"
+        ],
+        "official_direct_profile": [
+          "1995-10-02"
+        ],
+        "registry_current_source": [
+          "1995-10-02"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-10-02"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Mike Malott",
+      "athlete_url": "https://www.ufc.com/athlete/mike-malott",
+      "fighter_id": "dd6103dd7127db1d",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1991-11-07"
+        ],
+        "official_direct_profile": [
+          "1991-11-07"
+        ],
+        "registry_current_source": [
+          "1991-11-07"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1991-11-07"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Montel Jackson",
+      "athlete_url": "https://www.ufc.com/athlete/montel-jackson",
+      "fighter_id": "cc1a8b4b38b92c6d",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1992-04-24"
+        ],
+        "official_direct_profile": [
+          "1992-04-24"
+        ],
+        "registry_current_source": [
+          "1992-04-24"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1992-04-24"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Nick Klein",
+      "athlete_url": "https://www.ufc.com/athlete/nick-klein",
+      "fighter_id": "7eaa5e31c2dd86aa",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-09-08"
+        ],
+        "official_direct_profile": [
+          "1995-09-08"
+        ],
+        "registry_current_source": [
+          "1995-09-08"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-09-08"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Nikita Krylov",
+      "athlete_url": "https://www.ufc.com/athlete/nikita-krylov",
+      "fighter_id": "1091d4d957141094",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1992-03-07"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1992-03-07"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1992-03-07"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Nurullo Aliev",
+      "athlete_url": "https://www.ufc.com/athlete/nurullo-aliev",
+      "fighter_id": "ca28cdf526d6b6e9",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "2000-12-08"
+        ],
+        "official_direct_profile": [
+          "2000-12-08"
+        ],
+        "registry_current_source": [
+          "2000-12-08"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "2000-12-08"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Payton Talbott",
+      "athlete_url": "https://www.ufc.com/athlete/payton-talbott",
+      "fighter_id": "6e743a33d56bdaa4",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1998-09-09"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1998-09-09"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1998-09-09"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Ramazan Temirov",
+      "athlete_url": "https://www.ufc.com/athlete/ramazan-temirov",
+      "fighter_id": "7d0a1968b38ca439",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1997-01-31"
+        ],
+        "official_direct_profile": [
+          "1997-01-31"
+        ],
+        "registry_current_source": [
+          "1997-01-31"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1997-01-31"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Raoni Barcelos",
+      "athlete_url": "https://www.ufc.com/athlete/raoni-barcelos",
+      "fighter_id": "b9f28e7045fdfce7",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1987-05-01"
+        ],
+        "official_direct_profile": [
+          "1987-05-01"
+        ],
+        "registry_current_source": [
+          "1987-05-01"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1987-05-01"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Raul Rosas Jr.",
+      "athlete_url": "https://www.ufc.com/athlete/raul-rosas-jr",
+      "fighter_id": "fe2babf95de24fb1",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "2004-10-08"
+        ],
+        "official_direct_profile": [
+          "2004-10-08"
+        ],
+        "registry_current_source": [
+          "2004-10-08"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "2004-10-08"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Ricky Simon",
+      "athlete_url": "https://www.ufc.com/athlete/ricky-simon",
+      "fighter_id": "5987b2458f4b5290",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1992-08-31"
+        ],
+        "official_direct_profile": [
+          "1992-08-31"
+        ],
+        "registry_current_source": [
+          "1992-08-31"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1992-08-31"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Rinya Nakamura",
+      "athlete_url": "https://www.ufc.com/athlete/rinya-nakamura",
+      "fighter_id": "d8c811df0386d5e8",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-03-23"
+        ],
+        "official_direct_profile": [
+          "1995-03-23"
+        ],
+        "registry_current_source": [
+          "1995-03-23"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-03-23"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Rizvan Kuniev",
+      "athlete_url": "https://www.ufc.com/athlete/rizvan-kuniev",
+      "fighter_id": "739fd4fbb5d862f4",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1992-03-10"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1992-03-10"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1992-03-10"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Robert Bryczek",
+      "athlete_url": "https://www.ufc.com/athlete/robert-bryczek",
+      "fighter_id": "f96856f9d69fd7e4",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1990-07-04"
+        ],
+        "official_direct_profile": [
+          "1990-07-04"
+        ],
+        "registry_current_source": [
+          "1990-07-04"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1990-07-04"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Roberto Soldic",
+      "athlete_url": "https://www.ufc.com/athlete/roberto-soldic",
+      "fighter_id": "5a229cbd9cdd28ca",
+      "matching_registry_rows": 0,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-01-25"
+        ],
+        "official_direct_profile": [
+          "1995-01-25"
+        ],
+        "registry_current_source": [],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-01-25"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Rodolfo Bellato",
+      "athlete_url": "https://www.ufc.com/athlete/rodolfo-bellato",
+      "fighter_id": "69898645d600abdb",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1996-02-05"
+        ],
+        "official_direct_profile": [
+          "1996-02-05"
+        ],
+        "registry_current_source": [
+          "1996-02-05"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1996-02-05"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Rodolfo Vieira",
+      "athlete_url": "https://www.ufc.com/athlete/rodolfo-vieira",
+      "fighter_id": "260e9e0d4954aea6",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1989-09-25"
+        ],
+        "official_direct_profile": [
+          "1989-09-25"
+        ],
+        "registry_current_source": [
+          "1989-09-25"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1989-09-25"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "SuYoung You",
+      "athlete_url": "https://www.ufc.com/athlete/suyoung-you",
+      "fighter_id": "a474aade8eb3a8f0",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1995-12-11"
+        ],
+        "official_direct_profile": [
+          "1995-12-11"
+        ],
+        "registry_current_source": [
+          "1995-12-11"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1995-12-11"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Tainara Lisboa",
+      "athlete_url": "https://www.ufc.com/athlete/tainara-lisboa",
+      "fighter_id": "2c5f5749569eef66",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1991-03-02"
+        ],
+        "official_direct_profile": [
+          "1991-03-02"
+        ],
+        "registry_current_source": [
+          "1991-03-02"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1991-03-02"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Timmy Cuamba",
+      "athlete_url": "https://www.ufc.com/athlete/timothy-cuamba",
+      "fighter_id": "0e46690e55a8df75",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1999-02-08"
+        ],
+        "official_direct_profile": [
+          "1999-02-08"
+        ],
+        "registry_current_source": [
+          "1999-02-08"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1999-02-08"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Tom Nolan",
+      "athlete_url": "https://www.ufc.com/athlete/tom-nolan",
+      "fighter_id": "6c3b2525436cf5d4",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "2000-03-08"
+        ],
+        "official_direct_profile": [
+          "2000-03-08"
+        ],
+        "registry_current_source": [
+          "2000-03-08"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "2000-03-08"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Valesca Machado",
+      "athlete_url": "https://www.ufc.com/athlete/norma-dyumont-viana-1",
+      "fighter_id": "a1a91dbf41a029c4",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1996-05-06"
+        ],
+        "official_direct_profile": [
+          "1996-05-06"
+        ],
+        "registry_current_source": [
+          "1996-05-06"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1996-05-06"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Vanessa Demopoulos",
+      "athlete_url": "https://www.ufc.com/athlete/vanessa-demopulos",
+      "fighter_id": "2c483cf443f38ece",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1988-09-22"
+        ],
+        "official_direct_profile": [
+          "1988-09-22"
+        ],
+        "registry_current_source": [
+          "1988-09-22"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1988-09-22"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Wang Cong",
+      "athlete_url": "https://www.ufc.com/athlete/wang-cong",
+      "fighter_id": "2997e7fe3c9d3d4a",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1992-05-15"
+        ],
+        "official_direct_profile": [
+          "1992-05-15"
+        ],
+        "registry_current_source": [
+          "1992-05-15"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1992-05-15"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Yazmin Jauregui",
+      "athlete_url": "https://www.ufc.com/athlete/yazmin-jauregui",
+      "fighter_id": "40cb680ae1cd331f",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1999-02-28"
+        ],
+        "official_direct_profile": [
+          "1999-02-28"
+        ],
+        "registry_current_source": [
+          "1999-02-28"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1999-02-28"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Eric Nolan",
+      "athlete_url": "https://www.ufc.com/athlete/eric-nolan",
+      "fighter_id": "64b12fe31be7560c",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1997-09-13"
+        ],
+        "official_direct_profile": [
+          "1997-09-13"
+        ],
+        "registry_current_source": [
+          "1997-09-13"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1997-09-13"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Josiah Harrell",
+      "athlete_url": "https://www.ufc.com/athlete/josiah-harrell",
+      "fighter_id": "e5864a42c80294f6",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1998-11-13"
+        ],
+        "official_direct_profile": [
+          "1998-11-13"
+        ],
+        "registry_current_source": [
+          "1998-11-13"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1998-11-13"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Louie Sutherland",
+      "athlete_url": "https://www.ufc.com/athlete/louie-sutherland",
+      "fighter_id": "cdb7b38b1b357f26",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1994-02-08"
+        ],
+        "official_direct_profile": [
+          "1994-02-08"
+        ],
+        "registry_current_source": [
+          "1994-02-08"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1994-02-08"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Nate Landwehr",
+      "athlete_url": "https://www.ufc.com/athlete/nate-landwehr",
+      "fighter_id": "583ee11abddfc581",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1988-06-06"
+        ],
+        "official_direct_profile": [
+          "1988-06-07"
+        ],
+        "registry_current_source": [
+          "1988-06-06"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1988-06-06",
+          "1988-06-07"
+        ],
+        "conflict": true
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Steven Koslow",
+      "athlete_url": "https://www.ufc.com/athlete/steven-koslow",
+      "fighter_id": "84512339473dd300",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1997-01-22"
+        ],
+        "official_direct_profile": [
+          "1997-01-22"
+        ],
+        "registry_current_source": [
+          "1997-01-22"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1997-01-22"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Tanner Boser",
+      "athlete_url": "https://www.ufc.com/athlete/tanner-boser",
+      "fighter_id": "04c8b08b16a5b99e",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1991-08-02"
+        ],
+        "official_direct_profile": [
+          "1991-08-02"
+        ],
+        "registry_current_source": [
+          "1991-08-02"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1991-08-02"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    },
+    {
+      "name": "Natalia Silva",
+      "athlete_url": "https://www.ufc.com/athlete/natalia-silva",
+      "fighter_id": "262d32ebda89efc4",
+      "matching_registry_rows": 1,
+      "embedded_profile_count": 0,
+      "verified_dob_comparison": {
+        "selected": [
+          "1997-02-03"
+        ],
+        "official_direct_profile": [],
+        "registry_current_source": [
+          "1997-02-03"
+        ],
+        "embedded_ufcstats_profile": [],
+        "distinct_dates": [
+          "1997-02-03"
+        ],
+        "conflict": false
+      },
+      "new_route_authority_from_registry_fields_alone": false
+    }
+  ],
+  "embedded_captures_independently_decoded": [
+    {
+      "fighter_id": "184f6ec4ee712e9f",
+      "profile_name": [
+        "Lucia Szabova"
+      ],
+      "dob": "1997-12-23",
+      "profile": true,
+      "challenge": false,
+      "extracted_raw_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\embedded-ufcstats-184f6ec4ee712e9f-67d833deafe2.html",
+        "bytes": 14407,
+        "sha256": "67d833deafe2ee19248bb9927d6dcea80cd6a2898da7ffe87070295f23d8f036"
+      },
+      "registry_csv_data_row_index": 2,
+      "json_field": "identity_binding_json",
+      "json_pointer": "/evidence/captures/2"
+    },
+    {
+      "fighter_id": "e9f9add1481fc11c",
+      "profile_name": [],
+      "dob": null,
+      "profile": false,
+      "challenge": true,
+      "extracted_raw_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\embedded-ufcstats-e9f9add1481fc11c-e57bb9b43a1f.html",
+        "bytes": 2998,
+        "sha256": "e57bb9b43a1f15e29f355d8ab8e18a801a5900504da05bac43a16f8364723540"
+      },
+      "registry_csv_data_row_index": 2,
+      "json_field": "identity_binding_json",
+      "json_pointer": "/evidence/captures/49"
+    },
+    {
+      "fighter_id": "e9f9add1481fc11c",
+      "profile_name": [
+        "Javad Mahjoub"
+      ],
+      "dob": "1992-05-26",
+      "profile": true,
+      "challenge": false,
+      "extracted_raw_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\embedded-ufcstats-e9f9add1481fc11c-42323b152ad9.html",
+        "bytes": 12491,
+        "sha256": "42323b152ad9ee556f3caab1e3ec38074031b75917af117e1708df11baf4f5ad"
+      },
+      "registry_csv_data_row_index": 2,
+      "json_field": "identity_binding_json",
+      "json_pointer": "/evidence/captures/50"
+    }
+  ],
+  "same_name_competing_ufcstats_carriers": [],
+  "counts": {
+    "exact_remaining_entries": 77,
+    "registry_rows_total": 1011,
+    "matching_registry_rows": 75,
+    "missing_registry_rows": 2,
+    "unique_embedded_identity_documents": 1,
+    "embedded_profile_identities": 2,
+    "dob_conflicts": 2
+  },
+  "adjudications": [
+    {
+      "name": "Javad Mahjoub",
+      "identity_accepted": false,
+      "runtime_binding_eligible": false,
+      "decision": "WITHHOLD_UNRESOLVED_ONE_YEAR_DOB_CONFLICT_AND_SEPARATE_SELECTED_PROFILE_GAP",
+      "facts": "Actual retained UFCStats profile explicitly names Javad Mahjoub at exact ID with DOB1992-05-26. New official exact route/profile says1991-05-26. Retained and newly acquired challenge pages remain semantically rejected. No date correction or name-only bridge is established.",
+      "supersedes_scope": "Earlier javad-identity-only01 correctly rejected the fresh challenge, but the statement that no retained direct profile had been found is extended by this embedded capture discovery. Preserve all earlier bytes."
+    },
+    {
+      "name": "Nate Landwehr",
+      "identity_accepted_as_previously_reviewed": true,
+      "decision": "PRESERVE_EXACT_REVIEWED_DATED_BOUT_IDENTITY_AND_UNRESOLVED_BIOGRAPHICAL_DATE_DISCREPANCY",
+      "facts": "Registry and selected profile repeat1988-06-06; official direct source says1988-06-07. This is the same already disclosed one-day DOB conflict, not a new person/route conflict. Independently accepted exact route/name and dated Dooho Choi/Cub Swanson bout matches remain identity authority. No DOB is repaired."
+    },
+    {
+      "name": "Lucia Szabova",
+      "identity_accepted": true,
+      "runtime_binding_eligible": false,
+      "decision": "REUSE_VALID_SAVED_IDENTITY_SUPPORT_WITHHOLD_MISSING_SELECTED_PROFILE",
+      "facts": "Embedded exact-ID full profile names Lucia Szabova with DOB1997-12-23 matching independently reviewed official source. This supplements valid earlier saved verification for the exact connection. Selected primary/supplemental profile absence remains."
+    }
+  ],
+  "integration_effect": "No additional ambiguity in the75 proposed runtime bindings was found. Preserve75 added bindings98/100 sides and two runtime-withheld entries; Javad is unresolved identity plus profile gap, Lucia established identity plus profile gap.",
+  "accounting_qualification": "The earlier standalone2755-file source search missed embedded base64 captures in the selected registry. Its gap statements were bounded observations, not exhaustive prior-source absence. All60 actual source requests remain issued/consumed; this discovery neither erases nor refunds/retries them. Do not claim all77 were previously verified.",
+  "limits": [
+    "Registry current_name, DOB, preferred carrier and resolved status alone do not establish exact current official route authority.",
+    "Scope is this exact selected registry, matching selected carrier IDs, both identity JSON fields and exact captured sources; not all possible retained storage.",
+    "No source request, challenge execution, selected-data mutation, runtime source execution, method/timing authority or hosted action in this review."
+  ]
+}

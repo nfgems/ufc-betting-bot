@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "scope": "active_roster_profile_coverage_only",
+  "model_backfill_allowed": false,
+  "reviewed_at_utc": "2026-08-30T00:00:00Z",
+  "binding_method": "exact_official_route_plus_unique_ufcstats_performance_fingerprint_plus_official_result_and_exact_fight_anchor",
+  "performance_fingerprint_population": 4512,
+  "certificates": [
+    {
+      "certificate_id": "COV-R001",
+      "official_name": "Austin Tweedy",
+      "official_athlete_url": "https://www.ufc.com/athlete/austin-tweedy",
+      "official_source_entity_id": "athlete:austin-tweedy",
+      "ufcstats_name": "Austin Tweedy",
+      "stable_ufcstats_id": "885adaff8fe15cf7",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/885adaff8fe15cf7",
+      "profile_field": "reach",
+      "normalized_value_inches": 68.0,
+      "performance_fingerprint": {
+        "slpm": 4.29,
+        "sapm": 6.43,
+        "td_avg": 0.0,
+        "sub_avg": 0.0
+      },
+      "fight_anchor": {
+        "opponent": "Te Edwards",
+        "event_date": "2018-06-26",
+        "fight_id": "fc0ff1b09ff58b57",
+        "ufcstats_fight_url": "http://ufcstats.com/fight-details/fc0ff1b09ff58b57",
+        "official_result_url": "https://www.ufc.com/news/shevchenko-sisters-make-history-dwtncs-week-3?language_content_entity=en"
+      },
+      "legacy_official_url": "https://www.ufc.com/node/28739"
+    },
+    {
+      "certificate_id": "COV-R002",
+      "official_name": "Dashawn Boatwright",
+      "official_athlete_url": "https://www.ufc.com/athlete/dashawn-boatwright",
+      "official_source_entity_id": "athlete:dashawn-boatwright",
+      "ufcstats_name": "Dashawn Boatwright",
+      "stable_ufcstats_id": "046a85108610c0d2",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/046a85108610c0d2",
+      "profile_field": "reach",
+      "normalized_value_inches": 76.0,
+      "performance_fingerprint": {
+        "slpm": 0.0,
+        "sapm": 52.5,
+        "td_avg": 0.0,
+        "sub_avg": 0.0
+      },
+      "fight_anchor": {
+        "opponent": "Alonzo Menifield",
+        "event_date": "2018-06-12",
+        "fight_id": "aec020121409ce53",
+        "ufcstats_fight_url": "http://ufcstats.com/fight-details/aec020121409ce53",
+        "official_result_url": "https://www.ufc.com/news/menifield-hardy-earn-contracts-first-week-dwtncs"
+      },
+      "legacy_official_url": "https://www.ufc.com/fighter/Dashawn-Boatwright"
+    },
+    {
+      "certificate_id": "COV-R003",
+      "official_name": "Garrett Gross",
+      "official_athlete_url": "https://www.ufc.com/athlete/garrett-gross",
+      "official_source_entity_id": "athlete:garrett-gross",
+      "ufcstats_name": "Garrett Gross",
+      "stable_ufcstats_id": "6741218640534d8b",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/6741218640534d8b",
+      "profile_field": "reach",
+      "normalized_value_inches": 69.0,
+      "performance_fingerprint": {
+        "slpm": 2.39,
+        "sapm": 1.67,
+        "td_avg": 0.0,
+        "sub_avg": 0.0
+      },
+      "fight_anchor": {
+        "opponent": "Roosevelt Roberts",
+        "event_date": "2018-07-31",
+        "fight_id": "2116ea793dfe9290",
+        "ufcstats_fight_url": "http://ufcstats.com/fight-details/2116ea793dfe9290",
+        "official_result_url": "https://www.ufc.com/news/four-more-contracts-handed-out-week-7-dwtncs"
+      },
+      "legacy_official_url": "https://www.ufc.com/fighter/Garrett-Gross"
+    },
+    {
+      "certificate_id": "COV-R004",
+      "official_name": "Julius Anglickas",
+      "official_athlete_url": "https://www.ufc.com/athlete/julius-anglickas",
+      "official_source_entity_id": "athlete:julius-anglickas",
+      "ufcstats_name": "Julius Anglickas",
+      "stable_ufcstats_id": "e20ad078a7d63361",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/e20ad078a7d63361",
+      "profile_field": "reach",
+      "normalized_value_inches": 75.0,
+      "performance_fingerprint": {
+        "slpm": 4.62,
+        "sapm": 1.86,
+        "td_avg": 4.47,
+        "sub_avg": 1.12
+      },
+      "fight_anchor": {
+        "opponent": "Karl Reed",
+        "event_date": "2019-08-13",
+        "fight_id": "83daff5f87126976",
+        "ufcstats_fight_url": "http://ufcstats.com/fight-details/83daff5f87126976",
+        "official_result_url": "https://www.ufc.com/news/dana-whites-contender-series-week-8-results"
+      },
+      "legacy_official_url": ""
+    },
+    {
+      "certificate_id": "COV-R005",
+      "official_name": "Rico DiSciullo",
+      "official_athlete_url": "https://www.ufc.com/athlete/rico-disciullo",
+      "official_source_entity_id": "athlete:rico-disciullo",
+      "ufcstats_name": "Rico DiSciullo",
+      "stable_ufcstats_id": "ec7f7263bf36579b",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/ec7f7263bf36579b",
+      "profile_field": "reach",
+      "normalized_value_inches": 71.0,
+      "performance_fingerprint": {
+        "slpm": 1.71,
+        "sapm": 4.41,
+        "td_avg": 0.0,
+        "sub_avg": 0.0
+      },
+      "fight_anchor": {
+        "opponent": "Montel Jackson",
+        "event_date": "2018-06-12",
+        "fight_id": "8319e8fb8ce85409",
+        "ufcstats_fight_url": "http://ufcstats.com/fight-details/8319e8fb8ce85409",
+        "official_result_url": "https://www.ufc.com/news/menifield-hardy-earn-contracts-first-week-dwtncs"
+      },
+      "legacy_official_url": "https://www.ufc.com/fighter/Rico-Disciullo"
+    },
+    {
+      "certificate_id": "COV-R006",
+      "official_name": "Sean Lally",
+      "official_athlete_url": "https://www.ufc.com/athlete/sean-lally",
+      "official_source_entity_id": "athlete:sean-lally",
+      "ufcstats_name": "Sean Lally",
+      "stable_ufcstats_id": "e62ce041bb7aeb1f",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/e62ce041bb7aeb1f",
+      "profile_field": "reach",
+      "normalized_value_inches": 74.5,
+      "performance_fingerprint": {
+        "slpm": 5.34,
+        "sapm": 7.23,
+        "td_avg": 0.0,
+        "sub_avg": 0.0
+      },
+      "fight_anchor": {
+        "opponent": "Chris Curtis",
+        "event_date": "2018-06-12",
+        "fight_id": "a0b044082c8ae962",
+        "ufcstats_fight_url": "http://ufcstats.com/fight-details/a0b044082c8ae962",
+        "official_result_url": "https://www.ufc.com/news/menifield-hardy-earn-contracts-first-week-dwtncs"
+      },
+      "legacy_official_url": "https://www.ufc.com/fighter/Sean-Lally"
+    },
+    {
+      "certificate_id": "COV-R007",
+      "official_name": "Yazan Hajeh",
+      "official_athlete_url": "https://www.ufc.com/athlete/yazan-hajeh",
+      "official_source_entity_id": "athlete:yazan-hajeh",
+      "ufcstats_name": "Yazan Hajeh",
+      "stable_ufcstats_id": "4955c524c2a71469",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/4955c524c2a71469",
+      "profile_field": "reach",
+      "normalized_value_inches": 73.0,
+      "performance_fingerprint": {
+        "slpm": 1.54,
+        "sapm": 17.44,
+        "td_avg": 0.0,
+        "sub_avg": 0.0
+      },
+      "fight_anchor": {
+        "opponent": "Matt Sayles",
+        "event_date": "2018-06-19",
+        "fight_id": "4fed5538a2156719",
+        "ufcstats_fight_url": "http://ufcstats.com/fight-details/4fed5538a2156719",
+        "official_result_url": "https://www.ufc.com/news/historic-night-ufc-hopefuls-week-2-dwtncs"
+      },
+      "legacy_official_url": "https://www.ufc.com/fighter/Yazan-Hajeh"
+    }
+  ]
+}

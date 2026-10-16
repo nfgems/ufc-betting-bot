@@ -363,11 +363,13 @@
     </header>
 
     <main class="container" id="executionMain" aria-busy="true">
+        {% include "refresh_status.html" %}
         <section class="page-head">
             <div class="page-title">
                 <div class="eyebrow">Decision audit</div>
                 <h2>Execution Breakdown</h2>
                 <p id="pageMeta" role="status" aria-live="polite">Follow every fight from strategy signal to final order decision.</p>
+                <p class="meta">Edges use % for the probability gap: 74.7% versus 72.0% displays +2.7%. Expected profit is a separate calculation.</p>
             </div>
             <div class="controls">
                 <label class="control" for="cycleSelect">
@@ -417,6 +419,7 @@
         </section>
     </main>
 
+    <script src="{{ url_for('static', filename='dashboard-format.js') }}"></script>
     <script>
         const ACTIVE_PATHS = ['S', 'C', 'M'];
         const PATH_LABELS = {
@@ -490,11 +493,12 @@
 
         function fmtDate(value, options={}) {
             if (!value) return 'Unknown time';
-            const date = new Date(value);
-            if (Number.isNaN(date.getTime())) return String(value);
-            return date.toLocaleString([], {
-                month:'short', day:'numeric', hour:'numeric', minute:'2-digit', ...options,
-            });
+            const date = UFCDisplay.parseTimestamp(value, {legacyUtc:true});
+            if (!date) return 'Unknown time';
+            return new Intl.DateTimeFormat('en-US', {
+                timeZone:'America/New_York', month:'short', day:'numeric',
+                hour:'numeric', minute:'2-digit', timeZoneName:'short', ...options,
+            }).format(date);
         }
 
         function fmtEventDate(value) {
@@ -502,6 +506,7 @@
         }
 
         function fmtPct(value, signed=false) {
+            if (signed) return UFCDisplay.formatPoints(value);
             if (value === undefined || value === null || value === '') return '—';
             const n = Number(value);
             if (!Number.isFinite(n)) return '—';
@@ -578,8 +583,7 @@
         }
 
         function formatNarrative(value) {
-            const text = String(value || '');
-            return text.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?/g, match => fmtDate(match));
+            return UFCDisplay.formatNarrative(value);
         }
 
         function formatWindow(window) {

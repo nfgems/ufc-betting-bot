@@ -1,0 +1,96 @@
+{
+  "reviewer": "independent seal_review subagent",
+  "reviewed_utc": "2026-09-20T17:43:56.982322+00:00",
+  "pass": true,
+  "decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+  "name": "Ailin Perez",
+  "athlete_url": "https://www.ufc.com/athlete/ailin-perez",
+  "fighter_id": "06e4245d16fc5315",
+  "checks": {
+    "response_exact_hash_and_size": true,
+    "successful_direct_official_receipt": true,
+    "canonical_exact": true,
+    "h1_exact": true,
+    "dated_egger_bout_on_new_page": true,
+    "selected_profile_unique": true,
+    "selected_egger_bout_exact": true,
+    "selected_route_owner_unique": true,
+    "selected_profile_pin": true,
+    "selected_fights_pin": true,
+    "selected_roster_pin": true,
+    "prior_dated_article_pin": true
+  },
+  "response_receipt": {
+    "retrieved_at_utc": "2026-09-20T17:42:25.404432+00:00",
+    "started_utc": "2026-09-20T17:42:25.251680+00:00",
+    "requested_url": "https://www.ufc.com/athlete/ailin-perez",
+    "final_url": "https://www.ufc.com/athlete/ailin-perez",
+    "status_code": 200,
+    "redirect_chain": [],
+    "response_bytes": 138748,
+    "response_sha256": "6facce91d87b64718714e1a3f40ec0d5372f3a506f2719a8f502984d49393a56",
+    "content_type": "text/html; charset=UTF-8",
+    "outcome": "ok"
+  },
+  "receipt_sha256": "a93d4832fe94a4a39fc69eef54258749ad1b9fc37fe7f167e9c278b30ac314c4",
+  "owner_authorization_sha256": "9d854918198c75803254cfbabfec06e5f0227e43471b797a6eb4e19a43e2a2ab",
+  "canonical_urls": [
+    "https://www.ufc.com/athlete/ailin-perez"
+  ],
+  "h1": [
+    "Ailin Perez"
+  ],
+  "selected_profile": [
+    {
+      "name": "Ailin Perez",
+      "fighter_url": "http://ufcstats.com/fighter-details/06e4245d16fc5315",
+      "dob": "Oct 05, 1994"
+    }
+  ],
+  "selected_bout": [
+    {
+      "event_date": "2022-09-03",
+      "event_name": "UFC Fight Night: Gane vs. Tuivasa",
+      "fighter_a": "Stephanie Egger",
+      "fighter_b": "Ailin Perez",
+      "fighter_a_id": "5e6294b37bbef029",
+      "fighter_b_id": "06e4245d16fc5315"
+    }
+  ],
+  "selected_source_pins": {
+    "profiles": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+      "sha256": "9d054fb8c03209baedeb44d9e69ef577adef90d81cff38b0e10488c67c00b2eb"
+    },
+    "fights": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\processed\\fights_cleaned.csv",
+      "sha256": "bb9de5b25456fc6a74c965b28bef682b5f70aac4205d1cddad0b2667ccaaf2f6"
+    },
+    "roster": {
+      "path": "C:\\Temp\\v9-fighter-matching-fix-20260920-01\\source\\tests\\fixtures\\runtime_fighter_bindings\\ufc_active_roster_official.csv",
+      "sha256": "a17cc92fdab735673128425b6330395c19a251d7c7b64e52d80431664f9f7270"
+    }
+  },
+  "previous_review_sha256": "57004b8f11a00cd7afadffc18873d36e7f9629b7ade0174a8ed92fd6b07849be",
+  "prior_official_article": {
+    "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2022-09-03-ufc-fight-night-gane-vs-tuivasa-1.html",
+    "bytes": 104279,
+    "sha256": "6565e72839db210b6e3471612a0db804c074e7119eb8202ed74f2f24e1aed1f0",
+    "receipt": {
+      "retrieved_at_utc": "2026-08-29T04:39:44.160675Z",
+      "route": "ufc_official_weighin_article_https",
+      "requested_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-gane-vs-tuivasa-paris",
+      "final_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-gane-vs-tuivasa-paris",
+      "attempt": "1",
+      "status_code": "200",
+      "redirect_chain_json": "[]",
+      "response_bytes": "104279",
+      "response_sha256": "6565e72839db210b6e3471612a0db804c074e7119eb8202ed74f2f24e1aed1f0",
+      "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2022-09-03-ufc-fight-night-gane-vs-tuivasa-1.html",
+      "outcome": "ok",
+      "error": ""
+    }
+  },
+  "scope": "Narrow supplemental selected-runtime exact route to ID binding. New direct original receipt closes prior custody prerequisite; prior withheld decision is historical and remains untouched. No alternate Aylin route, generic spelling alias, model/training change or hosted prediction success inferred.",
+  "review_actions": "Read-only local saved files only; reviewer made no network/provider/hosted calls."
+}

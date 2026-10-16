@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import PROCESSED_DATA_DIR
 from src.data.fighter_lookup import build_fight_features
+from src.data.name_utils import fighter_identity_key
 from src.model.predict import predict_fight
 from src.model.train import load_model
 from src.model.training_spec import resolve_named_training_spec
@@ -79,9 +80,28 @@ def main() -> int:
     seen: set[str] = set()
     has_history = []
     for row in df.itertuples(index=False):
-        has_history.append(row.fighter_a in seen and row.fighter_b in seen)
-        seen.add(row.fighter_a)
-        seen.add(row.fighter_b)
+        raw_a_id = getattr(row, "fighter_a_id", None)
+        raw_b_id = getattr(row, "fighter_b_id", None)
+        fighter_a = fighter_identity_key(
+            row.fighter_a,
+            raw_a_id if pd.notna(raw_a_id) else None,
+        )
+        fighter_b = fighter_identity_key(
+            row.fighter_b,
+            raw_b_id if pd.notna(raw_b_id) else None,
+        )
+        has_history.append(
+            bool(
+                fighter_a
+                and fighter_b
+                and fighter_a in seen
+                and fighter_b in seen
+            )
+        )
+        if fighter_a:
+            seen.add(fighter_a)
+        if fighter_b:
+            seen.add(fighter_b)
     df = df[pd.Series(has_history, index=df.index)]
     df = df[(df["event_date"] >= pd.Timestamp(args.start)) & df["target"].notna()]
     if args.limit:
@@ -102,6 +122,16 @@ def main() -> int:
                 is_title_bout=bool(row.get("is_title_bout", 0)),
                 num_rounds=int(row["num_rounds_feat"]) if pd.notna(row.get("num_rounds_feat")) else 3,
                 is_empty_arena=row.get("is_empty_arena"),
+                fighter_a_id=(
+                    str(row.get("fighter_a_id")).strip()
+                    if pd.notna(row.get("fighter_a_id"))
+                    else None
+                ),
+                fighter_b_id=(
+                    str(row.get("fighter_b_id")).strip()
+                    if pd.notna(row.get("fighter_b_id"))
+                    else None
+                ),
                 as_of_date=as_of,
                 training_spec=spec,
                 processed_data_dir=PROCESSED_DATA_DIR,

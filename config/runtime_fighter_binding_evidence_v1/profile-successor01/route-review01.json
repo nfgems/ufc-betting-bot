@@ -1,0 +1,413 @@
+{
+  "schema": 1,
+  "kind": "independent_retained_source_route_assessment",
+  "reviewer": "/root/routes independent of acquisitions, predecessor reviews and successor builder",
+  "created_utc": "2026-09-21T00:51:35.934944+00:00",
+  "pass": true,
+  "verdict": "TWO_EXACT_ROUTE_ADDITIONS_SUPPORTED_FOR_LOCAL_SUCCESSOR_REVIEW",
+  "derivation_script_pin": {
+    "path": "C:\\Temp\\v9-profile-successor-20260920-01\\routes\\derive_route_additions01.py",
+    "bytes": 19997,
+    "sha256": "075d67617f2be56bbb71f69d9b254bea097f7ff02c9b6752236f352949367134"
+  },
+  "baseline_selection_pin": {
+    "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\selected-source-manifest.json",
+    "bytes": 91899,
+    "sha256": "385b3af3c1f9585050d61a3a42b155f0a5bd403ffed12e5f3c0c9bff12cd7570"
+  },
+  "source_pins": {
+    "active_roster": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\active_roster\\ufc_active_roster_official.csv",
+      "bytes": 358499,
+      "sha256": "a17cc92fdab735673128425b6330395c19a251d7c7b64e52d80431664f9f7270"
+    },
+    "accepted_active_roster": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\accepted_active_roster\\accepted-active-roster.csv",
+      "bytes": 357056,
+      "sha256": "f1e7d9fbd00e61a2104e66a3461ba672e180656d18fba18edb8c7d1110d57a73"
+    },
+    "accepted_roster_snapshot": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\accepted_roster_snapshot\\2026-09-05--169491af5d3c6a999f61286d1802e023ea46f5ba50352d81599e22adcb74104e.csv",
+      "bytes": 173536,
+      "sha256": "169491af5d3c6a999f61286d1802e023ea46f5ba50352d81599e22adcb74104e"
+    },
+    "owner_registry": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\owner_registry\\rosterwatch_owner_registry.csv",
+      "bytes": 113647492,
+      "sha256": "d3b7427aee29caa3fc46ea95c7bc7d19fb9d6c8c4e53a8a5a0788ea43b4f417d"
+    },
+    "profiles": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+      "bytes": 673721,
+      "sha256": "9d054fb8c03209baedeb44d9e69ef577adef90d81cff38b0e10488c67c00b2eb"
+    },
+    "identity_aliases": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\identity_aliases\\identity-aliases.json",
+      "bytes": 9971,
+      "sha256": "72683e8f15125767898dcbbd35549b47e6592ddb1c98407ae8be9bd0c128a6db"
+    }
+  },
+  "prior_runtime_artifact_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\frozen-source02\\config\\runtime_fighter_bindings_v1.json",
+    "bytes": 95541,
+    "sha256": "607bd897a17bb21cc5743e20de95663c4992ca146f469ce2b1fbb3f6af27c7f3"
+  },
+  "inspected_runtime_code_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\frozen-source02\\src\\data\\runtime_identity_bindings.py",
+    "bytes": 13014,
+    "sha256": "2b2e561b78fbae06f9bf0300695efd04b126c21e4bd7b3018470ae690471df82"
+  },
+  "fighters": [
+    {
+      "name": "Lucia Szabova",
+      "fighter_id": "184f6ec4ee712e9f",
+      "official_facts": {
+        "canonical": [
+          "https://www.ufc.com/athlete/lucia-szabova"
+        ],
+        "h1": [
+          "Lucia Szabova"
+        ],
+        "person": {
+          "@type": "Person",
+          "name": "Lucia Szabova",
+          "familyName": "Szabova",
+          "givenName": "Lucia",
+          "url": "https://www.ufc.com/athlete/lucia-szabova",
+          "birthDate": "1997-12-23"
+        }
+      },
+      "ufcstats_facts": {
+        "profile_names": [
+          "Lucia Szabova"
+        ],
+        "dob_literal": "Dec 23, 1997",
+        "semantic_profile": true,
+        "fight_detail_links": [
+          "http://ufcstats.com/fight-details/1bf2edb30de4c976",
+          "http://ufcstats.com/fight-details/1bf2edb30de4c976"
+        ]
+      },
+      "selected_owner_data_row_one_based": 359,
+      "selected_owner_row": {
+        "official_name": "Lucia Szabova",
+        "official_athlete_url": "",
+        "nickname": "",
+        "division": "",
+        "record": "",
+        "slug_name": "lucia szabova",
+        "profile_name": "",
+        "canonical_athlete_url": "",
+        "profile_division": "",
+        "profile_record": "",
+        "profile_status": "status_unknown",
+        "profile_source_tag": "",
+        "birthplace": "",
+        "age": "",
+        "height": "",
+        "reach": "",
+        "weight": "",
+        "octagon_debut": "",
+        "alternate_slug_names": "",
+        "official_profile_fetch_outcome": "",
+        "official_url_identity_valid": "",
+        "official_url_identity_status": "",
+        "official_url_identity_reason": "",
+        "ufcstats_name": "Lucia Szabova",
+        "ufcstats_url": "http://ufcstats.com/fighter-details/184f6ec4ee712e9f",
+        "ufcstats_resolution": "rosterwatch_reviewed_carrier",
+        "combat_sport": "mma",
+        "combat_sport_reason": "rosterwatch_authoritative_membership",
+        "combat_sport_profile_url": "",
+        "coverage_eligible": "False",
+        "active_roster_status_reason": "rosterwatch_authoritative_current",
+        "official_profile_cached_biography_fields": "",
+        "official_profile_biography_restoration_reason": "",
+        "active_roster_live_present": "True",
+        "active_roster_retained_from_previous": "False",
+        "active_roster_retained_at_utc": "",
+        "active_roster_first_missing_at_utc": "",
+        "active_roster_consecutive_missing_syncs": "0",
+        "active_roster_missing_from_live_reason": "",
+        "active_roster_sync_generation_id": "v9-proposed-bf40d42d2a8cce01e59d"
+      },
+      "snapshot_data_row_one_based": 358,
+      "snapshot_row": {
+        "fighter": "Lucia Szabova",
+        "date_of_birth": "1997-12-23",
+        "tuf": "FALSE",
+        "r2ufc": "FALSE",
+        "dwcs": "FALSE",
+        "pride": "FALSE",
+        "sf": "FALSE",
+        "wec": "FALSE",
+        "bmf": "FALSE",
+        "hof": "NA",
+        "country": "Slovakia",
+        "gender": "female",
+        "weightclass": "women's bantamweight",
+        "current_rank": "16",
+        "rank_flag": "NA",
+        "current_p4p": "16",
+        "p4p_flag": "NA",
+        "peak_rank": "16",
+        "peak_p4p": "16",
+        "bouts": "0",
+        "wins": "NA",
+        "win_types": "NA",
+        "losses": "NA",
+        "loss_types": "NA",
+        "streak": "NA",
+        "best_streak": "NA",
+        "bonus": "0",
+        "slot": "NA",
+        "elo": "2773",
+        "peak_elo": "NA",
+        "opp_elo": "2385",
+        "debut": "NA",
+        "debut_result": "NA",
+        "prev_bout": "NA",
+        "prev_result": "NA",
+        "next_date": "2026-10-31",
+        "next_opp": "Tainara Lisboa"
+      },
+      "registry_capture_location": {
+        "source_pin": {
+          "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\owner_registry\\rosterwatch_owner_registry.csv",
+          "bytes": 113647492,
+          "sha256": "d3b7427aee29caa3fc46ea95c7bc7d19fb9d6c8c4e53a8a5a0788ea43b4f417d"
+        },
+        "holder_data_row_one_based": 3,
+        "holder_owner": "rosterwatch:v1:8b9e6bba54b62df606005b535b6a061200ef51368d5b3cdb35efe7d2e0a46866",
+        "field": "identity_binding_json",
+        "capture_index": 2,
+        "metadata": {
+          "capture_complete": true,
+          "captured_at": "2026-09-03T05:22:23.251928+00:00",
+          "decode_complete": true,
+          "decoded_sha256": "67d833deafe2ee19248bb9927d6dcea80cd6a2898da7ffe87070295f23d8f036",
+          "decoded_size": 14407,
+          "error": "",
+          "semantic_evidence_eligible": true,
+          "status_code": 200,
+          "url": "http://ufcstats.com/fighter-details/184f6ec4ee712e9f"
+        }
+      },
+      "route_already_owned": false,
+      "duplicate_selected_id_or_name": false,
+      "reviewer_application_imports": 0,
+      "adjudication": "Accept exact identity using independently captured official canonical/person/name and matching exact-ID UFCStats name plus full DOB. This is identity support only; Lucia field decision remains unresolved and model-safe DOB unknown."
+    },
+    {
+      "name": "Javad Mahjoub",
+      "fighter_id": "e9f9add1481fc11c",
+      "official_facts": {
+        "canonical": [
+          "https://www.ufc.com/athlete/javad-mahjoub"
+        ],
+        "h1": [
+          "Javad Mahjoub"
+        ],
+        "person": {
+          "@type": "Person",
+          "name": "Javad Mahjoub",
+          "familyName": "Mahjoub",
+          "givenName": "Javad",
+          "url": "https://www.ufc.com/athlete/javad-mahjoub",
+          "birthDate": "1991-05-26",
+          "subjectOf": {
+            "@type": "SportsEvent",
+            "name": "UFC Fight Night",
+            "startDate": "2026-10-18T00:00:00",
+            "url": "https://www.ufc.com/event/ufc-fight-night-october-17-2026#13131",
+            "location": "Rogers Place, Edmonton Canada"
+          }
+        }
+      },
+      "ufcstats_facts": {
+        "profile_names": [
+          "Javad Mahjoub"
+        ],
+        "dob_literal": "May 26, 1992",
+        "semantic_profile": true,
+        "fight_detail_links": []
+      },
+      "selected_owner_data_row_one_based": 610,
+      "selected_owner_row": {
+        "official_name": "Javad Mahjoub",
+        "official_athlete_url": "",
+        "nickname": "",
+        "division": "",
+        "record": "",
+        "slug_name": "javad mahjoub",
+        "profile_name": "",
+        "canonical_athlete_url": "",
+        "profile_division": "",
+        "profile_record": "",
+        "profile_status": "status_unknown",
+        "profile_source_tag": "",
+        "birthplace": "",
+        "age": "",
+        "height": "",
+        "reach": "",
+        "weight": "",
+        "octagon_debut": "",
+        "alternate_slug_names": "",
+        "official_profile_fetch_outcome": "",
+        "official_url_identity_valid": "",
+        "official_url_identity_status": "",
+        "official_url_identity_reason": "",
+        "ufcstats_name": "Javad Mahjoub",
+        "ufcstats_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+        "ufcstats_resolution": "rosterwatch_automatic_evidence",
+        "combat_sport": "mma",
+        "combat_sport_reason": "rosterwatch_authoritative_membership",
+        "combat_sport_profile_url": "",
+        "coverage_eligible": "False",
+        "active_roster_status_reason": "rosterwatch_authoritative_current",
+        "official_profile_cached_biography_fields": "",
+        "official_profile_biography_restoration_reason": "",
+        "active_roster_live_present": "True",
+        "active_roster_retained_from_previous": "False",
+        "active_roster_retained_at_utc": "",
+        "active_roster_first_missing_at_utc": "",
+        "active_roster_consecutive_missing_syncs": "0",
+        "active_roster_missing_from_live_reason": "",
+        "active_roster_sync_generation_id": "v9-proposed-bf40d42d2a8cce01e59d"
+      },
+      "snapshot_data_row_one_based": 604,
+      "snapshot_row": {
+        "fighter": "Javad Mahjoub",
+        "date_of_birth": "1992-05-26",
+        "tuf": "FALSE",
+        "r2ufc": "FALSE",
+        "dwcs": "FALSE",
+        "pride": "FALSE",
+        "sf": "FALSE",
+        "wec": "FALSE",
+        "bmf": "FALSE",
+        "hof": "NA",
+        "country": "Canada, Iran",
+        "gender": "male",
+        "weightclass": "heavyweight",
+        "current_rank": "16",
+        "rank_flag": "NA",
+        "current_p4p": "16",
+        "p4p_flag": "NA",
+        "peak_rank": "16",
+        "peak_p4p": "16",
+        "bouts": "0",
+        "wins": "NA",
+        "win_types": "NA",
+        "losses": "NA",
+        "loss_types": "NA",
+        "streak": "NA",
+        "best_streak": "NA",
+        "bonus": "0",
+        "slot": "NA",
+        "elo": "2501",
+        "peak_elo": "NA",
+        "opp_elo": "2471",
+        "debut": "NA",
+        "debut_result": "NA",
+        "prev_bout": "NA",
+        "prev_result": "NA",
+        "next_date": "2026-10-17",
+        "next_opp": "Louie Sutherland"
+      },
+      "registry_capture_location": {
+        "source_pin": {
+          "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\owner_registry\\rosterwatch_owner_registry.csv",
+          "bytes": 113647492,
+          "sha256": "d3b7427aee29caa3fc46ea95c7bc7d19fb9d6c8c4e53a8a5a0788ea43b4f417d"
+        },
+        "holder_data_row_one_based": 3,
+        "holder_owner": "rosterwatch:v1:8b9e6bba54b62df606005b535b6a061200ef51368d5b3cdb35efe7d2e0a46866",
+        "field": "identity_binding_json",
+        "capture_index": 50,
+        "metadata": {
+          "capture_complete": true,
+          "captured_at": "2026-09-05T17:47:47.141184+00:00",
+          "decode_complete": true,
+          "decoded_sha256": "42323b152ad9ee556f3caab1e3ec38074031b75917af117e1708df11baf4f5ad",
+          "decoded_size": 12491,
+          "error": "",
+          "semantic_evidence_eligible": true,
+          "status_code": 200,
+          "url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c"
+        }
+      },
+      "route_already_owned": false,
+      "duplicate_selected_id_or_name": false,
+      "reviewer_application_imports": 0,
+      "reciprocal_opponent_row_one_based": 629,
+      "reciprocal_opponent_row": {
+        "fighter": "Louie Sutherland",
+        "date_of_birth": "1994-02-08",
+        "tuf": "FALSE",
+        "r2ufc": "FALSE",
+        "dwcs": "FALSE",
+        "pride": "FALSE",
+        "sf": "FALSE",
+        "wec": "FALSE",
+        "bmf": "FALSE",
+        "hof": "NA",
+        "country": "United Kingdom, England, Scotland",
+        "gender": "male",
+        "weightclass": "heavyweight",
+        "current_rank": "16",
+        "rank_flag": "NA",
+        "current_p4p": "16",
+        "p4p_flag": "NA",
+        "peak_rank": "16",
+        "peak_p4p": "16",
+        "bouts": "4",
+        "wins": "1",
+        "win_types": "0 KO 0 Sub 1 Dec",
+        "losses": "3",
+        "loss_types": "1 KO 2 Sub 0 Dec",
+        "streak": "-1",
+        "best_streak": "1",
+        "bonus": "0",
+        "slot": "8.5",
+        "elo": "2471",
+        "peak_elo": "2611",
+        "opp_elo": "2619",
+        "debut": "2025-10-25",
+        "debut_result": "L - Valter Walker",
+        "prev_bout": "2026-08-08",
+        "prev_result": "L - Jose Montanha",
+        "next_date": "2026-10-17",
+        "next_opp": "Javad Mahjoub"
+      },
+      "existing_reviewed_opponent_record": {
+        "athlete_url": "https://www.ufc.com/athlete/louie-sutherland",
+        "name": "Louie Sutherland",
+        "fighter_id": "cdb7b38b1b357f26",
+        "evidence_sha256": "9445ef75b7717045d4c521e9ecd1d24c44980004f3f51173c39ae878c68cecd5",
+        "identity_dob": "1994-02-08",
+        "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+        "independent_review_sha256": "89469a6b08553e2d851413df30d9dd3f13d07f48a0639671585524a2c12d75ad"
+      },
+      "adjudication": "Accept exact route identity from canonical/person/name plus the same date and Louie Sutherland opponent in the official upcoming card and reciprocal pinned snapshot, whose Javad owner has exact-ID UFCStats full-name/DOB support. Preserve raw DOB disagreement; owner field correction is separate. Neither future bout nor display-only records become historical features."
+    }
+  ],
+  "preservation": {
+    "baseline_bindings": 96,
+    "baseline_aliases": 2,
+    "bindings_canonical_json_sha256": "1a1433b68bfae00c3d2c426dfd4670e0860ad5bb8fa77f79812bf5039ee85997",
+    "aliases_canonical_json_sha256": "b1d97731e84a8a03a06cc5229f126c15572a38d0cd812dae72d1a1a80a780d44",
+    "required_merge": "Append exactly these two records; preserve all existing 96 records, two aliases, evidence_files, conflicts, withheld and superseded_withheld. Repin generation only in new artifact."
+  },
+  "limits": [
+    "No actual runtime binder or prediction executed in this assessment.",
+    "Future event dates/opponents are identity corroboration only; no history, field-policy, method, freshness, acquisition or hosted authority.",
+    "All Javad historical sends/challenges and later September20 rejected challenge remain consumed and retained.",
+    "Tapology DOM/screenshot is separate field evidence, not route authority used here.",
+    "Lucia model-safe DOB remains unknown; Javad owner-adjudicated 1992 retains official 1991 discrepancy."
+  ],
+  "application_imports": 0,
+  "model_loads": 0,
+  "source_requests": 0,
+  "hosted_actions": 0
+}

@@ -1,0 +1,136 @@
+{
+  "schema": 1,
+  "kind": "independent_historical_javad_profile_transport_review",
+  "completed_utc": "2026-09-21T00:18:21.050353+00:00",
+  "pass": true,
+  "verdict": "RETAINED_EXACT_PROFILE_TRANSPORT_AND_EMPTY_REDIRECT_CHAIN_SUPPORTED",
+  "verifier_pin": {
+    "path": "C:\\Temp\\v9-profile-eligibility-20260920-01\\review\\verify_profile_receipt01.py",
+    "bytes": 7591,
+    "sha256": "a2111e2b26b77c3b80e656e00d99696205a15a1d3610468832d9a060bfc2885a"
+  },
+  "response_pin": {
+    "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\003-response.json",
+    "bytes": 1573,
+    "sha256": "35cc152bcfa1751a0ea93dd7428388a6a46cce96cda97f7aeaffceb265032eaa"
+  },
+  "raw_pin": {
+    "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\003-body.bin",
+    "bytes": 12491,
+    "sha256": "42323b152ad9ee556f3caab1e3ec38074031b75917af117e1708df11baf4f5ad"
+  },
+  "embedded_extracted_raw_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\embedded-ufcstats-e9f9add1481fc11c-42323b152ad9.html",
+    "bytes": 12491,
+    "sha256": "42323b152ad9ee556f3caab1e3ec38074031b75917af117e1708df11baf4f5ad"
+  },
+  "raw_bytes_equal_retained_embedded_profile": true,
+  "capture_terminal_pin": {
+    "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\terminal.json",
+    "bytes": 49810,
+    "sha256": "bb5fea1c0c1fecc06f5390755cd3a4c6f052ba0d75bffec910e8eabb294e24e0"
+  },
+  "outer_terminal_pin": {
+    "path": "C:\\Temp\\u36a1\\network\\source02\\terminal.json",
+    "bytes": 2811,
+    "sha256": "cb0639ef37f968ed32cfa38002ed42238998f55058726c7438ff5accfd2d5f87"
+  },
+  "ledger_pin": {
+    "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\request-ledger.jsonl",
+    "bytes": 1934,
+    "sha256": "714a6d22bdf93510765482512f649a378e43af34fd06cea6f9e29be3f7ee7d24"
+  },
+  "consumed_pin": {
+    "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\consumed.json",
+    "bytes": 510,
+    "sha256": "e6fc465d0a86d142d7bbdf3150d13b60a426671918812065ad46400a6119706d"
+  },
+  "historical_plan_review_and_receipt_pins_checked": [
+    {
+      "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\terminal.json",
+      "bytes": 49810,
+      "sha256": "bb5fea1c0c1fecc06f5390755cd3a4c6f052ba0d75bffec910e8eabb294e24e0"
+    },
+    {
+      "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\request-ledger.jsonl",
+      "bytes": 1934,
+      "sha256": "714a6d22bdf93510765482512f649a378e43af34fd06cea6f9e29be3f7ee7d24"
+    },
+    {
+      "path": "C:\\Temp\\u36a1\\controls\\source-access-plan-02.json",
+      "bytes": 11028,
+      "sha256": "b8dd41c3076cfaa2981a5f85b9f1a86690f2c8dbee9a2c0b7513488e83294966"
+    },
+    {
+      "path": "C:\\Temp\\u36a1\\network\\source02\\child-summary.json",
+      "bytes": 797,
+      "sha256": "18df895a7b0c31b52db57d46494ad08ed0fb158eb5396ff9f34a70ce2f927d17"
+    },
+    {
+      "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\request-ledger.jsonl",
+      "bytes": 1934,
+      "sha256": "714a6d22bdf93510765482512f649a378e43af34fd06cea6f9e29be3f7ee7d24"
+    },
+    {
+      "path": "C:\\Temp\\u36a1\\controls\\source-access-plan-02.json",
+      "bytes": 11028,
+      "sha256": "b8dd41c3076cfaa2981a5f85b9f1a86690f2c8dbee9a2c0b7513488e83294966"
+    },
+    {
+      "path": "C:\\Temp\\u36a1\\reviews\\source-acquisition-controls-review-02.json",
+      "bytes": 4344,
+      "sha256": "aabf8fa9c3b46ed1038e8cc3a89565d038da45392c1f8ecedce0f736a8113611"
+    },
+    {
+      "path": "C:\\Temp\\u36a1\\controls\\source-access-plan-02.json",
+      "bytes": 11028,
+      "sha256": "b8dd41c3076cfaa2981a5f85b9f1a86690f2c8dbee9a2c0b7513488e83294966"
+    },
+    {
+      "path": "C:\\Temp\\u36a1\\reviews\\source-acquisition-controls-review-02.json",
+      "bytes": 4344,
+      "sha256": "aabf8fa9c3b46ed1038e8cc3a89565d038da45392c1f8ecedce0f736a8113611"
+    }
+  ],
+  "historical_request": {
+    "plan_id": "u36a1-source-acquisition-02",
+    "ordinal": 3,
+    "cumulative_ordinal": 38,
+    "url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+    "method": "GET",
+    "status": 200,
+    "completed_at_utc": "2026-09-05T17:47:47.141184+00:00",
+    "challenge_detected": false,
+    "body_complete": true
+  },
+  "historical_accounting": {
+    "prior_sends": 35,
+    "new_sends": 4,
+    "cumulative_sends": 39,
+    "wire_sends": 4,
+    "challenge_rounds": 1,
+    "redirects_followed": 0,
+    "retries": 0,
+    "rerun_permitted": false
+  },
+  "supported_primary_redirect_chain": [],
+  "redirect_chain_basis": "Exact raw body hash matches request ordinal 3, terminal embedded capture, extracted selected-registry profile, and durable start/completion ledger. Same bounded session terminal explicitly records zero redirects and all four response records contain no 3xx status.",
+  "prior_rejected_20260920_challenge_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan05-000\\response.html",
+    "bytes": 2998,
+    "sha256": "ccd26b41e40476858a8974364794db230cbd6b26444a107127f9e5224f16a398"
+  },
+  "prior_challenge_still_rejected": true,
+  "owner_dob_correction_pin": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\evidence\\owner-javad-dob-correction01.json",
+    "bytes": 1126,
+    "sha256": "de5587fc4077bba4be37cc85ae28d1f666f2c17366fcfe1346e3c7ae2accb89c"
+  },
+  "dob_for_new_drafts": "1992-05-26",
+  "official_source_1991_discrepancy_preserved": true,
+  "current_source_requests": 0,
+  "application_imports": 0,
+  "runtime_actions": 0,
+  "previous_files_modified": 0,
+  "limits": "Historical transport evidence supports the exact retained profile and zero redirects for that session. It establishes no current freshness, complete career/performance coverage, selected-source publication, runtime binding, model change, or new acquisition authority. All earlier campaign attempts remain consumed."
+}

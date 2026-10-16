@@ -1,0 +1,19 @@
+<style>
+    .workflow-banner { margin: 0 0 20px; padding: 13px 16px; border: 1px solid rgba(212,175,55,.22); border-radius: 12px; background: rgba(212,175,55,.035); font-size: 12px; line-height: 1.7; }
+    .workflow-banner strong { display: block; color: var(--gold, #d4af37); font-size: 13px; }
+    .workflow-times { display: flex; flex-wrap: wrap; gap: 3px 24px; color: var(--dim, #999); }
+    .workflow-times span span { color: var(--text, #eee); }
+    .workflow-note { color: var(--dim, #999); }
+    .workflow-warning { color: var(--yellow, #f3c969); }
+</style>
+<section class="workflow-banner" aria-label="Live service and update status" aria-live="polite">
+    <strong id="workflowMode">{{ dashboard_trading_text|default('Checking UFC service status…') }}</strong>
+    <div class="workflow-times">
+        <span>Last market check: <span id="workflowMonitor">Loading…</span></span>
+        <span>Data updated: <span id="workflowData">Loading…</span></span>
+        <span>Next data update: <span id="workflowNext">Loading…</span></span>
+    </div>
+    <div class="workflow-note" id="workflowCoverage">Checking current prediction coverage…</div>
+    <div class="workflow-warning" id="workflowWarning" hidden></div>
+</section>
+<script src="{{ url_for('static', filename='dashboard-freshness.js') }}" defer></script>

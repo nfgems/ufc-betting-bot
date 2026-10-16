@@ -37,6 +37,7 @@ import re
 import tempfile
 import threading
 import time
+from contextvars import ContextVar
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -70,6 +71,28 @@ _last_prune_by_path: dict[str, float] = {}
 
 _LEVEL_RANK = {"WARNING": 1, "ERROR": 2, "CRITICAL": 3}
 _WHITESPACE_RE = re.compile(r"\s+")
+_durable_alert_suppression_depth: ContextVar[int] = ContextVar(
+    "durable_alert_suppression_depth",
+    default=0,
+)
+
+
+@contextmanager
+def suppress_durable_alerts():
+    """Keep nested WARNING logs out of the durable store for one operation.
+
+    The records still flow to the normal application log.  Callers use this
+    around a multi-source operation that will emit one owner-facing incident
+    after it has combined all failures and coverage details.
+    """
+
+    token = _durable_alert_suppression_depth.set(
+        _durable_alert_suppression_depth.get() + 1
+    )
+    try:
+        yield
+    finally:
+        _durable_alert_suppression_depth.reset(token)
 
 
 def _format_timestamp(epoch: float) -> str:
@@ -337,6 +360,8 @@ class DurableAlertHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            if _durable_alert_suppression_depth.get() > 0:
+                return
             message = record.getMessage()
             if record.exc_info:
                 message = (

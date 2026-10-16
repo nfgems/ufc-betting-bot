@@ -1,0 +1,2198 @@
+{
+  "schema_version": 1,
+  "scope": "reviewed_selected_runtime_only",
+  "selection_sha256": "ebc65ad670b7fd61b9ec4ec5ae77970dbcf174af49e4fc54c1e1ab05cb081068",
+  "selected_sources_sha256": {
+    "profiles": "3753b378c1765c19f0d08a8af7216f065847f8d363cddbcb66ffde0fcc053e07",
+    "active_roster": "a17cc92fdab735673128425b6330395c19a251d7c7b64e52d80431664f9f7270",
+    "identity_aliases": "72683e8f15125767898dcbbd35549b47e6592ddb1c98407ae8be9bd0c128a6db"
+  },
+  "processed_fights_sha256": "a41f1e40d978429db6c767b28ddd90fff772c10c4a3d483d252d80156b5e469e",
+  "evidence_files": [
+    {
+      "path": "runtime_fighter_binding_evidence_v1/independent-review.json",
+      "sha256": "57004b8f11a00cd7afadffc18873d36e7f9629b7ade0174a8ed92fd6b07849be"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2024-04-06-ufc-fight-night-allen-vs-curtis-2-1.html",
+      "sha256": "cff75d1999fe072de2a5d9266e353ce8e0d2bf0fdbdd291eb38c68a9ec73e0be"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2022-06-04-ufc-fight-night-volkov-vs-rozenstruik-1.html",
+      "sha256": "2630362586cc8d4e1d58b96e251fc1105681528f6e6468a90d4fd4e5d378d125"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-04-12-ufc-314-volkanovski-vs-lopes-1.html",
+      "sha256": "e74186338a50a33fe0d829719de5b13647a85820539621f36a073bd78f91b73b"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2023-07-08-ufc-290-volkanovski-vs-rodriguez-1.html",
+      "sha256": "f81f34642ce9e005c99d8e6994ade0720a76b2be3d336800b1f01af8de40e836"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/ailin-perez-20260920.html",
+      "sha256": "6facce91d87b64718714e1a3f40ec0d5372f3a506f2719a8f502984d49393a56"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/ailin-perez-20260920-receipt.json",
+      "sha256": "a93d4832fe94a4a39fc69eef54258749ad1b9fc37fe7f167e9c278b30ac314c4"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/ailin-perez-20260920-authorization.json",
+      "sha256": "9d854918198c75803254cfbabfec06e5f0227e43471b797a6eb4e19a43e2a2ab"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/ailin-perez-20260920-review.json",
+      "sha256": "64fabcc9d128b57cb9e6c48b97a04c0f6adc1f0dcc80c6927d9404e2f371b112"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2022-09-03-ufc-fight-night-gane-vs-tuivasa-1.html",
+      "sha256": "6565e72839db210b6e3471612a0db804c074e7119eb8202ed74f2f24e1aed1f0"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html",
+      "sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2023-08-12-ufc-fight-night-luque-vs-dos-anjos-1.html",
+      "sha256": "35694b5a8ebe6350baaeba84109594f9e056395e7f015fb37aa7769c829dcab8"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2024-03-30-ufc-fight-night-blanchfield-vs-fiorot-sitemap-01-weigh-results-ufc-atlantic-city-fight-night-blanch.html",
+      "sha256": "2ce09013e9f439ed3880c08ce6c89d43c2d0f4c16dcf1a7704d9b576fa704005"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-01-11-ufc-fight-night-dern-vs-ribas-2-1.html",
+      "sha256": "6b86ef2e5aa35ebe90af4794b418d0ae5038a82b4ad2375a21f276a91f18528c"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-01-18-ufc-311-makhachev-vs-moicano-1.html",
+      "sha256": "f48c3a0c9c8e204f6763d6695be4dfd8103a779da201793ecf22a389cb68d8fc"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-03-22-ufc-fight-night-edwards-vs-brady-sitemap-04-official-weigh-in-results-ufc-fight-night-edwards-.html",
+      "sha256": "a2ccd2584d0e40b1683c390d9551e334bc07179af0084e09146d9d2c0fe582c8"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-05-03-ufc-fight-night-sandhagen-vs-figueiredo-sitemap-01-official-weigh-results-ufc-des-moines-sandhagen-fi.html",
+      "sha256": "086a9fb6a21d3e3e0e0b795f724071a019d3fe2d58c1380fe6a384b052bc6c08"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-06-14-ufc-fight-night-usman-vs-buckley-sitemap-01-official-weigh-in-results-ufc-atlanta-usman-buckle.html",
+      "sha256": "be5d673317168c6df5595a0f839ef3c315d036a829ce79a79610cf6ca280aafe"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-07-19-ufc-318-holloway-vs-poirier-3-1.html",
+      "sha256": "a692d264ce68a1a61a0e2957495d9ae87ceb435d5f5e7c52dd9574ffaf9c3cf9"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-08-23-ufc-fight-night-walker-vs-zhang-1.html",
+      "sha256": "dc4a579b2dac12a0971997a625e7543526e1cab7a05e0d6d4f11374328ad9664"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-04-04-ufc-fight-night-moicano-vs-duncan-1.html",
+      "sha256": "e53abea21eb13c1d373fd1e020f2995e176676cd87ca9f0bc81551eceabf90f4"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-04-18-ufc-fight-night-burns-vs-malott-sitemap-01-official-weigh-results-ufc-burns-malott-winnipeg.html",
+      "sha256": "bef9dc0a8a3585654eb0a0b2c0d2a1ab619bb5f9133dcdb879aebdba5b89f06d"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-05-16-ufc-fight-night-allen-vs-costa-1.html",
+      "sha256": "d7705ec0a15a9363614b7cdb55579a4966942a4c25d8747c439de6986edc43d3"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html",
+      "sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-07-18-ufc-fight-night-du-plessis-vs-usman-sitemap-01-official-weigh-results-ufc-fight-night-oklahoma-ci.html",
+      "sha256": "9e07c1c8114c119616c1fba35592561ed6cd8b8f0273f62ea1cfdbb22ace5ca9"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/coverage-expansion-independent-review02.json",
+      "sha256": "f213726c32fe111f8bbe88c9fd7ac22add9aa424abaa00d667c61ef63ec01e6d"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/coverage-expansion-proposal02.json",
+      "sha256": "cbb3ea5fefff9d71c603e13368409bf9f4e40bb119db93c8c5c79231a98cf7c9"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/remaining-reviewed-evidence-archive01.json",
+      "sha256": "efcfb177688a4f275951131848f2dc28c0eb09ea316af5ea0bd03e6fb4439591"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/accepted-roster-snapshot.csv",
+      "sha256": "169491af5d3c6a999f61286d1802e023ea46f5ba50352d81599e22adcb74104e"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/review-saved-six-independent-review01.json",
+      "sha256": "0c00745280ba79cb3d04e7a71577728062b40b25d431478fdab9a14618a50e94"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/review-embedded-registry-independent01.json",
+      "sha256": "2a07fc8a8f2593b7ffbd1668431137c7f6ee82c996692473f126b8c6f9e67033"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/review-javad-identity-only01.json",
+      "sha256": "5fa5d1c2555e645a652ea315e531463a31736e7cd61f2ac6fc0e9279a2c1e3bf"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/review-owner-javad-dob-correction01.json",
+      "sha256": "66c58b33ef6bb8f63f0da344427a8a2de694705717992e466243fce8cbf4d5d0"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/evidence-owner-javad-dob-correction01.json",
+      "sha256": "de5587fc4077bba4be37cc85ae28d1f666f2c17366fcfe1346e3c7ae2accb89c"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/review-profile-drafts-review01.json",
+      "sha256": "043e016a320fd9e90d0af656b61d7f4fa12154593298937bf51fa413a4504404"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/review-profile-receipt01.json",
+      "sha256": "69490832d89ced70b03293c4835a6c14abafe9d3313797179dbcddfe6532c3db"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/lucia-szabova-official.html",
+      "sha256": "434e22f70a7f3673f0f1406406e63f917efa6aa5d45eb23bda4b5e80c58100f2"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/lucia-szabova-official-receipt.json",
+      "sha256": "6c5c24f0696c60dca70a93585022fc9929f53424e613ddf87d910c225540287d"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/lucia-szabova-ufcstats.html",
+      "sha256": "67d833deafe2ee19248bb9927d6dcea80cd6a2898da7ffe87070295f23d8f036"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/lucia-szabova-ufcstats-receipt.json",
+      "sha256": "7c71af85cde7049a9647a977768374794b35ae642b303a47055e8af09e2fe643"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/javad-mahjoub-official.html",
+      "sha256": "d22027e7a539fc5c66807fc891cf620e946481d4147dcea19b36a74ea0ccb15d"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/javad-mahjoub-official-receipt.json",
+      "sha256": "e8b0501fed1068c517c02ba648c51875aa00cab3b7bd1e6ecaa30846ce5da344"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/javad-mahjoub-ufcstats.html",
+      "sha256": "42323b152ad9ee556f3caab1e3ec38074031b75917af117e1708df11baf4f5ad"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/javad-mahjoub-ufcstats-receipt.json",
+      "sha256": "35cc152bcfa1751a0ea93dd7428388a6a46cce96cda97f7aeaffceb265032eaa"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/javad-history-0-terminal.json",
+      "sha256": "bb5fea1c0c1fecc06f5390755cd3a4c6f052ba0d75bffec910e8eabb294e24e0"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/javad-history-1-request-ledger.jsonl",
+      "sha256": "714a6d22bdf93510765482512f649a378e43af34fd06cea6f9e29be3f7ee7d24"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/javad-history-2-receipt.json",
+      "sha256": "10bc3bfea84db91f4caf59cbdc452a34759f6d4a0ff2f3fde3c4f969b0881485"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/javad-history-3-response.html",
+      "sha256": "ccd26b41e40476858a8974364794db230cbd6b26444a107127f9e5224f16a398"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/profile-successor01/route-review01.json",
+      "sha256": "14e19ff60526649860b896073d5c65de8c415b4a0d9e4a51f241e35a4fc55aa2"
+    }
+  ],
+  "bindings": [
+    {
+      "athlete_url": "https://www.ufc.com/athlete/norma-dumont",
+      "name": "Norma Dumont",
+      "fighter_id": "d3f5d33d61cd00c9",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "cff75d1999fe072de2a5d9266e353ce8e0d2bf0fdbdd291eb38c68a9ec73e0be",
+      "historical_bout": {
+        "event_date": "2024-04-06",
+        "event_name": "UFC Fight Night: Allen vs. Curtis 2",
+        "fighter_a": "Norma Dumont",
+        "fighter_b": "Germaine de Randamie",
+        "fighter_a_id": "d3f5d33d61cd00c9",
+        "fighter_b_id": "1d239d571e342453"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/movsar-evloev",
+      "name": "Movsar Evloev",
+      "fighter_id": "76e2870ffafbe38f",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "2630362586cc8d4e1d58b96e251fc1105681528f6e6468a90d4fd4e5d378d125",
+      "historical_bout": {
+        "event_date": "2022-06-04",
+        "event_name": "UFC Fight Night: Volkov vs. Rozenstruik",
+        "fighter_a": "Dan Ige",
+        "fighter_b": "Movsar Evloev",
+        "fighter_a_id": "82a5152216251682",
+        "fighter_b_id": "76e2870ffafbe38f"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/alexander-volkanovski",
+      "name": "Alexander Volkanovski",
+      "fighter_id": "e1248941344b3288",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "e74186338a50a33fe0d829719de5b13647a85820539621f36a073bd78f91b73b",
+      "historical_bout": {
+        "event_date": "2025-04-12",
+        "event_name": "UFC 314: Volkanovski vs. Lopes",
+        "fighter_a": "Alexander Volkanovski",
+        "fighter_b": "Diego Lopes",
+        "fighter_a_id": "e1248941344b3288",
+        "fighter_b_id": "f166e93d04a8c274"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/ailin-perez",
+      "name": "Ailin Perez",
+      "fighter_id": "06e4245d16fc5315",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "6facce91d87b64718714e1a3f40ec0d5372f3a506f2719a8f502984d49393a56",
+      "review_sha256": "64fabcc9d128b57cb9e6c48b97a04c0f6adc1f0dcc80c6927d9404e2f371b112",
+      "historical_bout": {
+        "event_date": "2022-09-03",
+        "event_name": "UFC Fight Night: Gane vs. Tuivasa",
+        "fighter_a": "Stephanie Egger",
+        "fighter_b": "Ailin Perez",
+        "fighter_a_id": "5e6294b37bbef029",
+        "fighter_b_id": "06e4245d16fc5315"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/alexander-volkov",
+      "name": "Alexander Volkov",
+      "fighter_id": "279566840aa55bf2",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e",
+      "historical_bout": {
+        "event_date": "2023-03-11",
+        "event_name": "UFC Fight Night: Yan vs. Dvalishvili",
+        "fighter_a": "Alexander Volkov",
+        "fighter_b": "Alexandr Romanov",
+        "fighter_a_id": "279566840aa55bf2",
+        "fighter_b_id": "c0badf3243907e59"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/arnold-allen",
+      "name": "Arnold Allen",
+      "fighter_id": "040a74bb0a465c54",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "d7705ec0a15a9363614b7cdb55579a4966942a4c25d8747c439de6986edc43d3",
+      "historical_bout": {
+        "event_date": "2026-05-16",
+        "event_name": "UFC Fight Night: Allen vs. Costa",
+        "fighter_a": "Arnold Allen",
+        "fighter_b": "Melquizael Costa",
+        "fighter_a_id": "040a74bb0a465c54",
+        "fighter_b_id": "20bccc9bb4ceb23e"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/brendan-allen",
+      "name": "Brendan Allen",
+      "fighter_id": "2f181c0467965b98",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985",
+      "historical_bout": {
+        "event_date": "2026-06-06",
+        "event_name": "UFC Fight Night: Muhammad vs. Bonfim",
+        "fighter_a": "Brendan Allen",
+        "fighter_b": "Edmen Shahbazyan",
+        "fighter_a_id": "2f181c0467965b98",
+        "fighter_b_id": "4144798612ef96e5"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/christian-leroy-duncan",
+      "name": "Christian Leroy Duncan",
+      "fighter_id": "a93f94c923c3a9cb",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "9e07c1c8114c119616c1fba35592561ed6cd8b8f0273f62ea1cfdbb22ace5ca9",
+      "historical_bout": {
+        "event_date": "2026-07-18",
+        "event_name": "UFC Fight Night: Du Plessis vs. Usman",
+        "fighter_a": "Jared Cannonier",
+        "fighter_b": "Christian Leroy Duncan",
+        "fighter_a_id": "13a0275fa13c4d26",
+        "fighter_b_id": "a93f94c923c3a9cb"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/deiveson-figueiredo",
+      "name": "Deiveson Figueiredo",
+      "fighter_id": "aa72b0f831d0bfe5",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "086a9fb6a21d3e3e0e0b795f724071a019d3fe2d58c1380fe6a384b052bc6c08",
+      "historical_bout": {
+        "event_date": "2025-05-03",
+        "event_name": "UFC Fight Night: Sandhagen vs. Figueiredo",
+        "fighter_a": "Cory Sandhagen",
+        "fighter_b": "Deiveson Figueiredo",
+        "fighter_a_id": "65f09bacd3957381",
+        "fighter_b_id": "aa72b0f831d0bfe5"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/erin-blanchfield",
+      "name": "Erin Blanchfield",
+      "fighter_id": "669970f7feba8ecd",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "2ce09013e9f439ed3880c08ce6c89d43c2d0f4c16dcf1a7704d9b576fa704005",
+      "historical_bout": {
+        "event_date": "2024-03-30",
+        "event_name": "UFC Fight Night: Blanchfield vs. Fiorot",
+        "fighter_a": "Erin Blanchfield",
+        "fighter_b": "Manon Fiorot",
+        "fighter_a_id": "669970f7feba8ecd",
+        "fighter_b_id": "34ff304266360297"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/gabriel-bonfim",
+      "name": "Gabriel Bonfim",
+      "fighter_id": "01641ba5df0c69b0",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985",
+      "historical_bout": {
+        "event_date": "2026-06-06",
+        "event_name": "UFC Fight Night: Muhammad vs. Bonfim",
+        "fighter_a": "Belal Muhammad",
+        "fighter_b": "Gabriel Bonfim",
+        "fighter_a_id": "b1b0729d27936f2f",
+        "fighter_b_id": "01641ba5df0c69b0"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/jasmine-jasudavicius",
+      "name": "Jasmine Jasudavicius",
+      "fighter_id": "a9e260472d321361",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "bef9dc0a8a3585654eb0a0b2c0d2a1ab619bb5f9133dcdb879aebdba5b89f06d",
+      "historical_bout": {
+        "event_date": "2026-04-18",
+        "event_name": "UFC Fight Night: Burns vs. Malott",
+        "fighter_a": "Jasmine Jasudavicius",
+        "fighter_b": "Karine Silva",
+        "fighter_a_id": "a9e260472d321361",
+        "fighter_b_id": "9d62c2d8ee151f08"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/joaquin-buckley",
+      "name": "Joaquin Buckley",
+      "fighter_id": "b9437600497350f3",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "be5d673317168c6df5595a0f839ef3c315d036a829ce79a79610cf6ca280aafe",
+      "historical_bout": {
+        "event_date": "2025-06-14",
+        "event_name": "UFC Fight Night: Usman vs. Buckley",
+        "fighter_a": "Kamaru Usman",
+        "fighter_b": "Joaquin Buckley",
+        "fighter_a_id": "f1b2aa7853d1ed6e",
+        "fighter_b_id": "b9437600497350f3"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/johnny-walker",
+      "name": "Johnny Walker",
+      "fighter_id": "c21f26bbde777573",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "dc4a579b2dac12a0971997a625e7543526e1cab7a05e0d6d4f11374328ad9664",
+      "historical_bout": {
+        "event_date": "2025-08-23",
+        "event_name": "UFC Fight Night: Walker vs. Zhang",
+        "fighter_a": "Johnny Walker",
+        "fighter_b": "Zhang Mingyang",
+        "fighter_a_id": "c21f26bbde777573",
+        "fighter_b_id": "8a65fd9ba31fd3f7"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/marvin-vettori",
+      "name": "Marvin Vettori",
+      "fighter_id": "7acbb0972e75281a",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "a692d264ce68a1a61a0e2957495d9ae87ceb435d5f5e7c52dd9574ffaf9c3cf9",
+      "historical_bout": {
+        "event_date": "2025-07-19",
+        "event_name": "UFC 318: Holloway vs. Poirier 3",
+        "fighter_a": "Marvin Vettori",
+        "fighter_b": "Brendan Allen",
+        "fighter_a_id": "7acbb0972e75281a",
+        "fighter_b_id": "2f181c0467965b98"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/merab-dvalishvili",
+      "name": "Merab Dvalishvili",
+      "fighter_id": "c03520b5c88ed6b4",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "f48c3a0c9c8e204f6763d6695be4dfd8103a779da201793ecf22a389cb68d8fc",
+      "historical_bout": {
+        "event_date": "2025-01-18",
+        "event_name": "UFC 311: Makhachev vs. Moicano",
+        "fighter_a": "Merab Dvalishvili",
+        "fighter_b": "Umar Nurmagomedov",
+        "fighter_a_id": "c03520b5c88ed6b4",
+        "fighter_b_id": "2b6fc1c02736833d"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/petr-yan",
+      "name": "Petr Yan",
+      "fighter_id": "d661ce4da776fc20",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e",
+      "historical_bout": {
+        "event_date": "2023-03-11",
+        "event_name": "UFC Fight Night: Yan vs. Dvalishvili",
+        "fighter_a": "Petr Yan",
+        "fighter_b": "Merab Dvalishvili",
+        "fighter_a_id": "d661ce4da776fc20",
+        "fighter_b_id": "c03520b5c88ed6b4"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/rafael-dos-anjos",
+      "name": "Rafael Dos Anjos",
+      "fighter_id": "6a2f7c151031653d",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "35694b5a8ebe6350baaeba84109594f9e056395e7f015fb37aa7769c829dcab8",
+      "historical_bout": {
+        "event_date": "2023-08-12",
+        "event_name": "UFC Fight Night: Luque vs. Dos Anjos",
+        "fighter_a": "Vicente Luque",
+        "fighter_b": "Rafael Dos Anjos",
+        "fighter_a_id": "6d4b63c767106d3a",
+        "fighter_b_id": "6a2f7c151031653d"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/renato-moicano",
+      "name": "Renato Moicano",
+      "fighter_id": "b6452706b373eea1",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "e53abea21eb13c1d373fd1e020f2995e176676cd87ca9f0bc81551eceabf90f4",
+      "historical_bout": {
+        "event_date": "2026-04-04",
+        "event_name": "UFC Fight Night: Moicano vs. Duncan",
+        "fighter_a": "Renato Moicano",
+        "fighter_b": "Chris Duncan",
+        "fighter_a_id": "b6452706b373eea1",
+        "fighter_b_id": "fd406a32a6fb3a29"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/roman-kopylov",
+      "name": "Roman Kopylov",
+      "fighter_id": "9d83f6da776ff7d6",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "6b86ef2e5aa35ebe90af4794b418d0ae5038a82b4ad2375a21f276a91f18528c",
+      "historical_bout": {
+        "event_date": "2025-01-11",
+        "event_name": "UFC Fight Night: Dern vs. Ribas 2",
+        "fighter_a": "Chris Curtis",
+        "fighter_b": "Roman Kopylov",
+        "fighter_a_id": "5442f1bc4b47eaf3",
+        "fighter_b_id": "9d83f6da776ff7d6"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/sean-brady",
+      "name": "Sean Brady",
+      "fighter_id": "45f7cb591c3ab00b",
+      "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+      "evidence_sha256": "a2ccd2584d0e40b1683c390d9551e334bc07179af0084e09146d9d2c0fe582c8",
+      "historical_bout": {
+        "event_date": "2025-03-22",
+        "event_name": "UFC Fight Night: Edwards vs. Brady",
+        "fighter_a": "Leon Edwards",
+        "fighter_b": "Sean Brady",
+        "fighter_a_id": "f1fac969a1d70b08",
+        "fighter_b_id": "45f7cb591c3ab00b"
+      }
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/eric-nolan",
+      "name": "Eric Nolan",
+      "fighter_id": "64b12fe31be7560c",
+      "evidence_sha256": "3f50a59f140e2c611942fa81f119a7b54fc13bb1b7808d00a8560ce9390bbaae",
+      "identity_dob": "1997-09-13",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "89469a6b08553e2d851413df30d9dd3f13d07f48a0639671585524a2c12d75ad"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/josiah-harrell",
+      "name": "Josiah Harrell",
+      "fighter_id": "e5864a42c80294f6",
+      "evidence_sha256": "29e5d62a3e3bb9de6092b2cd160881373b21112a04e4f9e89fbc15f0f30e9b3e",
+      "identity_dob": "1998-11-13",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "89469a6b08553e2d851413df30d9dd3f13d07f48a0639671585524a2c12d75ad"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/louie-sutherland",
+      "name": "Louie Sutherland",
+      "fighter_id": "cdb7b38b1b357f26",
+      "evidence_sha256": "9445ef75b7717045d4c521e9ecd1d24c44980004f3f51173c39ae878c68cecd5",
+      "identity_dob": "1994-02-08",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "89469a6b08553e2d851413df30d9dd3f13d07f48a0639671585524a2c12d75ad"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/nate-landwehr",
+      "name": "Nate Landwehr",
+      "fighter_id": "583ee11abddfc581",
+      "evidence_sha256": "b6088ab0d8c1dc6d4e89aa9adc4b1b8175110e68a1e3138d01c5f5050b165d99",
+      "historical_bout": {
+        "event_date": "2024-12-07",
+        "event_name": "UFC 310: Pantoja vs. Asakura",
+        "fighter_a": "Nate Landwehr",
+        "fighter_b": "Dooho Choi",
+        "fighter_a_id": "583ee11abddfc581",
+        "fighter_b_id": "e93b04e308913c2e"
+      },
+      "retained_conflicts": [
+        {
+          "field": "dob",
+          "official_value": "1988-06-07",
+          "selected_value": "1988-06-06",
+          "status": "unresolved_attribute_conflict_identity_established_by_dated_bouts"
+        }
+      ],
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "89469a6b08553e2d851413df30d9dd3f13d07f48a0639671585524a2c12d75ad"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/steven-koslow",
+      "name": "Steven Koslow",
+      "fighter_id": "84512339473dd300",
+      "evidence_sha256": "bd8483e6af22cdd008f975eb619dda127908ec68ab1d652c9c56437e47f08749",
+      "identity_dob": "1997-01-22",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "89469a6b08553e2d851413df30d9dd3f13d07f48a0639671585524a2c12d75ad"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/tanner-boser",
+      "name": "Tanner Boser",
+      "fighter_id": "04c8b08b16a5b99e",
+      "evidence_sha256": "fa6069fe3a8dd99a020dbb16bd5454c25502ca9c20d453b7c8a4b07a0f841228",
+      "identity_dob": "1991-08-02",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "89469a6b08553e2d851413df30d9dd3f13d07f48a0639671585524a2c12d75ad"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/natalia-silva",
+      "name": "Natalia Silva",
+      "fighter_id": "262d32ebda89efc4",
+      "evidence_sha256": "a5bfd1efeee3c7b6d39d82f59d2c5745ea2f40f9cdc9ae541f25adcbe785fc28",
+      "historical_bout": {
+        "event_date": "2024-09-07",
+        "event_name": "UFC Fight Night: Burns vs. Brady",
+        "fighter_a": "Jessica Andrade",
+        "fighter_b": "Natalia Silva",
+        "fighter_a_id": "6a1901c62ab3870f",
+        "fighter_b_id": "262d32ebda89efc4"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "89469a6b08553e2d851413df30d9dd3f13d07f48a0639671585524a2c12d75ad"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/bobby-green",
+      "name": "King Green",
+      "fighter_id": "887961364be5ceb3",
+      "evidence_sha256": "86ad35d6438fb4898bccb0ff5cb0b79b6cf9259efa7f9c10ca8771caf789e0e6",
+      "historical_bout": {
+        "event_date": "2023-12-02",
+        "event_name": "UFC Fight Night: Dariush vs. Tsarukyan",
+        "fighter_a": "Jalin Turner",
+        "fighter_b": "King Green",
+        "fighter_a_id": "4d8fa64202cee4c1",
+        "fighter_b_id": "887961364be5ceb3"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "91c8ca9da19047bea4158df2419533bac9516bcdf4df4876f2f7aa711b77fc4f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/aaron-pico",
+      "name": "Aaron Pico",
+      "fighter_id": "5537efc6e496dd84",
+      "evidence_sha256": "7656b61c98894d844aa339079cf083cc6a0b5401814172ff80e1ec24bb912f41",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1996-09-23",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/abdulrakhman-yakhyaev",
+      "name": "Abdul Rakhman Yakhyaev",
+      "fighter_id": "95aff2fd8d09a5f0",
+      "evidence_sha256": "335ca272c8a0f2ad63ca6443eb35a59ab62c02ed5f40862b632b634d5526f348",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "2001-01-03",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/abus-magomedov",
+      "name": "Abus Magomedov",
+      "fighter_id": "36b8f265bcd1b7a4",
+      "evidence_sha256": "600166152a8b3250baa44055a6aa414927d767fe5ad367cc3cfb0f75861400a5",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1990-09-02",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/heili-alateng",
+      "name": "Alatengheili",
+      "fighter_id": "1897b7b913736a7c",
+      "evidence_sha256": "51487b61d678bb726a88cc2d47979e94a3688c18fd59945cb82d5455d2123706",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1991-12-14",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/alden-coria",
+      "name": "Alden Coria",
+      "fighter_id": "5e9ca8dd7d783a75",
+      "evidence_sha256": "2b713015505f23c30d137b32c5b38f9a079cdf105f2c334e112b021b6840bbb3",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1998-04-24",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/alexander-hernandez",
+      "name": "Alexander Hernandez",
+      "fighter_id": "262a7d06203657e6",
+      "evidence_sha256": "67772bd46039782d4af26e637702fe1a6dfb86350d6c103f907dc13da054f618",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1992-10-01",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/andrey-pulyaev",
+      "name": "Andrey Pulyaev",
+      "fighter_id": "22e07d3da1aa3475",
+      "evidence_sha256": "7cddd62acbae52eb6cd0f9ca542c1a23f03345837cf9a05a8da5767c9c45e5a1",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1997-09-10",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/anthony-wint",
+      "name": "Anthony Wint",
+      "fighter_id": "b34976c022b24568",
+      "evidence_sha256": "9d158d1630ec834c37dfdfba51d5a10a0cdea1d50bd907fe81e3d1c0cd441d83",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1995-09-14",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/benardo-sopaj",
+      "name": "Benardo Sopaj",
+      "fighter_id": "b6c37948cb226e8c",
+      "evidence_sha256": "1d8aa0f058d896fb882cf2c4dcae9d8501878b3110ccb690e36f458064a9413b",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "2000-09-25",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/brady-hiestand",
+      "name": "Brady Hiestand",
+      "fighter_id": "7af33fc4435017f1",
+      "evidence_sha256": "a2f6620ffdb3f4d1a93808b73b445987d6e2130fb9d70e84c6244fff972712f2",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1999-04-30",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/cameron-rowston",
+      "name": "Cam Rowston",
+      "fighter_id": "8ebc3a8da015d70c",
+      "evidence_sha256": "a8088b3e7f2c96c4c92874f3b9a74355044152de9614287245b77ad6456bb9fc",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1995-01-19",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/chelsea-chandler",
+      "name": "Chelsea Chandler",
+      "fighter_id": "af9efbfd63d39734",
+      "evidence_sha256": "6adbd1724cae24ce85c0ee40437c79e26bc950f25bc8937c554c2ba3d6d7516b",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1990-11-23",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/christian-edwards",
+      "name": "Christian Edwards",
+      "fighter_id": "f5d82eccdea4e2dd",
+      "evidence_sha256": "3158cc6ab90ddb440506e33bf8b589caf0299e73b11c87910c85603f060a4789",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "historical_bout": {
+        "event_date": "2026-05-16",
+        "event_name": "UFC Fight Night: Allen vs. Costa",
+        "fighter_a": "Modestas Bukauskas",
+        "fighter_b": "Christian Edwards",
+        "fighter_a_id": "476fe566d2df676e",
+        "fighter_b_id": "f5d82eccdea4e2dd"
+      },
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/cody-chovancek",
+      "name": "Cody Chovancek",
+      "fighter_id": "3c4320a1b6106611",
+      "evidence_sha256": "5637a68e882b5819842a613d9971bd1f1d6a434ffd3f9d10b7e652fcfd08f2ce",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1998-07-24",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/court-mcgee",
+      "name": "Court McGee",
+      "fighter_id": "523fa774700d7d3f",
+      "evidence_sha256": "67f11c9a90392347cd66c3728d7d819068dc79f0b80f09618f6a801620e3e8fd",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1984-12-12",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/dominick-reyes",
+      "name": "Dominick Reyes",
+      "fighter_id": "2e19380f34871c6a",
+      "evidence_sha256": "fffdfc32166027e29bf53da6ecf6147f1dbad02f62fbe6ae7971bcc6775a8012",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1989-12-26",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/elves-brener",
+      "name": "Elves Brener",
+      "fighter_id": "48a9a128784d53d1",
+      "evidence_sha256": "a88ba55214f89ac628b87e3a81b6c622f2c91ddb01090b6bfcaee5c480c128a3",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1997-09-27",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/esteban-ribovics",
+      "name": "Esteban Ribovics",
+      "fighter_id": "323d4ca260dfa0ba",
+      "evidence_sha256": "fd8e61097a80e68d86596f13be896897527d9f878aa579b0d0fdfa96d9f958cf",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1996-04-27",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/grant-dawson",
+      "name": "Grant Dawson",
+      "fighter_id": "99bd51917728c25d",
+      "evidence_sha256": "9cab239e59cec30547b0eda0d236b75d8f32158d3cf082d4a712bb87d669692d",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1994-02-20",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek",
+      "name": "Ilimbek Akylbek Uulu",
+      "fighter_id": "130b65b53f30f33c",
+      "evidence_sha256": "d3425aef564ed29eb195fb5b863a34888d3f53031584cd90a42ea27d79d4585c",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "2003-09-01",
+      "selected_owner": {
+        "athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek-uulu",
+        "name": "Ilimbek Akylbek Uulu",
+        "fighter_id": "130b65b53f30f33c"
+      },
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/imanol-rodriguez",
+      "name": "Imanol Rodriguez",
+      "fighter_id": "6e8349a0a0476d60",
+      "evidence_sha256": "22aded8f43790a94e4deef064aaf7d198b665dc0dae82e36e4c7843a7d75c8fe",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1999-11-15",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/ismail-naurdiev",
+      "name": "Ismail Naurdiev",
+      "fighter_id": "6a96ad1bc34fb113",
+      "evidence_sha256": "986aeddf282eb2576fcae7ac582c855616677b48640cf7b8c8f32270c4dc514a",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1996-08-18",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/jhonata-diniz",
+      "name": "Jhonata Diniz",
+      "fighter_id": "25f9a5f3e8a52618",
+      "evidence_sha256": "1ae26a3bff52fdcf18c59afaac42d5b6f941536c160bef8ef4d2ca77e43a0adf",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1991-06-23",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/joseph-kropschot",
+      "name": "Joseph Kropschot",
+      "fighter_id": "8a81a0707350c4a8",
+      "evidence_sha256": "749c087a1ac6bed1403f9593d42eb6dc67f60822d2a01e9036e2d2e29028af17",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1995-06-19",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/julien-leblanc",
+      "name": "Julien Leblanc",
+      "fighter_id": "cd0dfd9846bd03b9",
+      "evidence_sha256": "0a925dd7096805f1493c6da2e4a61033d01d2dbc40fd4676e68c3ccc54efb8f0",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "identity_dob": "1992-01-21",
+      "independent_review_sha256": "28275f1a5a5a0498a5da98cec682bf6998cede347ee9c28ff93b8700bd02c56f"
+    },
+    {
+      "name": "Khaos Williams",
+      "athlete_url": "https://www.ufc.com/athlete/khaos-williams",
+      "fighter_id": "2558ae2e5671e318",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-028\\response.html",
+        "bytes": 138997,
+        "sha256": "cf66f1780198d9fdf7d15570f20d52c26bbed84a57f5f9b015a31645e42affd6"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-028\\receipt.json",
+        "bytes": 2014,
+        "sha256": "edfe27ff0f6dc832bc2d403a807fc937a7d3770a02054f986905748a41412e12"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-028\\intent.json",
+        "bytes": 2455,
+        "sha256": "76aed9527fe0bf7f0584be06467459f966ed8328993f16f04aaae1ca782ce58d"
+      },
+      "selected_owner": {
+        "name": "Khaos Williams",
+        "athlete_url": "https://www.ufc.com/athlete/khaos-williams",
+        "fighter_id": "2558ae2e5671e318"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "cf66f1780198d9fdf7d15570f20d52c26bbed84a57f5f9b015a31645e42affd6",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Kyle Daukaus",
+      "athlete_url": "https://www.ufc.com/athlete/kyle-daukaus",
+      "fighter_id": "d6c0cdd7e467c440",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-029\\response.html",
+        "bytes": 142493,
+        "sha256": "f0437bce30d4ed3065b950d6108e5a8a55fd296afb795e622835488dd4208b36"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-029\\receipt.json",
+        "bytes": 2010,
+        "sha256": "e9ce34406e59e8b326232d6e77124ce8dbbd1e985ec8061898262294d5a8751f"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-029\\intent.json",
+        "bytes": 2451,
+        "sha256": "50f75ef738fe1fa7c0c82664f174d7b54ebddb52b8de62d6656a14f4b82156c6"
+      },
+      "selected_owner": {
+        "name": "Kyle Daukaus",
+        "athlete_url": "https://www.ufc.com/athlete/kyle-daukaus",
+        "fighter_id": "d6c0cdd7e467c440"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "f0437bce30d4ed3065b950d6108e5a8a55fd296afb795e622835488dd4208b36",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Lone’er Kavanagh",
+      "athlete_url": "https://www.ufc.com/athlete/loneer-kavanagh",
+      "fighter_id": "bb2c3c3a466224af",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-030\\response.html",
+        "bytes": 137109,
+        "sha256": "c3e8a89c7a66e521c5cfe3fb35b39f223cfdd6f80baa13b86c99ccab414be20b"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-030\\receipt.json",
+        "bytes": 2014,
+        "sha256": "3d5f30a9b37f66a45a8019f653042ea3c5afccc153dd5374d8ac73f6110dcedc"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-030\\intent.json",
+        "bytes": 3045,
+        "sha256": "8b60e58ca8d5642fcbea10bd5d86e8f3a78fb2ba54ec9928737452cf8d99a336"
+      },
+      "selected_owner": {
+        "name": "Lone’er Kavanagh",
+        "athlete_url": "https://www.ufc.com/athlete/loneer-kavanagh",
+        "fighter_id": "bb2c3c3a466224af"
+      },
+      "profile_name_bridge": {
+        "kind": "single_exact_typographic_apostrophe",
+        "source_and_card_literal": "Lone’er Kavanagh",
+        "selected_profile_literal": "Lone'er Kavanagh",
+        "character_difference": "U+2019 RIGHT SINGLE QUOTATION MARK vs U+0027 APOSTROPHE only",
+        "scope": "Only official /loneer-kavanagh to selected ID bb2c3c3a466224af, corroborated by exact date of birth; no general punctuation matching rule."
+      },
+      "evidence_sha256": "c3e8a89c7a66e521c5cfe3fb35b39f223cfdd6f80baa13b86c99ccab414be20b",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Louis Jourdain",
+      "athlete_url": "https://www.ufc.com/athlete/louis-jourdain",
+      "fighter_id": "91cd52cb92dfdd52",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-031\\response.html",
+        "bytes": 82481,
+        "sha256": "73dca5c1f2d82a9296ba8df5c17017932a7715bb2cbc7388b7b639d10f8c7f76"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-031\\receipt.json",
+        "bytes": 2013,
+        "sha256": "aa5b33289680e24cd27e794b96c2a814eec6538f5e54483686b40b324e7352ab"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-031\\intent.json",
+        "bytes": 2456,
+        "sha256": "4f50fe4cb1d321080ec5c1d16f850b59e37d7e8cb58fead6d70b2d01ff60eb15"
+      },
+      "selected_owner": {
+        "name": "Louis Jourdain",
+        "athlete_url": "https://www.ufc.com/athlete/louis-jourdain",
+        "fighter_id": "91cd52cb92dfdd52"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "73dca5c1f2d82a9296ba8df5c17017932a7715bb2cbc7388b7b639d10f8c7f76",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Lucas Armand",
+      "athlete_url": "https://www.ufc.com/athlete/lucas-armand",
+      "fighter_id": "20e04625a5395a06",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-032\\response.html",
+        "bytes": 76325,
+        "sha256": "613e6f82f6d96c2c3e9568f9ffac1f664948e2f4abe729cdfb9fbecdbb01a1fd"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-032\\receipt.json",
+        "bytes": 2011,
+        "sha256": "e0af1958225e424c71bc00fa89ba6f7ec6bfbecf59f3292925ae6214503dd184"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-032\\intent.json",
+        "bytes": 2451,
+        "sha256": "4c39dff4916c0c95b0b6c3e67423136b8999694ba77d53d595e46ffe76f46dd1"
+      },
+      "selected_owner": {
+        "name": "Lucas Armand",
+        "athlete_url": "",
+        "fighter_id": "20e04625a5395a06"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "613e6f82f6d96c2c3e9568f9ffac1f664948e2f4abe729cdfb9fbecdbb01a1fd",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Mandel Nallo",
+      "athlete_url": "https://www.ufc.com/athlete/mandel-nallo",
+      "fighter_id": "8f4528c10bd34fab",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-033\\response.html",
+        "bytes": 109867,
+        "sha256": "2ef2b2465e49085ad7ba10f05dab3a724446341f7b959ad91950fb7f48ed92ff"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-033\\receipt.json",
+        "bytes": 2010,
+        "sha256": "b61a0316eb15f9fabebfee4b40783181545e2d57cf4d74d2f33af8712cd73616"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-033\\intent.json",
+        "bytes": 2451,
+        "sha256": "b82ae067e043edc2ad90c25466a69682c369b57edb0e69cb0363ec1f8347a78e"
+      },
+      "selected_owner": {
+        "name": "Mandel Nallo",
+        "athlete_url": "https://www.ufc.com/athlete/mandel-nallo",
+        "fighter_id": "8f4528c10bd34fab"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "2ef2b2465e49085ad7ba10f05dab3a724446341f7b959ad91950fb7f48ed92ff",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Marc-Andre Barriault",
+      "athlete_url": "https://www.ufc.com/athlete/marc-andre-barriault",
+      "fighter_id": "8e9eb3fc86db0f7d",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-034\\response.html",
+        "bytes": 139398,
+        "sha256": "1f366c270835c0b8704ce9bd292490b388c9f6863293f501f2ba8bc0e614ec41"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-034\\receipt.json",
+        "bytes": 2026,
+        "sha256": "00f82de0927e5212512572bf9e4732c2f07e8503c35791d1660a2818fbe934c6"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-034\\intent.json",
+        "bytes": 2467,
+        "sha256": "ef65e0a5bb4f8c45ebbe50058c9bc63e3ad49f20e9278d3501fa0c3cbee9d2cb"
+      },
+      "selected_owner": {
+        "name": "Marc-Andre Barriault",
+        "athlete_url": "https://www.ufc.com/athlete/marc-andre-barriault",
+        "fighter_id": "8e9eb3fc86db0f7d"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "1f366c270835c0b8704ce9bd292490b388c9f6863293f501f2ba8bc0e614ec41",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Melissa Croden",
+      "athlete_url": "https://www.ufc.com/athlete/melissa-croden",
+      "fighter_id": "51e2f44a8dbf6984",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-035\\response.html",
+        "bytes": 134128,
+        "sha256": "3818b219e10b25fcb7cf832015ec4500a5249490f5715919547c09fecf95493b"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-035\\receipt.json",
+        "bytes": 2014,
+        "sha256": "0ebbe26a446851ad5381c219dd6eadcf1d0fae229a332ef23dda37d974ec4222"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-035\\intent.json",
+        "bytes": 2501,
+        "sha256": "6e797673dd176ecbd28b883a30fc3bc83cb9f29b4a6259c0c241ae6fa43415ee"
+      },
+      "selected_owner": {
+        "name": "Melissa Croden",
+        "athlete_url": "https://www.ufc.com/athlete/melissa-croden",
+        "fighter_id": "51e2f44a8dbf6984"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "3818b219e10b25fcb7cf832015ec4500a5249490f5715919547c09fecf95493b",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Mick Parkin",
+      "athlete_url": "https://www.ufc.com/athlete/mick-parkin",
+      "fighter_id": "0d5cc0170c1a7e71",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-036\\response.html",
+        "bytes": 143886,
+        "sha256": "eb24140f645fba4985ae9dd4eb63c46c3a105a3ee003cc463a5e3c7d484c5bda"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-036\\receipt.json",
+        "bytes": 2008,
+        "sha256": "5f27ddd8d1716e255ce0cb3c8da541f9b3ce7c37f1b9c3f80a2fd45a149c4b5c"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-036\\intent.json",
+        "bytes": 3372,
+        "sha256": "dd405cad67e94103bcee6f501ce4c2f48bb8c1a7889bedc9ec45c77dd74c4332"
+      },
+      "selected_owner": {
+        "name": "Mick Parkin",
+        "athlete_url": "https://www.ufc.com/athlete/mick-parkin",
+        "fighter_id": "0d5cc0170c1a7e71"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "eb24140f645fba4985ae9dd4eb63c46c3a105a3ee003cc463a5e3c7d484c5bda",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Mike Malott",
+      "athlete_url": "https://www.ufc.com/athlete/mike-malott",
+      "fighter_id": "dd6103dd7127db1d",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-037\\response.html",
+        "bytes": 138966,
+        "sha256": "5742eb14d207940ffd7580f595c8693fdf76b8ebc27b6461172d0ec2525487c0"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-037\\receipt.json",
+        "bytes": 2006,
+        "sha256": "2a46623a8de7b62a368bab6dd6b7eae458e25cdbf02db28ec7dc3d18c8a430df"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-037\\intent.json",
+        "bytes": 2495,
+        "sha256": "9decf6e9c4a47279c0270d888fca91ced1e732b88a22d210cfc55cf57178797a"
+      },
+      "selected_owner": {
+        "name": "Mike Malott",
+        "athlete_url": "https://www.ufc.com/athlete/mike-malott",
+        "fighter_id": "dd6103dd7127db1d"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "5742eb14d207940ffd7580f595c8693fdf76b8ebc27b6461172d0ec2525487c0",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Montel Jackson",
+      "athlete_url": "https://www.ufc.com/athlete/montel-jackson",
+      "fighter_id": "cc1a8b4b38b92c6d",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-038\\response.html",
+        "bytes": 139164,
+        "sha256": "a2162a216f5b941c4441dad1835fb2e080bfdbc00321471a6f16c7d6f76d8315"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-038\\receipt.json",
+        "bytes": 2015,
+        "sha256": "ab6cca243bb691d887a719863e33857416877450529fca9dffcd2a596f261fb7"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-038\\intent.json",
+        "bytes": 3404,
+        "sha256": "8af5bad3dcfd9eb5b9a9d34107d5724dd2ede5bdc598ce408a3d4f8b1394dbca"
+      },
+      "selected_owner": {
+        "name": "Montel Jackson",
+        "athlete_url": "https://www.ufc.com/athlete/montel-jackson",
+        "fighter_id": "cc1a8b4b38b92c6d"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "a2162a216f5b941c4441dad1835fb2e080bfdbc00321471a6f16c7d6f76d8315",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Nick Klein",
+      "athlete_url": "https://www.ufc.com/athlete/nick-klein",
+      "fighter_id": "7eaa5e31c2dd86aa",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-039\\response.html",
+        "bytes": 113604,
+        "sha256": "398aba5a8b6c52f4b5203bc3a356afc34b7728c9d625e4bfd8390f2ec349bdc3"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-039\\receipt.json",
+        "bytes": 2006,
+        "sha256": "d1785e81d495597986e1faec83b64978321a9156f60b97dfe13741f9a902bdb0"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-039\\intent.json",
+        "bytes": 2447,
+        "sha256": "517c3c58a61cf67480412a71b730baaf7025a8762e7ae2f9f62005b8468b524a"
+      },
+      "selected_owner": {
+        "name": "Nick Klein",
+        "athlete_url": "https://www.ufc.com/athlete/nick-klein",
+        "fighter_id": "7eaa5e31c2dd86aa"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "398aba5a8b6c52f4b5203bc3a356afc34b7728c9d625e4bfd8390f2ec349bdc3",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Nurullo Aliev",
+      "athlete_url": "https://www.ufc.com/athlete/nurullo-aliev",
+      "fighter_id": "ca28cdf526d6b6e9",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-040\\response.html",
+        "bytes": 131275,
+        "sha256": "204e71dacc1aaf463f0995743aae5b05077fafbb640dca318c85e187a41ec191"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-040\\receipt.json",
+        "bytes": 2013,
+        "sha256": "ef31753e72d49fbfeffb624751d191316da742bc80dcf80b71b08b22729f7df2"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-040\\intent.json",
+        "bytes": 2453,
+        "sha256": "ca7b7eb9f5aa8a5267ffb8564a46b8995038a4111976acefe74450de20cdb74c"
+      },
+      "selected_owner": {
+        "name": "Nurullo Aliev",
+        "athlete_url": "https://www.ufc.com/athlete/nurullo-aliev",
+        "fighter_id": "ca28cdf526d6b6e9"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "204e71dacc1aaf463f0995743aae5b05077fafbb640dca318c85e187a41ec191",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Ramazan Temirov",
+      "athlete_url": "https://www.ufc.com/athlete/ramazan-temirov",
+      "fighter_id": "7d0a1968b38ca439",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-041\\response.html",
+        "bytes": 128118,
+        "sha256": "7c42a6c34397cd9c64e585ace1c4bc4770366ad71021adf75a12d1a45a9ffbe9"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-041\\receipt.json",
+        "bytes": 2014,
+        "sha256": "5fe72217ac4adb9ba1f66c8f3aab62455f771f262aabe1945af96f759306d073"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-041\\intent.json",
+        "bytes": 2503,
+        "sha256": "d4a9a0a1129b6354fbb45d47340a59c27266d46a8ea8afe4e0749b4efacb0cab"
+      },
+      "selected_owner": {
+        "name": "Ramazan Temirov",
+        "athlete_url": "https://www.ufc.com/athlete/ramazan-temirov",
+        "fighter_id": "7d0a1968b38ca439"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "7c42a6c34397cd9c64e585ace1c4bc4770366ad71021adf75a12d1a45a9ffbe9",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Raoni Barcelos",
+      "athlete_url": "https://www.ufc.com/athlete/raoni-barcelos",
+      "fighter_id": "b9f28e7045fdfce7",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-042\\response.html",
+        "bytes": 142575,
+        "sha256": "741b9529b63cf9ef36da86ff97c8bc2ec94684307af7cd4abeb086146ae6edca"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-042\\receipt.json",
+        "bytes": 2014,
+        "sha256": "b615e3f8b35b424f514a120999134892ccd7094946ae731dbf50abeff600254e"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-042\\intent.json",
+        "bytes": 2573,
+        "sha256": "3e034cc0a02fd0960c3adfb4c8fea7d21716399e0d490b3ec33a7f04d31014f5"
+      },
+      "selected_owner": {
+        "name": "Raoni Barcelos",
+        "athlete_url": "https://www.ufc.com/athlete/raoni-barcelos",
+        "fighter_id": "b9f28e7045fdfce7"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "741b9529b63cf9ef36da86ff97c8bc2ec94684307af7cd4abeb086146ae6edca",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Raul Rosas Jr.",
+      "athlete_url": "https://www.ufc.com/athlete/raul-rosas-jr",
+      "fighter_id": "fe2babf95de24fb1",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-043\\response.html",
+        "bytes": 138194,
+        "sha256": "b69a53a0d1923df483394cf879debffdc709ab9225c0bd0d82a5165b24979a8e"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-043\\receipt.json",
+        "bytes": 2012,
+        "sha256": "2551ba4d51b92fe6ec3694a8baab23d81399b0e39a25400fb337c446108a2b9a"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-043\\intent.json",
+        "bytes": 2821,
+        "sha256": "7db2431bbcc13b89eaa43d6d1a33c540217752fbd11f6165ffaad6b7888ea5ac"
+      },
+      "selected_owner": {
+        "name": "Raul Rosas Jr.",
+        "athlete_url": "https://www.ufc.com/athlete/raul-rosas-jr",
+        "fighter_id": "fe2babf95de24fb1"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "b69a53a0d1923df483394cf879debffdc709ab9225c0bd0d82a5165b24979a8e",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Ricky Simon",
+      "athlete_url": "https://www.ufc.com/athlete/ricky-simon",
+      "fighter_id": "5987b2458f4b5290",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-044\\response.html",
+        "bytes": 138291,
+        "sha256": "91b9540c919c2fec3adb1bf340b88fa427dc8b705179e520d99ca1fde98df228"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-044\\receipt.json",
+        "bytes": 2009,
+        "sha256": "25a820065ff004b0b442da4e19fd6a425438f7a916ed887c8e8f53dda81ba5b6"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-044\\intent.json",
+        "bytes": 2526,
+        "sha256": "cc3bbb53192b6d58bee08097f17381eea2abe6e02fd3f3e69ae633edd713877e"
+      },
+      "selected_owner": {
+        "name": "Ricky Simon",
+        "athlete_url": "https://www.ufc.com/athlete/ricky-simon",
+        "fighter_id": "5987b2458f4b5290"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "91b9540c919c2fec3adb1bf340b88fa427dc8b705179e520d99ca1fde98df228",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Rinya Nakamura",
+      "athlete_url": "https://www.ufc.com/athlete/rinya-nakamura",
+      "fighter_id": "d8c811df0386d5e8",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-045\\response.html",
+        "bytes": 134947,
+        "sha256": "9244a5059a8da641d326a5182562050f3c0a33b7d3881ca1dac8bdae161236e0"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-045\\receipt.json",
+        "bytes": 2014,
+        "sha256": "e117478d90a3f0faa54e9aadbbe11e53cf0b6fba0378e753f5f7a02eb1bf81d8"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-045\\intent.json",
+        "bytes": 2532,
+        "sha256": "d061c431c2d1d94a2429ffcc34ceb06a535e178d506d80d3d1bc92192fd89a00"
+      },
+      "selected_owner": {
+        "name": "Rinya Nakamura",
+        "athlete_url": "https://www.ufc.com/athlete/rinya-nakamura",
+        "fighter_id": "d8c811df0386d5e8"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "9244a5059a8da641d326a5182562050f3c0a33b7d3881ca1dac8bdae161236e0",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Robert Bryczek",
+      "athlete_url": "https://www.ufc.com/athlete/robert-bryczek",
+      "fighter_id": "f96856f9d69fd7e4",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-046\\response.html",
+        "bytes": 117470,
+        "sha256": "495ba476fc14b59aeb16f9070e73ba9cd275c85830d1fa13039a55e6c1fc31f9"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-046\\receipt.json",
+        "bytes": 2016,
+        "sha256": "2a7b4f5c796dea8acf062df16cadbf54d25727b925f207ae773676efa417a332"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-046\\intent.json",
+        "bytes": 2532,
+        "sha256": "7625d98a7c2e9220cfdec71ce4648df83f4d3060ae67be08aed59304fe87764b"
+      },
+      "selected_owner": {
+        "name": "Robert Bryczek",
+        "athlete_url": "https://www.ufc.com/athlete/robert-bryczek",
+        "fighter_id": "f96856f9d69fd7e4"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "495ba476fc14b59aeb16f9070e73ba9cd275c85830d1fa13039a55e6c1fc31f9",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Roberto Soldic",
+      "athlete_url": "https://www.ufc.com/athlete/roberto-soldic",
+      "fighter_id": "5a229cbd9cdd28ca",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-047\\response.html",
+        "bytes": 75965,
+        "sha256": "b067ba2bbfee03e8d23fc1be304cb0ed05eb54effd5b4f80256009f9c3626bd2"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-047\\receipt.json",
+        "bytes": 2014,
+        "sha256": "2fa5f38e7a6fcf723126b0eed3832d13702d2d01e75b03a33eda156e4207e6ed"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-047\\intent.json",
+        "bytes": 2455,
+        "sha256": "3ebc10decf68b7a8a9d5b569d62ddc7789053ac2bd91fd7bab8c7a0099b52220"
+      },
+      "selected_owner": {
+        "name": "Roberto Soldic",
+        "athlete_url": "",
+        "fighter_id": "5a229cbd9cdd28ca"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "b067ba2bbfee03e8d23fc1be304cb0ed05eb54effd5b4f80256009f9c3626bd2",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Rodolfo Bellato",
+      "athlete_url": "https://www.ufc.com/athlete/rodolfo-bellato",
+      "fighter_id": "69898645d600abdb",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-048\\response.html",
+        "bytes": 128996,
+        "sha256": "07141f2dea9290fc11044555b26b21a4ae2b996e5e161feb111eda1482aaa7d0"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-048\\receipt.json",
+        "bytes": 2017,
+        "sha256": "dcc6de1bc779d0353582746924b9b9156e829d378314fa75c3f1a63ca54b22bf"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-048\\intent.json",
+        "bytes": 2534,
+        "sha256": "160825928a7d5c53c55b948be9754d1c926ab6ef0562091f5b3e725d5f737471"
+      },
+      "selected_owner": {
+        "name": "Rodolfo Bellato",
+        "athlete_url": "https://www.ufc.com/athlete/rodolfo-bellato",
+        "fighter_id": "69898645d600abdb"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "07141f2dea9290fc11044555b26b21a4ae2b996e5e161feb111eda1482aaa7d0",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Rodolfo Vieira",
+      "athlete_url": "https://www.ufc.com/athlete/rodolfo-vieira",
+      "fighter_id": "260e9e0d4954aea6",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-049\\response.html",
+        "bytes": 137347,
+        "sha256": "1171a0f795d19302b95524cfbd738bc7c9966eee54da73c42317b3e0e64eaae2"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-049\\receipt.json",
+        "bytes": 1947,
+        "sha256": "c37d641437d555e27accaacd9411e40d315e2f35cc9dca0ec6c9ce4fd2cf53fa"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-049\\intent.json",
+        "bytes": 2532,
+        "sha256": "e2896476749402793fe60c5420daf1756faf63a4270305978cb534e0f374cc15"
+      },
+      "selected_owner": {
+        "name": "Rodolfo Vieira",
+        "athlete_url": "https://www.ufc.com/athlete/rodolfo-vieira",
+        "fighter_id": "260e9e0d4954aea6"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "1171a0f795d19302b95524cfbd738bc7c9966eee54da73c42317b3e0e64eaae2",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "SuYoung You",
+      "athlete_url": "https://www.ufc.com/athlete/suyoung-you",
+      "fighter_id": "a474aade8eb3a8f0",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-050\\response.html",
+        "bytes": 120984,
+        "sha256": "94852a33243bd43f2d6818c08416b83eb755edad4b5ac13a9d865d4d02c565c4"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-050\\receipt.json",
+        "bytes": 2008,
+        "sha256": "0127e66f9433f51f988f7e1ee92d33bd4fc5da8374bb52e6a64c13ca9568bb91"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-050\\intent.json",
+        "bytes": 2449,
+        "sha256": "e41bd0f1b27b1f080855cbe568d6c5d6cb3e8845c9196f160109a883a56811e2"
+      },
+      "selected_owner": {
+        "name": "SuYoung You",
+        "athlete_url": "https://www.ufc.com/athlete/suyoung-you",
+        "fighter_id": "a474aade8eb3a8f0"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "94852a33243bd43f2d6818c08416b83eb755edad4b5ac13a9d865d4d02c565c4",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Tainara Lisboa",
+      "athlete_url": "https://www.ufc.com/athlete/tainara-lisboa",
+      "fighter_id": "2c5f5749569eef66",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-051\\response.html",
+        "bytes": 126167,
+        "sha256": "37d4572f38909cdcfb40b701a79af0ea71e6fe1acd0b0c17b71ed630b73f9702"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-051\\receipt.json",
+        "bytes": 2012,
+        "sha256": "b3146c178fe342d38ea815e97b8f95a8304e6e73956049656a7134a5263bb71a"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-051\\intent.json",
+        "bytes": 2455,
+        "sha256": "32c51a983257558e80109f10c07c272e2060a0cd0b1e285c8dd9ca15cdd7dae8"
+      },
+      "selected_owner": {
+        "name": "Tainara Lisboa",
+        "athlete_url": "https://www.ufc.com/athlete/tainara-lisboa",
+        "fighter_id": "2c5f5749569eef66"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "37d4572f38909cdcfb40b701a79af0ea71e6fe1acd0b0c17b71ed630b73f9702",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Timmy Cuamba",
+      "athlete_url": "https://www.ufc.com/athlete/timothy-cuamba",
+      "fighter_id": "0e46690e55a8df75",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-052\\response.html",
+        "bytes": 121123,
+        "sha256": "6d99ced148c8b1e859d0ea20bf1be41c60b9e598ee87cbf148b8d65e8b24d4af"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-052\\receipt.json",
+        "bytes": 2012,
+        "sha256": "33ef5f04540b3d67cf0b2b594d89ce1e66f587033a03098b4c20d994d95a913a"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-052\\intent.json",
+        "bytes": 2454,
+        "sha256": "c50dab3da5af88f2af200a081fbfdc061834412c79fda04db4c1d5ffc00e8061"
+      },
+      "selected_owner": {
+        "name": "Timmy Cuamba",
+        "athlete_url": "https://www.ufc.com/athlete/timothy-cuamba",
+        "fighter_id": "0e46690e55a8df75"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "6d99ced148c8b1e859d0ea20bf1be41c60b9e598ee87cbf148b8d65e8b24d4af",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Tom Nolan",
+      "athlete_url": "https://www.ufc.com/athlete/tom-nolan",
+      "fighter_id": "6c3b2525436cf5d4",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-053\\response.html",
+        "bytes": 138306,
+        "sha256": "c5f9d66a4c09d75b56548851249cf97c26603ae1d81870841ec72ac609dd17fd"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-053\\receipt.json",
+        "bytes": 2002,
+        "sha256": "0211910b73d5828d0b1b34a46bc9ed3c9b198e848eaeb7cf07150d694c4b0655"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-053\\intent.json",
+        "bytes": 2491,
+        "sha256": "e2be6096e3c0d44f7c639d8ca7be91aca43cbfe2bf16c47384a8a0078dcc6d3f"
+      },
+      "selected_owner": {
+        "name": "Tom Nolan",
+        "athlete_url": "https://www.ufc.com/athlete/tom-nolan",
+        "fighter_id": "6c3b2525436cf5d4"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "c5f9d66a4c09d75b56548851249cf97c26603ae1d81870841ec72ac609dd17fd",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Yazmin Jauregui",
+      "athlete_url": "https://www.ufc.com/athlete/yazmin-jauregui",
+      "fighter_id": "40cb680ae1cd331f",
+      "evidence_kind": "exact_official_profile_name_and_dob_to_selected_profile",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-055\\response.html",
+        "bytes": 134795,
+        "sha256": "f7a8d778b5ce7fd60892cf3d183dec162ca99c9e9c9277fd7e5c2e718d6d63cd"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-055\\receipt.json",
+        "bytes": 2015,
+        "sha256": "2ecaf361fc17bf952a46c409f4490495799f7e49139a1dc508f8566215d5306f"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-055\\intent.json",
+        "bytes": 2535,
+        "sha256": "30d84bd4c66ad4c292dd669b45fc21b360ff49c14849b7e1a3d0edc04adb100e"
+      },
+      "selected_owner": {
+        "name": "Yazmin Jauregui",
+        "athlete_url": "https://www.ufc.com/athlete/yazmin-jauregui",
+        "fighter_id": "40cb680ae1cd331f"
+      },
+      "profile_name_bridge": null,
+      "evidence_sha256": "f7a8d778b5ce7fd60892cf3d183dec162ca99c9e9c9277fd7e5c2e718d6d63cd",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "2753d9db5e19065a44422691b46192f350aff1757eb880cbc5691f64b13c5daf"
+    },
+    {
+      "name": "Gilbert Urbina",
+      "athlete_url": "https://www.ufc.com/athlete/kiruhato-uruhina",
+      "fighter_id": "b12fb759e02378de",
+      "evidence_sha256": "4b221bcf4e6245544a6cc3656d94ddf79f76af683f31a23ec50687e5fd5b3e18",
+      "selected_owner": {
+        "athlete_url": "https://www.ufc.com/athlete/gilbert-urbina",
+        "name": "Gilbert Urbina",
+        "fighter_id": "b12fb759e02378de"
+      },
+      "verified_bridge": {
+        "exact_source_language_alternates": [
+          {
+            "hreflang": "ja",
+            "url": "https://www.ufc.com/athlete/kiruhato-uruhina"
+          },
+          {
+            "hreflang": "ru",
+            "url": "https://www.ufc.com/athlete/kiruhato-uruhina"
+          }
+        ],
+        "dob_match": "1996-04-05",
+        "selected_owner": {
+          "athlete_url": "https://www.ufc.com/athlete/gilbert-urbina",
+          "name": "Gilbert Urbina",
+          "fighter_id": "b12fb759e02378de"
+        }
+      },
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule.",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "0c00745280ba79cb3d04e7a71577728062b40b25d431478fdab9a14618a50e94"
+    },
+    {
+      "name": "Vanessa Demopoulos",
+      "athlete_url": "https://www.ufc.com/athlete/vanessa-demopulos",
+      "fighter_id": "2c483cf443f38ece",
+      "evidence_sha256": "48cc5a66f37a3547e0631310f357b27f79079f6068e82040bd84a87c73030af8",
+      "selected_owner": {
+        "athlete_url": "https://www.ufc.com/athlete/vanessa-demopoulos",
+        "name": "Vanessa Demopoulos",
+        "fighter_id": "2c483cf443f38ece"
+      },
+      "verified_bridge": {
+        "exact_source_language_alternates": [
+          {
+            "hreflang": "ru",
+            "url": "https://www.ufc.com/athlete/vanessa-demopulos"
+          }
+        ],
+        "dob_match": "1988-09-22",
+        "selected_owner": {
+          "athlete_url": "https://www.ufc.com/athlete/vanessa-demopoulos",
+          "name": "Vanessa Demopoulos",
+          "fighter_id": "2c483cf443f38ece"
+        }
+      },
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule.",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "0c00745280ba79cb3d04e7a71577728062b40b25d431478fdab9a14618a50e94"
+    },
+    {
+      "name": "Jamey-Lyn Horth",
+      "athlete_url": "https://www.ufc.com/athlete/jamey-lyn-horth",
+      "fighter_id": "5c637af9472ae7cc",
+      "evidence_sha256": "48cc5a66f37a3547e0631310f357b27f79079f6068e82040bd84a87c73030af8",
+      "selected_owner": null,
+      "verified_bridge": {
+        "dated_result_card_text": "Win Horth vs Demopoulos Jun. 14, 2025 Round 3 Time 5:00 Method Decision - Unanimous Watch Replay Fight Card",
+        "historical_bout": {
+          "event_date": "2025-06-14",
+          "event_name": "UFC Fight Night: Usman vs. Buckley",
+          "fighter_a": "Jamey-Lyn Horth",
+          "fighter_b": "Vanessa Demopoulos",
+          "fighter_a_id": "5c637af9472ae7cc",
+          "fighter_b_id": "2c483cf443f38ece",
+          "winner": "Jamey-Lyn Horth",
+          "method": "Decision - Unanimous "
+        },
+        "history_literal": "UFC on ESPN (6/14/25) Demopoulos lost a three round unanimous decision to Jamey-Lyn Horth"
+      },
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule.",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "0c00745280ba79cb3d04e7a71577728062b40b25d431478fdab9a14618a50e94"
+    },
+    {
+      "name": "Marcus McGhee",
+      "athlete_url": "https://www.ufc.com/athlete/marcus-mcghee",
+      "fighter_id": "c0ac37a4a1133da9",
+      "evidence_sha256": "11664a21ecc0b6c324be131bba5fab7e9ac1daa9da72343375aed8cdbe9e98c0",
+      "selected_owner": null,
+      "verified_bridge": {
+        "dated_result_card_text": "Win McGhee vs Yannis Jun. 6, 2026 Round 3 Time 5:00 Method Decision - Unanimous Watch Replay Fight Card",
+        "historical_bout": {
+          "event_date": "2026-06-06",
+          "event_name": "UFC Fight Night: Muhammad vs. Bonfim",
+          "fighter_a": "Marcus McGhee",
+          "fighter_b": "John Yannis",
+          "fighter_a_id": "c0ac37a4a1133da9",
+          "fighter_b_id": "450bcab0968562c4",
+          "winner": "Marcus McGhee",
+          "method": "Decision - Unanimous"
+        },
+        "history_literal": "UFC Fight Night (6/6/26) Yannis lost a three round unanimous decision to Marcus McGhee"
+      },
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule.",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "0c00745280ba79cb3d04e7a71577728062b40b25d431478fdab9a14618a50e94"
+    },
+    {
+      "name": "Wang Cong",
+      "athlete_url": "https://www.ufc.com/athlete/wang-cong",
+      "fighter_id": "2997e7fe3c9d3d4a",
+      "evidence_sha256": "cfd9a553415c004c40460bd318ca6c0bdad535d5716c50607487d3e462d96ed6",
+      "selected_owner": null,
+      "verified_bridge": {
+        "historical_bout": {
+          "event_date": "2026-07-11",
+          "event_name": "UFC 329: McGregor vs. Holloway 2",
+          "fighter_a": "Tracy Cortez",
+          "fighter_b": "Wang Cong",
+          "fighter_a_id": "68d4a891e5cf2029",
+          "fighter_b_id": "2997e7fe3c9d3d4a",
+          "winner": "Wang Cong",
+          "method": "Decision - Unanimous"
+        },
+        "history_literal": "UFC 329 (7/11/26) Wang won a three round unanimous decision over Tracy Cortez"
+      },
+      "qualification": "Exact listed source, route, selected owner and ID only; no general alternate-language or name matching rule.",
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "0c00745280ba79cb3d04e7a71577728062b40b25d431478fdab9a14618a50e94"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/ateba-gautier",
+      "name": "Ateba Gautier",
+      "fighter_id": "2f815ed5f8278ba6",
+      "evidence_sha256": "3181110c9c8e55fabe4836d78461a6598c0f290086709f6d6319f7033c35ea45",
+      "historical_bout": {
+        "event_date": "2025-10-04",
+        "event_name": "UFC 320: Ankalaev vs. Pereira 2",
+        "fighter_a": "Ateba Gautier",
+        "fighter_b": "Tre'ston Vines",
+        "fighter_a_id": "2f815ed5f8278ba6",
+        "fighter_b_id": "563a1d42bb0e3cef"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\immutable_b\\treston_vines_ufc_official.html",
+        "bytes": 105539,
+        "sha256": "3181110c9c8e55fabe4836d78461a6598c0f290086709f6d6319f7033c35ea45"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "fed5e8eaff32fd46cafc2837180dfa65fd19c538eb87e4d27b582c68865b400c"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/azamat-murzakanov",
+      "name": "Azamat Murzakanov",
+      "fighter_id": "e90a2f22417af68e",
+      "evidence_sha256": "36eaa901c40c57da78cc07c4f7e6b57b0f2b6767bdef45ed109a5fe7deeb27e4",
+      "historical_bout": {
+        "event_date": "2025-10-25",
+        "event_name": "UFC 321: Aspinall vs. Gane",
+        "fighter_a": "Aleksandar Rakic",
+        "fighter_b": "Azamat Murzakanov",
+        "fighter_a_id": "333b9e5c723ac873",
+        "fighter_b_id": "e90a2f22417af68e"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-athletes\\333b9e5c723ac873-aleksandar-rakic.html",
+        "bytes": 132836,
+        "sha256": "36eaa901c40c57da78cc07c4f7e6b57b0f2b6767bdef45ed109a5fe7deeb27e4"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "fed5e8eaff32fd46cafc2837180dfa65fd19c538eb87e4d27b582c68865b400c"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/damian-pinas",
+      "name": "Damian Pinas",
+      "fighter_id": "fdd22e895a70e4a8",
+      "evidence_sha256": "ead70aed3b938d0e834ac16354aa029068667a9ec9740b8096d8e1706f64ef6a",
+      "historical_bout": {
+        "event_date": "2026-02-28",
+        "event_name": "UFC Fight Night: Moreno vs. Kavanagh",
+        "fighter_a": "Damian Pinas",
+        "fighter_b": "Wes Schultz",
+        "fighter_a_id": "fdd22e895a70e4a8",
+        "fighter_b_id": "b4443fae47e7eb9d"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\immutable_b\\wes_schultz_ufc_official.html",
+        "bytes": 115226,
+        "sha256": "ead70aed3b938d0e834ac16354aa029068667a9ec9740b8096d8e1706f64ef6a"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "fed5e8eaff32fd46cafc2837180dfa65fd19c538eb87e4d27b582c68865b400c"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/john-castaneda",
+      "name": "John Castaneda",
+      "fighter_id": "5fa2974cbd18e05c",
+      "evidence_sha256": "d2c635e1907d09cf2952bfe300413dbf4cee5581066ef4ba9cb803ba2a4db1de",
+      "historical_bout": {
+        "event_date": "2020-07-25",
+        "event_name": "UFC Fight Night: Whittaker vs. Till",
+        "fighter_a": "Nathaniel Wood",
+        "fighter_b": "John Castaneda",
+        "fighter_a_id": "329e403448756217",
+        "fighter_b_id": "5fa2974cbd18e05c"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\immutable_a\\raw\\losene_keita__ufc_opponent_anchor.html",
+        "bytes": 137662,
+        "sha256": "d2c635e1907d09cf2952bfe300413dbf4cee5581066ef4ba9cb803ba2a4db1de"
+      },
+      "retained_conflicts": [
+        {
+          "type": "same_source_card_vs_narrative_date_discrepancy",
+          "result_card_date": "2020-07-25",
+          "history_narrative_date": "2020-07-26",
+          "selected_fight_date": "2020-07-25",
+          "qualification": "Exact full-name route image alt, same unique Wood/Castaneda opponent pair, and source result-card date support identity. One-day narrative discrepancy preserved and not repaired; independent reviewer must explicitly adjudicate identity use.",
+          "independent_adjudication": "Identity accepted using exact full-name route-attached image alt and result-card July25 date, uniquely matching selected Wood/Castaneda bout, with Wood canonical route+name+DOB anchored to selected opponent. July26 prose date is not relied upon or corrected; it remains unsuitable timing authority. No competing route owner or fighter ID was found."
+        }
+      ],
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "fed5e8eaff32fd46cafc2837180dfa65fd19c538eb87e4d27b582c68865b400c"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/nikita-krylov",
+      "name": "Nikita Krylov",
+      "fighter_id": "1091d4d957141094",
+      "evidence_sha256": "33c4afd341fdbcc864291aa1a6d0a3d5290858108174c98418362f65393cbb71",
+      "historical_bout": {
+        "event_date": "2026-07-11",
+        "event_name": "UFC 329: McGregor vs. Holloway 2",
+        "fighter_a": "Nikita Krylov",
+        "fighter_b": "Robert Whittaker",
+        "fighter_a_id": "1091d4d957141094",
+        "fighter_b_id": "e1147d3d2dabe1ce"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-athletes\\e1147d3d2dabe1ce-robert-whittaker.html",
+        "bytes": 137707,
+        "sha256": "33c4afd341fdbcc864291aa1a6d0a3d5290858108174c98418362f65393cbb71"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "fed5e8eaff32fd46cafc2837180dfa65fd19c538eb87e4d27b582c68865b400c"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/payton-talbott",
+      "name": "Payton Talbott",
+      "fighter_id": "6e743a33d56bdaa4",
+      "evidence_sha256": "84b9a41cf647a16afd9dbbec8472f8aef9fbf722e7e23e0a0b7608f687d8f4e1",
+      "historical_bout": {
+        "event_date": "2025-06-28",
+        "event_name": "UFC 317: Topuria vs. Oliveira",
+        "fighter_a": "Payton Talbott",
+        "fighter_b": "Felipe Lima",
+        "fighter_a_id": "6e743a33d56bdaa4",
+        "fighter_b_id": "9256f591b30c073e"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-athletes\\9256f591b30c073e-felipe-lima.html",
+        "bytes": 127486,
+        "sha256": "84b9a41cf647a16afd9dbbec8472f8aef9fbf722e7e23e0a0b7608f687d8f4e1"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "fed5e8eaff32fd46cafc2837180dfa65fd19c538eb87e4d27b582c68865b400c"
+    },
+    {
+      "athlete_url": "https://www.ufc.com/athlete/rizvan-kuniev",
+      "name": "Rizvan Kuniev",
+      "fighter_id": "739fd4fbb5d862f4",
+      "evidence_sha256": "0ffc6139be42496211e62132d716e30dbfa0e68c065aab68b6708f07d5e60558",
+      "historical_bout": {
+        "event_date": "2026-07-25",
+        "event_name": "UFC Fight Night: Ankalaev vs. Guskov",
+        "fighter_a": "Rizvan Kuniev",
+        "fighter_b": "Tyrell Fortune",
+        "fighter_a_id": "739fd4fbb5d862f4",
+        "fighter_b_id": "bc7f4b2d4c2724a2"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\u7pi1\\sources\\immutable_b\\tyrell_fortune_ufc_official.html",
+        "bytes": 106610,
+        "sha256": "0ffc6139be42496211e62132d716e30dbfa0e68c065aab68b6708f07d5e60558"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "fed5e8eaff32fd46cafc2837180dfa65fd19c538eb87e4d27b582c68865b400c"
+    },
+    {
+      "name": "Chad Anheliger",
+      "athlete_url": "https://www.ufc.com/athlete/meyson-dzhons-0",
+      "fighter_id": "c7c39e2fb70248b3",
+      "evidence_kind": "explicit_301_target_then_separately_requested_exact_profile_name_dob",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan04-000\\response.html",
+        "bytes": 133865,
+        "sha256": "fff7748b6fc830b1093ea288acba75541a09e7537a1b3d72844561348d1930b7"
+      },
+      "evidence_sha256": "fff7748b6fc830b1093ea288acba75541a09e7537a1b3d72844561348d1930b7",
+      "selected_owner": {
+        "name": "Chad Anheliger",
+        "athlete_url": "https://www.ufc.com/athlete/chad-anheliger",
+        "fighter_id": "c7c39e2fb70248b3"
+      },
+      "redirect_receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-011\\receipt.json",
+        "bytes": 2024,
+        "sha256": "40ed0bdd732b4669e83c33886846bf0370651ffe4473c34c8632014b9258ce22"
+      },
+      "target_receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan04-000\\receipt.json",
+        "bytes": 2015,
+        "sha256": "6cfec99871b8dd636b793ac8552e61f1297776935ddbda1f3574c1958f97ff25"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "12b92f9183b0beb636c66c35435e03aee37eeba2f7aa3a5e030aa24f243ece74"
+    },
+    {
+      "name": "Katlyn Cerminara",
+      "athlete_url": "https://www.ufc.com/athlete/katlyn-chookagian",
+      "fighter_id": "e872e9a9a902c045",
+      "evidence_kind": "explicit_301_target_then_separately_requested_exact_profile_name_dob",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan04-001\\response.html",
+        "bytes": 139568,
+        "sha256": "9e04449476d27d0efaf92458af84044bb79aa738090129ece43d94f2482bd2fe"
+      },
+      "evidence_sha256": "9e04449476d27d0efaf92458af84044bb79aa738090129ece43d94f2482bd2fe",
+      "selected_owner": {
+        "name": "Katlyn Cerminara",
+        "athlete_url": "https://www.ufc.com/athlete/katlyn-cerminara",
+        "fighter_id": "e872e9a9a902c045"
+      },
+      "redirect_receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-027\\receipt.json",
+        "bytes": 2029,
+        "sha256": "e97d06591771f0e548fef5f659b6c7b1b42f39aeb8fa793a8ef7bfa76635127a"
+      },
+      "target_receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan04-001\\receipt.json",
+        "bytes": 2019,
+        "sha256": "c82c35f162359aeb94263a43db229b595579ab07305d98833b0a2c82ddee5be3"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "12b92f9183b0beb636c66c35435e03aee37eeba2f7aa3a5e030aa24f243ece74"
+    },
+    {
+      "name": "Valesca Machado",
+      "athlete_url": "https://www.ufc.com/athlete/norma-dyumont-viana-1",
+      "fighter_id": "a1a91dbf41a029c4",
+      "evidence_kind": "explicit_301_target_then_separately_requested_exact_profile_name_dob",
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan04-002\\response.html",
+        "bytes": 79865,
+        "sha256": "c3d1ed5d11842b5350a0e86cddf63ad823389645d52b53fd769514bc9a6a1708"
+      },
+      "evidence_sha256": "c3d1ed5d11842b5350a0e86cddf63ad823389645d52b53fd769514bc9a6a1708",
+      "selected_owner": {
+        "name": "Valesca Machado",
+        "athlete_url": "https://www.ufc.com/athlete/valesca-machado",
+        "fighter_id": "a1a91dbf41a029c4"
+      },
+      "redirect_receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-054\\receipt.json",
+        "bytes": 2036,
+        "sha256": "37b8e7247287829b79396d32b16776e881a1cea0884116dafc506e6f80947d70"
+      },
+      "target_receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan04-002\\receipt.json",
+        "bytes": 2013,
+        "sha256": "cc664bf17d1be8367557244925ab06b4bffc38ba4fc387b8acce7d66a55cf232"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "independent_review_sha256": "12b92f9183b0beb636c66c35435e03aee37eeba2f7aa3a5e030aa24f243ece74"
+    },
+    {
+      "name": "Lucia Szabova",
+      "athlete_url": "https://www.ufc.com/athlete/lucia-szabova",
+      "fighter_id": "184f6ec4ee712e9f",
+      "evidence_sha256": "434e22f70a7f3673f0f1406406e63f917efa6aa5d45eb23bda4b5e80c58100f2",
+      "selected_owner": {
+        "name": "Lucia Szabova",
+        "athlete_url": "",
+        "fighter_id": "184f6ec4ee712e9f"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\u31r1\\network\\ufccom-athletes-01\\02-a1-decoded.bin",
+        "bytes": 70553,
+        "sha256": "434e22f70a7f3673f0f1406406e63f917efa6aa5d45eb23bda4b5e80c58100f2"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\u31r1\\network\\ufccom-athletes-01\\02-response.json",
+        "bytes": 10273,
+        "sha256": "6c5c24f0696c60dca70a93585022fc9929f53424e613ddf87d910c225540287d"
+      },
+      "ufcstats_source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\embedded-ufcstats-184f6ec4ee712e9f-67d833deafe2.html",
+        "bytes": 14407,
+        "sha256": "67d833deafe2ee19248bb9927d6dcea80cd6a2898da7ffe87070295f23d8f036"
+      },
+      "ufcstats_receipt_pin": {
+        "path": "C:\\Temp\\u31r1\\network\\ufcstats-fighters-01\\02-response.json",
+        "bytes": 6287,
+        "sha256": "7c71af85cde7049a9647a977768374794b35ae642b303a47055e8af09e2fe643"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "qualification": "Exact route and unique selected owner only. Literal blank selected official route preserved. No current context, historical bout, method evidence, source authority or model field admission is granted.",
+      "evidence_kind": "exact_captured_official_and_ufcstats_full_name_and_dob_unique_selected_owner",
+      "identity_dob": "1997-12-23",
+      "model_safe_dob": "1997-12-23",
+      "independent_review_sha256": "14e19ff60526649860b896073d5c65de8c415b4a0d9e4a51f241e35a4fc55aa2"
+    },
+    {
+      "name": "Javad Mahjoub",
+      "athlete_url": "https://www.ufc.com/athlete/javad-mahjoub",
+      "fighter_id": "e9f9add1481fc11c",
+      "evidence_sha256": "d22027e7a539fc5c66807fc891cf620e946481d4147dcea19b36a74ea0ccb15d",
+      "selected_owner": {
+        "name": "Javad Mahjoub",
+        "athlete_url": "",
+        "fighter_id": "e9f9add1481fc11c"
+      },
+      "source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-023\\response.html",
+        "bytes": 76009,
+        "sha256": "d22027e7a539fc5c66807fc891cf620e946481d4147dcea19b36a74ea0ccb15d"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-023\\receipt.json",
+        "bytes": 2012,
+        "sha256": "e8b0501fed1068c517c02ba648c51875aa00cab3b7bd1e6ecaa30846ce5da344"
+      },
+      "ufcstats_source_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\embedded-ufcstats-e9f9add1481fc11c-42323b152ad9.html",
+        "bytes": 12491,
+        "sha256": "42323b152ad9ee556f3caab1e3ec38074031b75917af117e1708df11baf4f5ad"
+      },
+      "ufcstats_receipt_pin": {
+        "path": "C:\\Temp\\u36a1\\network\\source02\\capture\\003-response.json",
+        "bytes": 1573,
+        "sha256": "35cc152bcfa1751a0ea93dd7428388a6a46cce96cda97f7aeaffceb265032eaa"
+      },
+      "review_decision": "ACCEPT_EXACT_REVIEWED_RUNTIME_IDENTITY_ONLY",
+      "qualification": "Exact route and unique selected owner only. Literal blank selected official route preserved. No current context, historical bout, method evidence, source authority or model field admission is granted.",
+      "evidence_kind": "exact_official_route_and_reciprocal_dated_snapshot_pair_with_retained_owner_dob_correction",
+      "verified_bridge": {
+        "type": "saved_upcoming_bout_identity_only_not_completed_history",
+        "event_date_literal": "Oct. 17, 2026",
+        "snapshot_next_date": "2026-10-17",
+        "event_url_literal": "https://www.ufc.com/event/ufc-fight-night-october-17-2026#13131",
+        "official_card_text": "Upcoming fight .svg-5f8780e0a0db406702a6a9b11eadaafd .st0 {fill-rule: evenodd;clip-rule: evenodd;} Mahjoub vs Sutherland Oct. 17, 2026 How to watch Follow live",
+        "official_opponent_image_literal": "SUTHERLAND_LOUIE_08-08.png",
+        "opponent_name": "Louie Sutherland",
+        "opponent_id": "cdb7b38b1b357f26",
+        "snapshot_pin": {
+          "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\accepted_roster_snapshot\\2026-09-05--169491af5d3c6a999f61286d1802e023ea46f5ba50352d81599e22adcb74104e.csv",
+          "bytes": 173536,
+          "sha256": "169491af5d3c6a999f61286d1802e023ea46f5ba50352d81599e22adcb74104e"
+        },
+        "subject_row_one_based": 604,
+        "reciprocal_opponent_row_one_based": 629,
+        "registry_source_context": {
+          "bouts": "0",
+          "date_of_birth": "1992-05-26",
+          "debut": "",
+          "debut_result": "",
+          "fighter": "Javad Mahjoub",
+          "losses": "",
+          "next_date": "2026-10-17",
+          "next_opp": "Louie Sutherland",
+          "prev_bout": "",
+          "prev_result": "",
+          "snapshot_sha256": "169491af5d3c6a999f61286d1802e023ea46f5ba50352d81599e22adcb74104e",
+          "wins": ""
+        },
+        "qualification": "Upcoming pair/date distinguish the saved route owner. They do not establish a completed bout, methods, live event freshness, or current scheduling authority."
+      },
+      "retained_conflicts": [
+        {
+          "type": "official_vs_ufcstats_dob_year_discrepancy",
+          "official_dob": "1991-05-26",
+          "ufcstats_dob": "1992-05-26",
+          "owner_adjudicated_dob": "1992-05-26",
+          "owner_verbatim": "# Javad Mahjoub was born May 26, 1992",
+          "owner_recorded_utc": "2026-09-20T23:47:15.3824031+00:00",
+          "qualification": "Do not treat raw DOB values as agreeing. Identity review relies on exact canonical route/name and independent reciprocal dated-pair evidence; the owner correction supplies separate field authority."
+        }
+      ],
+      "independent_review_sha256": "14e19ff60526649860b896073d5c65de8c415b4a0d9e4a51f241e35a4fc55aa2"
+    }
+  ],
+  "aliases": [
+    {
+      "name": "Alex Volkanovski",
+      "canonical_name": "Alexander Volkanovski",
+      "fighter_id": "e1248941344b3288",
+      "evidence_sha256": "f81f34642ce9e005c99d8e6994ade0720a76b2be3d336800b1f01af8de40e836",
+      "review_decision": "ACCEPT_EXACT_RUNTIME_ALIAS_EVIDENCE_ONLY"
+    },
+    {
+      "name": "Joseph Kropschot",
+      "canonical_name": "Joe Kropschot",
+      "fighter_id": "8a81a0707350c4a8",
+      "evidence_sha256": "749c087a1ac6bed1403f9593d42eb6dc67f60822d2a01e9036e2d2e29028af17",
+      "scope": "Only these exact two names at selected ID8a81a0707350c4a8. Official exact route/name and DOB1995-06-19 agree with selected unique Joe profile; no general Joe/Joseph normalization."
+    }
+  ],
+  "withheld": [],
+  "manifest_sha256": "134bfd55b5e3bb27d4a0252596ee58d61b634803e5009b7446e6bdb3526c6dc6",
+  "release_id": "v9-monthly07-20260927-carried-s01",
+  "superseded_withheld": [
+    {
+      "athlete_url": "https://www.ufc.com/athlete/ailin-perez",
+      "name": "Ailin Perez",
+      "fighter_id": "06e4245d16fc5315",
+      "reason": "original_official_route_custody_not_established"
+    }
+  ]
+}

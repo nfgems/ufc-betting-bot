@@ -23,7 +23,7 @@ from src.data.ufc_refresh import (
     build_training_rows_from_pulled_data,
 )
 from src.features.build_features import build_features
-from src.model.train import prepare_train_test
+from src.model.training_preflight import prepare_train_test
 from src.model.training_spec import NamedModelTrainingSpec, materialize_spec_transforms
 
 TRAINING_SOURCE_REPO = "repo_owned_pulled_scraped"

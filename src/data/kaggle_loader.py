@@ -17,6 +17,12 @@ import numpy as np
 import pandas as pd
 
 from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
+from src.data.fight_results import (
+    RESULT_CLASS_NORMAL,
+    has_result_policy_marker,
+    validate_marked_result,
+    winner_for_side,
+)
 from src.data.io_utils import write_csv_atomically
 
 logger = logging.getLogger(__name__)
@@ -255,13 +261,53 @@ def load_kaggle_dataset(filepath: Optional[Path] = None) -> pd.DataFrame:
             )
         )
 
-    # Create binary target: 1 if fighter_a wins, 0 if fighter_b wins, NaN for draws/NC
+    # Legacy, unmarked rows intentionally keep their historical semantics.  The
+    # incoming-result policy applies only to rows explicitly carrying its marker.
     is_a_win = normalized["winner"] == normalized["fighter_a"]
     is_b_win = normalized["winner"] == normalized["fighter_b"]
     normalized["target"] = np.where(is_a_win, 1.0, np.where(is_b_win, 0.0, np.nan))
-    n_draws = normalized["target"].isna().sum()
-    if n_draws:
-        logger.info(f"Excluded {n_draws} draws/NC/DQ from target (set to NaN)")
+    policy_markers = normalized.get(
+        "result_policy_version",
+        pd.Series(index=normalized.index, dtype="object"),
+    )
+    for index in normalized.index[policy_markers.map(has_result_policy_marker)]:
+        row = normalized.loc[index]
+        classification = validate_marked_result(
+            row.get("official_outcome"),
+            row.get("method"),
+            policy_version=row.get("result_policy_version"),
+            persisted_result_class=row.get("result_class"),
+            persisted_binary_target_eligible=row.get(
+                "binary_target_eligible"
+            ),
+        )
+        classified_winner = winner_for_side(
+            classification.winner_side,
+            fighter_a=row.get("fighter_a"),
+            fighter_b=row.get("fighter_b"),
+        )
+        observed_winner = row.get("winner")
+        observed_winner_present = not pd.isna(observed_winner) and bool(
+            str(observed_winner).strip()
+        )
+        if observed_winner_present and observed_winner != classified_winner:
+            raise ValueError(
+                "marked result winner contradicts official outcome at row "
+                f"{index}"
+            )
+        normalized.at[index, "winner"] = classified_winner
+        normalized.at[index, "target"] = (
+            1.0
+            if classified_winner == row.get("fighter_a")
+            else 0.0
+        ) if classification.result_class == RESULT_CLASS_NORMAL else np.nan
+
+    n_non_binary = int(normalized["target"].isna().sum())
+    if n_non_binary:
+        logger.info(
+            "Excluded %d non-binary result rows from target (set to NaN)",
+            n_non_binary,
+        )
 
     logger.info(f"Normalized dataset: {len(normalized)} fights, {len(normalized.columns)} columns")
     return normalized
@@ -288,8 +334,17 @@ def _normalize_columns(df: pd.DataFrame, cols_lower: dict) -> pd.DataFrame:
         "method": "method",
         "win_by": "method",
         "finish": "method",
+        "official_outcome": "official_outcome",
+        "result_policy_version": "result_policy_version",
+        "result_class": "result_class",
+        "binary_target_eligible": "binary_target_eligible",
+        "result_quarantine_reason": "result_quarantine_reason",
 
         # Fighter names (many formats)
+        "fighter_a": "fighter_a",
+        "fighter_b": "fighter_b",
+        "fighter_a_id": "fighter_a_id",
+        "fighter_b_id": "fighter_b_id",
         "r_fighter": "fighter_a",
         "b_fighter": "fighter_b",
         "fighter_1": "fighter_a",

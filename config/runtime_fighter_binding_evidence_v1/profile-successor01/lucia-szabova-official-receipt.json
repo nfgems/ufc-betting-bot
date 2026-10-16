@@ -1,0 +1,438 @@
+{
+  "attempts": [
+    {
+      "advertised_content_length": 70553,
+      "capture_complete": true,
+      "completed_at_utc": "2026-09-03T05:31:20.957381+00:00",
+      "completion_basis": "content_length_exact",
+      "content_codings": [
+        "identity"
+      ],
+      "decode_complete": true,
+      "decode_error": null,
+      "decode_methods": [
+        "identity"
+      ],
+      "decoded_path": "C:/Temp/u31r1/network/ufccom-athletes-01/02-a1-decoded.bin",
+      "decoded_sha256": "434e22f70a7f3673f0f1406406e63f917efa6aa5d45eb23bda4b5e80c58100f2",
+      "decoded_size": 70553,
+      "error": null,
+      "framing_errors": [],
+      "kind": "get",
+      "location_header": "",
+      "media_type": "text/html",
+      "method": "GET",
+      "raw_path": "C:/Temp/u31r1/network/ufccom-athletes-01/02-a1-raw.bin",
+      "raw_sha256": "434e22f70a7f3673f0f1406406e63f917efa6aa5d45eb23bda4b5e80c58100f2",
+      "raw_size": 70553,
+      "read_error": null,
+      "reason": "OK",
+      "redirects_followed": 0,
+      "request_headers": {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "identity",
+        "Connection": "close",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) UFCBettingBot-identity-resolution/1.0 (owner-operated research bot)"
+      },
+      "response_headers": [
+        [
+          "Connection",
+          "close"
+        ],
+        [
+          "Content-Length",
+          "70553"
+        ],
+        [
+          "Cache-Control",
+          "max-age=604800, public"
+        ],
+        [
+          "Content-Language",
+          "en"
+        ],
+        [
+          "Content-Type",
+          "text/html; charset=UTF-8"
+        ],
+        [
+          "Etag",
+          "W/\"1788351554\""
+        ],
+        [
+          "Expires",
+          "Sun, 19 Nov 1978 05:00:00 GMT"
+        ],
+        [
+          "Last-Modified",
+          "Wed, 02 Sep 2026 12:19:14 GMT"
+        ],
+        [
+          "Server",
+          "nginx"
+        ],
+        [
+          "X-Consumer-Id",
+          "default_consumer"
+        ],
+        [
+          "X-Content-Type-Options",
+          "nosniff"
+        ],
+        [
+          "X-Drupal-Dynamic-Cache",
+          "MISS"
+        ],
+        [
+          "X-Frame-Options",
+          "SAMEORIGIN"
+        ],
+        [
+          "X-Generator",
+          "Drupal 10 (https://www.drupal.org)"
+        ],
+        [
+          "X-Pantheon-Styx-Hostname",
+          "styx-us-a-b66bcffc5-7ngc8"
+        ],
+        [
+          "X-Styx-Req-Id",
+          "830578b9-a6c8-11f1-8766-3e279590b392"
+        ],
+        [
+          "Age",
+          "61926"
+        ],
+        [
+          "Accept-Ranges",
+          "bytes"
+        ],
+        [
+          "Via",
+          "1.1 varnish, 1.1 varnish, 1.1 varnish"
+        ],
+        [
+          "Date",
+          "Thu, 03 Sep 2026 05:31:21 GMT"
+        ],
+        [
+          "Strict-Transport-Security",
+          "max-age=300; includeSubDomains;"
+        ],
+        [
+          "X-Served-By",
+          "cache-chi-klot8100088-CHI, cache-ewr-kewr1740072-EWR, cache-ewr-kewr1740053-EWR"
+        ],
+        [
+          "X-Cache",
+          "HIT, MISS, MISS"
+        ],
+        [
+          "X-Cache-Hits",
+          "2, 0, 0"
+        ],
+        [
+          "X-Timer",
+          "S1788413481.023940,VS0,VE35"
+        ],
+        [
+          "Vary",
+          "Accept-Encoding, x-zone-langcode, X-Consumer-ID, Cookie, Cookie"
+        ],
+        [
+          "Set-Cookie",
+          "STYXKEY_region=USA.US.en.Default; path=/; expires=Sat, 05 Sep 2026 05:31:21 GMT"
+        ]
+      ],
+      "retry_count": 0,
+      "semantic_evidence_eligible": true,
+      "send_ordinal": 2,
+      "started_at_utc": "2026-09-03T05:31:20.305574+00:00",
+      "status_code": 200,
+      "transfer_codings": [],
+      "transport_invariant_errors": [],
+      "ufcstats_challenge_detected": false,
+      "url": "https://www.ufc.com/athlete/lucia-szabova"
+    }
+  ],
+  "capture": {
+    "advertised_content_length": 70553,
+    "capture_complete": true,
+    "completed_at_utc": "2026-09-03T05:31:20.957381+00:00",
+    "completion_basis": "content_length_exact",
+    "content_codings": [
+      "identity"
+    ],
+    "decode_complete": true,
+    "decode_error": null,
+    "decode_methods": [
+      "identity"
+    ],
+    "decoded_path": "C:/Temp/u31r1/network/ufccom-athletes-01/02-a1-decoded.bin",
+    "decoded_sha256": "434e22f70a7f3673f0f1406406e63f917efa6aa5d45eb23bda4b5e80c58100f2",
+    "decoded_size": 70553,
+    "error": null,
+    "framing_errors": [],
+    "kind": "get",
+    "location_header": "",
+    "media_type": "text/html",
+    "method": "GET",
+    "raw_path": "C:/Temp/u31r1/network/ufccom-athletes-01/02-a1-raw.bin",
+    "raw_sha256": "434e22f70a7f3673f0f1406406e63f917efa6aa5d45eb23bda4b5e80c58100f2",
+    "raw_size": 70553,
+    "read_error": null,
+    "reason": "OK",
+    "redirects_followed": 0,
+    "request_headers": {
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Encoding": "identity",
+      "Connection": "close",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) UFCBettingBot-identity-resolution/1.0 (owner-operated research bot)"
+    },
+    "response_headers": [
+      [
+        "Connection",
+        "close"
+      ],
+      [
+        "Content-Length",
+        "70553"
+      ],
+      [
+        "Cache-Control",
+        "max-age=604800, public"
+      ],
+      [
+        "Content-Language",
+        "en"
+      ],
+      [
+        "Content-Type",
+        "text/html; charset=UTF-8"
+      ],
+      [
+        "Etag",
+        "W/\"1788351554\""
+      ],
+      [
+        "Expires",
+        "Sun, 19 Nov 1978 05:00:00 GMT"
+      ],
+      [
+        "Last-Modified",
+        "Wed, 02 Sep 2026 12:19:14 GMT"
+      ],
+      [
+        "Server",
+        "nginx"
+      ],
+      [
+        "X-Consumer-Id",
+        "default_consumer"
+      ],
+      [
+        "X-Content-Type-Options",
+        "nosniff"
+      ],
+      [
+        "X-Drupal-Dynamic-Cache",
+        "MISS"
+      ],
+      [
+        "X-Frame-Options",
+        "SAMEORIGIN"
+      ],
+      [
+        "X-Generator",
+        "Drupal 10 (https://www.drupal.org)"
+      ],
+      [
+        "X-Pantheon-Styx-Hostname",
+        "styx-us-a-b66bcffc5-7ngc8"
+      ],
+      [
+        "X-Styx-Req-Id",
+        "830578b9-a6c8-11f1-8766-3e279590b392"
+      ],
+      [
+        "Age",
+        "61926"
+      ],
+      [
+        "Accept-Ranges",
+        "bytes"
+      ],
+      [
+        "Via",
+        "1.1 varnish, 1.1 varnish, 1.1 varnish"
+      ],
+      [
+        "Date",
+        "Thu, 03 Sep 2026 05:31:21 GMT"
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=300; includeSubDomains;"
+      ],
+      [
+        "X-Served-By",
+        "cache-chi-klot8100088-CHI, cache-ewr-kewr1740072-EWR, cache-ewr-kewr1740053-EWR"
+      ],
+      [
+        "X-Cache",
+        "HIT, MISS, MISS"
+      ],
+      [
+        "X-Cache-Hits",
+        "2, 0, 0"
+      ],
+      [
+        "X-Timer",
+        "S1788413481.023940,VS0,VE35"
+      ],
+      [
+        "Vary",
+        "Accept-Encoding, x-zone-langcode, X-Consumer-ID, Cookie, Cookie"
+      ],
+      [
+        "Set-Cookie",
+        "STYXKEY_region=USA.US.en.Default; path=/; expires=Sat, 05 Sep 2026 05:31:21 GMT"
+      ]
+    ],
+    "retry_count": 0,
+    "semantic_evidence_eligible": true,
+    "send_ordinal": 2,
+    "started_at_utc": "2026-09-03T05:31:20.305574+00:00",
+    "status_code": 200,
+    "transfer_codings": [],
+    "transport_invariant_errors": [],
+    "ufcstats_challenge_detected": false,
+    "url": "https://www.ufc.com/athlete/lucia-szabova"
+  },
+  "challenge_rounds": [],
+  "completed_at_utc": "2026-09-03T05:31:20.957938+00:00",
+  "error": null,
+  "host": "www.ufc.com",
+  "method": "GET",
+  "ordinal": 2,
+  "purpose": "Lucia Szabova official athlete page (Roster Watch DOB 1997-12-23; UFCStats 184f6ec4ee712e9f DOB 1997-12-23; next bout 2026-10-31 vs Tainara Lisboa per Roster Watch)",
+  "request_headers": {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "identity",
+    "Connection": "close",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) UFCBettingBot-identity-resolution/1.0 (owner-operated research bot)"
+  },
+  "response_headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "70553"
+    ],
+    [
+      "Cache-Control",
+      "max-age=604800, public"
+    ],
+    [
+      "Content-Language",
+      "en"
+    ],
+    [
+      "Content-Type",
+      "text/html; charset=UTF-8"
+    ],
+    [
+      "Etag",
+      "W/\"1788351554\""
+    ],
+    [
+      "Expires",
+      "Sun, 19 Nov 1978 05:00:00 GMT"
+    ],
+    [
+      "Last-Modified",
+      "Wed, 02 Sep 2026 12:19:14 GMT"
+    ],
+    [
+      "Server",
+      "nginx"
+    ],
+    [
+      "X-Consumer-Id",
+      "default_consumer"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Drupal-Dynamic-Cache",
+      "MISS"
+    ],
+    [
+      "X-Frame-Options",
+      "SAMEORIGIN"
+    ],
+    [
+      "X-Generator",
+      "Drupal 10 (https://www.drupal.org)"
+    ],
+    [
+      "X-Pantheon-Styx-Hostname",
+      "styx-us-a-b66bcffc5-7ngc8"
+    ],
+    [
+      "X-Styx-Req-Id",
+      "830578b9-a6c8-11f1-8766-3e279590b392"
+    ],
+    [
+      "Age",
+      "61926"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Via",
+      "1.1 varnish, 1.1 varnish, 1.1 varnish"
+    ],
+    [
+      "Date",
+      "Thu, 03 Sep 2026 05:31:21 GMT"
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=300; includeSubDomains;"
+    ],
+    [
+      "X-Served-By",
+      "cache-chi-klot8100088-CHI, cache-ewr-kewr1740072-EWR, cache-ewr-kewr1740053-EWR"
+    ],
+    [
+      "X-Cache",
+      "HIT, MISS, MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "2, 0, 0"
+    ],
+    [
+      "X-Timer",
+      "S1788413481.023940,VS0,VE35"
+    ],
+    [
+      "Vary",
+      "Accept-Encoding, x-zone-langcode, X-Consumer-ID, Cookie, Cookie"
+    ],
+    [
+      "Set-Cookie",
+      "STYXKEY_region=USA.US.en.Default; path=/; expires=Sat, 05 Sep 2026 05:31:21 GMT"
+    ]
+  ],
+  "started_at_utc": "2026-09-03T05:31:20.305421+00:00",
+  "status_code": 200,
+  "url": "https://www.ufc.com/athlete/lucia-szabova"
+}

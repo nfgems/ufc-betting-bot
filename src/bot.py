@@ -81,6 +81,8 @@ from src.config import (
     LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL,
     LIVE_DATA_QUALITY_RETRY_SECONDS,
 )
+from src.data.event_context import coerce_nullable_bool, coerce_scheduled_rounds
+from src.data.rosterwatch_identity import pending_fighters_for_prediction, prediction_identities_confirmed
 from src.live_control import assert_real_trading_allowed
 from src.prediction_history import (
     PREDICTION_HISTORY_FILENAME,
@@ -127,7 +129,9 @@ _COMPLETED_EVENT_DATES_CACHE_TTL_SECONDS = 3600.0
 _LAST_GOOD_COMPLETED_UFC_EVENT_DATES: tuple[float, set[date]] | None = None
 # Bump whenever inference/cache semantics change incompatibly. Version 1 also
 # defines the pre-versioned promoted cache contract for one-time migration.
-_LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION = 1
+# Version 2 preserves unknown event context instead of coercing it to a
+# plausible-looking non-title three-round bout.
+_LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION = 3
 _ACTIONABLE_PREDICTION_CACHE_MAX_AGE = timedelta(minutes=20)
 _ACTIONABLE_LINE_FEATURE_COLS = frozenset(
     {
@@ -284,6 +288,68 @@ def _resolve_runtime_bundle_summary(
         summary["git_sha"],
     )
     return summary
+
+
+def _runtime_selected_inputs(summary, *, model_result, no_odds_result):
+    from src.data.runtime_selected_inputs import RuntimeSelectedInputs
+    return RuntimeSelectedInputs.from_summary(
+        summary, model_result=model_result, no_odds_result=no_odds_result,
+    )
+
+
+def _build_runtime_fight_features(selected_runtime, fighter_a, fighter_b, **fight):
+    """The single application seam for legacy or explicitly selected inputs."""
+    if selected_runtime is None:
+        from src.data.fighter_lookup import build_fight_features
+        return build_fight_features(fighter_a, fighter_b, **fight)
+    fight.pop('processed_data_dir', None)
+    # Legacy nickname/suffix normalization is not identity evidence. Selected
+    # inputs validate the submitted names against their exact bound IDs.
+    fight.pop('fighter_a_lookup_name', None)
+    fight.pop('fighter_b_lookup_name', None)
+    return selected_runtime.build(fighter_a=fighter_a, fighter_b=fighter_b, **fight)
+
+
+def _runtime_observation_call(selected_runtime, callback, *args, **kwargs):
+    if selected_runtime is None:
+        return callback(*args, **kwargs)
+    with selected_runtime.observations():
+        return callback(*args, **kwargs)
+
+
+def _bound_method_fingerprint(selected_runtime, fight, event_context, *, inference_spec, fighter_a, fighter_b):
+    bound_fight = dict(fight)
+    bound_fight.update({f'fighter_{side}_id': event_context.get(f'fighter_{side}_id')
+                       for side in ('a', 'b')})
+    if selected_runtime is not None:
+        from src.data.runtime_selected_inputs import SelectedRuntimeInputError
+        try:
+            with selected_runtime.sources.activate():
+                for side, name in (('a', fighter_a), ('b', fighter_b)):
+                    selected_runtime.sources.validate_fighter(name, bound_fight[f'fighter_{side}_id'])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise SelectedRuntimeInputError(f'Selected fight identity refused: {exc}') from exc
+    return _runtime_observation_call(
+        selected_runtime, _prediction_method_odds_fingerprint, bound_fight,
+        inference_spec=inference_spec, fighter_a=fighter_a, fighter_b=fighter_b,
+    )
+
+
+def _selected_cache_identity_is_current(selected_runtime, cached, current_fight, event_context):
+    if selected_runtime is None:
+        return True
+    provenance = cached.get('feature_provenance') or {}
+    if provenance.get('selected_runtime_binding') != selected_runtime.binding:
+        return False
+    try:
+        with selected_runtime.observations():
+            for side in ('a', 'b'):
+                selected_runtime.sources.validate_fighter(
+                    current_fight.get(f'fighter_{side}'), event_context.get(f'fighter_{side}_id'),
+                )
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return True
 
 
 def _parse_runtime_event_date(value) -> date | None:
@@ -755,6 +821,7 @@ def _resolve_live_fight_counts(
     fighter_b: str,
     *,
     fallback_resolver=None,
+    allow_history_fallback: bool = True,
 ) -> tuple[int, int]:
     """
     Prefer live-scraped UFC fight counts embedded in the live feature vector.
@@ -770,9 +837,9 @@ def _resolve_live_fight_counts(
     a_fights = _coerce_live_fight_count(features.get("a_num_fights"))
     b_fights = _coerce_live_fight_count(features.get("b_num_fights"))
 
-    if a_fights is None:
+    if a_fights is None and allow_history_fallback:
         a_fights = fallback_resolver(fighter_a)
-    if b_fights is None:
+    if b_fights is None and allow_history_fallback:
         b_fights = fallback_resolver(fighter_b)
 
     return (
@@ -800,7 +867,7 @@ _LIVE_DATA_QUALITY_CRITICAL_SUFFIXES = (
 # Bump this whenever the execution-gate semantics change.  It is part of the
 # durable prediction-cache signature so a restart cannot reuse a row evaluated
 # under older quality rules.
-_LIVE_DATA_QUALITY_GATE_VERSION = 5
+_LIVE_DATA_QUALITY_GATE_VERSION = 7
 _DATA_QUALITY_RETRY_REASON = "data-quality retry cooldown elapsed"
 
 
@@ -817,6 +884,25 @@ def _feature_value_is_missing(value: object) -> bool:
     except (TypeError, ValueError):
         pass
     return not str(value).strip() or str(value).strip().casefold() in {"nan", "none", "nat"}
+
+
+def _withhold_unconfirmed_identity(fight) -> list[str]:
+    """Check current membership before cache reuse or any trader receives a row."""
+    from src.strategy.duo_trader import record_model_tracker_skip, recover_model_tracker_issues
+    pending = pending_fighters_for_prediction(fight)
+    if pending:
+        record_model_tracker_skip(fight, "identity_unconfirmed", "identity unconfirmed, skip", fighters=pending)
+    elif prediction_identities_confirmed(fight):
+        recover_model_tracker_issues(fight, reasons=("identity_unconfirmed",))
+    return pending
+
+
+def _record_model_quality_withholding(fight, quality: dict) -> None:
+    from src.strategy.duo_trader import record_model_tracker_skip
+    unavailable = [str(item.get("fighter", "")) for item in quality.get("fighters", {}).values()
+                   if isinstance(item, dict) and item.get("fight_history_status") == "unavailable"]
+    record_model_tracker_skip(fight, "history_unavailable" if unavailable else "data_quality_withheld",
+                              "; ".join(quality.get("reasons") or ["withheld by live data-quality gate"]), fighters=unavailable or None)
 
 
 def _live_prediction_quality_assessment(
@@ -837,7 +923,10 @@ def _live_prediction_quality_assessment(
     """
     from src.config import MIN_FIGHTER_FIGHTS
 
-    reasons: list[str] = []
+    pending = pending_fighters_for_prediction({"fighter_a": fighter_a, "fighter_b": fighter_b, **{
+        key: value for key, value in provenance.items() if "identity_complete" in key or "identity_confirmed" in key or "carrier_resolution_status" in key
+    }})
+    reasons: list[str] = [f"{name}: identity unconfirmed, skip" for name in pending]
     fighters: dict[str, dict] = {}
     for side, name, fight_count in (
         ("a", fighter_a, a_fights),
@@ -863,7 +952,9 @@ def _live_prediction_quality_assessment(
         if not source:
             reasons.append(f"{name} has no verified fighter-data provenance")
             continue
-        if source not in {"processed", "ufcstats", "fallback"}:
+        from src.data.runtime_selected_inputs import verified_selected_provenance
+        selected_verified = source == "selected_saved_inputs" and verified_selected_provenance(provenance, side)
+        if source not in {"processed", "ufcstats", "fallback"} and not selected_verified:
             reasons.append(f"{name} has unsupported fighter-data provenance '{source}'")
             continue
         if source == "ufcstats" and fight_history_status == "unavailable":
@@ -876,7 +967,7 @@ def _live_prediction_quality_assessment(
                 "UFCStats/processed UFC data"
             )
         if (
-            source in {"processed", "ufcstats", "fallback"}
+            (source in {"processed", "ufcstats", "fallback"} or selected_verified)
             and int(fight_count) >= MIN_FIGHTER_FIGHTS
             and len(missing) > LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL
         ):
@@ -922,28 +1013,19 @@ def _collapse_live_initials(normalized_name: str) -> str:
 
 
 def _official_url_identity_trusted(row) -> bool:
-    from src.data.ufc_active_roster import _explicit_boolean
+    from src.data.ufc_active_roster import _official_url_identity_positively_trusted
 
-    status = (
-        str(row.get("official_url_identity_status") or "")
-        .strip()
-        .lower()
-        .replace("_", " ")
-        .replace("-", " ")
-    )
-    if status in {"mismatch", "test profile"}:
-        return False
-    explicit = row.get("official_url_identity_valid")
-    if explicit is None or (isinstance(explicit, float) and math.isnan(explicit)):
-        return True
-    return _explicit_boolean(explicit) is not False
+    return _official_url_identity_positively_trusted(row)
 
 
 def _load_live_fighter_alias_map() -> dict[str, str]:
     """Load unique roster-backed aliases used to match live fight names."""
     import pandas as pd
     from src.data.name_utils import normalize_cross_source_name, same_person_name
-    from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH
+    from src.data.ufc_active_roster import (
+        OFFICIAL_ACTIVE_ROSTER_PATH,
+        OFFICIAL_PROFILE_IDENTITY_PROVENANCE_COLUMNS,
+    )
 
     official_path = OFFICIAL_ACTIVE_ROSTER_PATH
     alias_columns = {
@@ -952,8 +1034,18 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
         "slug_name",
         "alternate_slug_names",
         "ufcstats_name",
+        "official_athlete_url",
+        "canonical_athlete_url",
+        "ufcstats_url",
+        "stable_ufcstats_id",
+        "fighter_id",
+        "official_profile_fetch_outcome",
+        "combat_sport",
+        "combat_sport_reason",
+        "combat_sport_profile_url",
         "official_url_identity_status",
         "official_url_identity_valid",
+        *OFFICIAL_PROFILE_IDENTITY_PROVENANCE_COLUMNS,
     }
     try:
         cache_key = f"live-name-aliases::{official_path.resolve()}"
@@ -983,7 +1075,7 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
 
     for _, row in official_df.iterrows():
         canonical = ""
-        canonical_columns = ["official_name", "ufcstats_name"]
+        canonical_columns = ["ufcstats_name", "official_name"]
         if _official_url_identity_trusted(row):
             canonical_columns.extend(["profile_name", "slug_name"])
         for column in canonical_columns:
@@ -1029,13 +1121,28 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
     return alias_map
 
 
+_REVIEWED_LIVE_FIGHTER_NAME_ALIASES = {
+    # Exact, source-reviewed live-market spellings. Keep these scoped to live
+    # matching so they do not broaden project-wide historical identity rules.
+    "long xiao": "xiao long",
+    "meng ding": "ding meng",
+    "cam nelson": "cameron nelson",
+    "aori qileng": "aoriqileng",
+    "su mudaerji": "sumudaerji",
+}
+
+
 def _canonicalize_live_fighter_name(fighter_name: str) -> str:
     from src.data.name_utils import normalize_cross_source_name
 
     normalized = _collapse_live_initials(normalize_cross_source_name(fighter_name))
     if not normalized:
         return ""
-    return _load_live_fighter_alias_map().get(normalized, normalized)
+    roster_canonical = _load_live_fighter_alias_map().get(normalized, normalized)
+    return _REVIEWED_LIVE_FIGHTER_NAME_ALIASES.get(
+        roster_canonical,
+        roster_canonical,
+    )
 
 
 def _live_fight_pair_key(fighter_a: str, fighter_b: str) -> str:
@@ -1136,6 +1243,7 @@ def _prediction_runtime_signature(
     model_result: dict,
     no_odds_result: dict | None = None,
     runtime_bundle_summary: dict | None = None,
+    selected_runtime=None,
 ) -> dict:
     primary_spec = model_result.get("training_spec") if isinstance(model_result.get("training_spec"), dict) else {}
     no_odds_spec = (
@@ -1169,6 +1277,9 @@ def _prediction_runtime_signature(
             else 0
         ),
         "bundle_id": str((runtime_bundle_summary or {}).get("bundle_id", "") or ""),
+        "selected_release_id": str((runtime_bundle_summary or {}).get("selected_release_id", "") or ""),
+        "selected_runtime_manifest_sha256": str((runtime_bundle_summary or {}).get("selected_runtime_manifest_sha256", "") or ""),
+        "selected_input_binding": dict(selected_runtime.binding) if selected_runtime is not None else None,
         "bundle_built_at": str((runtime_bundle_summary or {}).get("built_at", "") or ""),
         "bundle_git_sha": str((runtime_bundle_summary or {}).get("git_sha", "") or ""),
         "bundle_processed_dir": str((runtime_bundle_summary or {}).get("processed_dir", "") or ""),
@@ -1289,8 +1400,10 @@ def _prediction_event_context_snapshot(fight: dict | object, event_context: dict
             "card_date": card_date,
             "weight_class": str(event_context.get("weight_class", "") or ""),
             "num_rounds": event_context.get("num_rounds"),
-            "is_title_bout": bool(event_context.get("is_title_bout")),
+            "is_title_bout": event_context.get("is_title_bout"),
             "is_empty_arena": event_context.get("is_empty_arena"),
+            "fighter_a_id": event_context.get("fighter_a_id"),
+            "fighter_b_id": event_context.get("fighter_b_id"),
         }
     )
 
@@ -1355,6 +1468,9 @@ def _prediction_method_odds_fingerprint(
         return get_method_odds_fingerprint(
             fighter_a,
             fighter_b,
+            fighter_a_id=getter("fighter_a_id", None) if callable(getter) else getattr(fight, "fighter_a_id", None),
+            fighter_b_id=getter("fighter_b_id", None) if callable(getter) else getattr(fight, "fighter_b_id", None),
+            strict=True,
             event_id=event_id,
             commence_time=commence_time,
         )
@@ -1452,6 +1568,10 @@ def _prediction_needs_refresh(
 ) -> tuple[bool, str]:
     if not isinstance(cached, dict):
         return True, "missing cache row"
+    if pending_fighters_for_prediction(current_fight):
+        return True, "identity unconfirmed"
+    if cached.get("identity_complete") is False and prediction_identities_confirmed(current_fight):
+        return True, "fighter identity confirmed"
 
     current_cache_key = _prediction_cache_key(current_fight)
     if str(cached.get("cache_key", "") or "") != current_cache_key:
@@ -1479,7 +1599,14 @@ def _prediction_needs_refresh(
         return True, "missing event context snapshot"
     if not isinstance(current_event_context_snapshot, dict):
         return True, "missing current event context snapshot"
-    for field in ("weight_class", "num_rounds", "is_title_bout", "is_empty_arena"):
+    for field in (
+        "weight_class",
+        "num_rounds",
+        "is_title_bout",
+        "is_empty_arena",
+        "fighter_a_id",
+        "fighter_b_id",
+    ):
         if cached_event_context.get(field) != current_event_context_snapshot.get(field):
             return True, f"event context changed: {field}"
 
@@ -1549,10 +1676,15 @@ def _actionable_cached_prediction(
     current_event_context_snapshot: dict,
     require_no_odds_prediction: bool,
     now: datetime | None = None,
+    selected_runtime=None,
 ) -> tuple[dict | None, str]:
     """Return a safely executable short-lived cache row without live enrichment."""
     if not isinstance(cached, dict):
         return None, "missing cache row"
+    if pending_fighters_for_prediction(current_fight):
+        return None, "identity unconfirmed, skip"
+    if not _selected_cache_identity_is_current(selected_runtime, cached, current_fight, current_event_context_snapshot):
+        return None, "selected input binding or fighter identity changed"
 
     current_time = now or _current_utc()
     from src.betting_window import bet_window_status
@@ -1649,12 +1781,14 @@ def _actionable_cached_prediction(
 
     cached_method_fingerprint = str(cached.get("method_odds_fingerprint", "") or "")
     if feature_cols.intersection(_ACTIONABLE_METHOD_FEATURE_COLS):
-        current_method_fingerprint = _prediction_method_odds_fingerprint(
-            current_fight,
-            inference_spec=inference_spec,
-            fighter_a=fighter_a,
-            fighter_b=fighter_b,
-        )
+        from src.data.runtime_selected_inputs import SelectedRuntimeInputError
+        try:
+            current_method_fingerprint = _bound_method_fingerprint(
+                selected_runtime, current_fight, current_event_context_snapshot,
+                inference_spec=inference_spec, fighter_a=fighter_a, fighter_b=fighter_b,
+            )
+        except SelectedRuntimeInputError:
+            return None, "selected method inputs could not be validated"
         if current_method_fingerprint.startswith("method-odds:error:"):
             return None, "method inputs could not be validated"
         if cached_method_fingerprint != current_method_fingerprint:
@@ -2032,6 +2166,14 @@ def _load_live_event_contexts_for_fights(expected_fights: object = None) -> list
             return _load_live_event_contexts()
         except TypeError:
             raise exc
+
+
+def _load_runtime_live_event_contexts(selected_runtime, expected_fights=None):
+    """Keep shared source collection raw; bind only the selected consumer copy."""
+    contexts = _load_live_event_contexts_for_fights(expected_fights)
+    if selected_runtime is None:
+        return contexts
+    return selected_runtime.bind_live_contexts(contexts)
 
 
 def _normalize_live_weight_class(value) -> str | None:
@@ -2675,17 +2817,28 @@ def _resolve_live_event_context(
         best = candidates[0]
         weight_class = _normalize_live_weight_class(best.get("weight_class"))
         if weight_class is not None:
-            is_title_bout = bool(best.get("is_title_bout", False))
-            try:
-                num_rounds = int(best.get("num_rounds"))
-            except (TypeError, ValueError):
-                num_rounds = 5 if (bool(best.get("is_main_event", False)) or is_title_bout) else 3
+            best_a_key = _canonicalize_live_fighter_name(best.get("fighter_a", ""))
+            best_b_key = _canonicalize_live_fighter_name(best.get("fighter_b", ""))
+            requested_a_key = _canonicalize_live_fighter_name(fighter_a)
+            requested_b_key = _canonicalize_live_fighter_name(fighter_b)
+            reversed_orientation = bool(
+                best_a_key == requested_b_key and best_b_key == requested_a_key
+            )
+            is_title_bout = coerce_nullable_bool(best.get("is_title_bout"))
+            is_empty_arena = coerce_nullable_bool(best.get("is_empty_arena"))
+            num_rounds = coerce_scheduled_rounds(best.get("num_rounds"))
             event_date = best.get("event_date", "")
-            return {
+            resolved = {
                 "weight_class": weight_class,
                 "is_title_bout": is_title_bout,
-                "is_empty_arena": best.get("is_empty_arena"),
+                "is_empty_arena": is_empty_arena,
                 "num_rounds": num_rounds,
+                "fighter_a_id": best.get(
+                    "fighter_b_id" if reversed_orientation else "fighter_a_id"
+                ),
+                "fighter_b_id": best.get(
+                    "fighter_a_id" if reversed_orientation else "fighter_b_id"
+                ),
                 "event_date": event_date,
                 "card_date": _canonical_card_date(
                     best.get("card_date") or event_date
@@ -2693,6 +2846,21 @@ def _resolve_live_event_context(
                 "commence_time": best.get("commence_time", ""),
                 "event_title": best.get("event_title", ""),
             }
+            for side, source_side in (('a', 'b' if reversed_orientation else 'a'),
+                                      ('b', 'a' if reversed_orientation else 'b')):
+                source_url = best.get(f'fighter_{source_side}_athlete_url')
+                if source_url:
+                    resolved[f'fighter_{side}_athlete_url'] = source_url
+            if best.get('runtime_identity_binding') is not None:
+                import copy
+                identity_binding = copy.deepcopy(best['runtime_identity_binding'])
+                if reversed_orientation:
+                    identity_binding['sides'] = {
+                        'a': identity_binding['sides']['b'],
+                        'b': identity_binding['sides']['a'],
+                    }
+                resolved['runtime_identity_binding'] = identity_binding
+            return resolved
 
     latest_head_to_head = _latest_local_head_to_head_event_date(fighter_a, fighter_b)
     if latest_head_to_head is not None and requested_commence is not None:
@@ -2719,9 +2887,11 @@ def _resolve_live_event_context(
             )
             return {
                 "weight_class": inferred_wc,
-                "is_title_bout": False,
-                "is_empty_arena": False,
-                "num_rounds": 3,
+                "is_title_bout": None,
+                "is_empty_arena": None,
+                "num_rounds": None,
+                "fighter_a_id": None,
+                "fighter_b_id": None,
             }
 
     inferred_lookup_wc = _infer_weight_class_from_near_term_ufc_lookup(
@@ -2741,9 +2911,11 @@ def _resolve_live_event_context(
         )
         return {
             "weight_class": inferred_lookup_wc,
-            "is_title_bout": False,
-            "is_empty_arena": False,
-            "num_rounds": 3,
+            "is_title_bout": None,
+            "is_empty_arena": None,
+            "num_rounds": None,
+            "fighter_a_id": None,
+            "fighter_b_id": None,
         }
 
     return None
@@ -2764,8 +2936,105 @@ def cmd_scrape(args):
     logger.info("Scraping complete.")
 
 
+def _fit_prepared_features(features_df, *, spec, models_dir, test_set_path):
+    """The sole model import/dispatch boundary for selected prepared inputs."""
+    from src.model.train import train_all_models
+
+    return train_all_models(
+        features_df, spec=spec, models_dir=models_dir, test_set_path=test_set_path,
+    )
+
+
+def _cmd_train_prepared(args):
+    """Check a pinned prepared input and optionally dispatch isolated fitting."""
+    cli_spec_name = getattr(args, "spec", None)
+    if not cli_spec_name:
+        raise ValueError("Prepared inputs require an explicitly named --spec")
+    spec = getattr(args, "training_spec", None)
+    if spec is None:
+        spec = _resolve_named_training_spec_arg(cli_spec_name)
+    if spec.name != cli_spec_name:
+        raise ValueError("Explicit training spec differs from the resolved spec identity")
+    if spec.add_line_movement:
+        raise ValueError("Prepared inputs cannot use a spec requiring external line-movement data")
+    expected_sha256 = getattr(args, "features_sha256", None)
+    acceptance_sha256 = getattr(args, "prepared_input_manifest_sha256", None)
+    if not expected_sha256 or not acceptance_sha256:
+        raise ValueError("Prepared inputs require exact feature and accepted-manifest SHA-256 pins")
+    source = getattr(args, "features_data", None)
+    saved = getattr(args, "saved_prepared_input", None)
+    acceptance_path = getattr(args, "prepared_input_manifest", None)
+    if source and not acceptance_path:
+        raise ValueError("Prepared feature selection requires --prepared-input-manifest")
+    if saved and acceptance_path:
+        raise ValueError("Saved prepared input already retains its original accepted manifest")
+    if getattr(args, "output_subdir", None):
+        raise ValueError("Prepared inputs require --prepared-output-root instead of --output-subdir")
+    output_root = getattr(args, "prepared_output_root", None)
+    preflight_only = bool(getattr(args, "preflight_only", False))
+    if not preflight_only and not output_root:
+        raise ValueError("Prepared fitting requires a fresh isolated --prepared-output-root")
+
+    from src.model.prepared_input import (
+        load_saved_prepared_input, save_prepared_input, select_prepared_input,
+        validate_prepared_output_root,
+    )
+    from src.model.training_preflight import preflight_training_data
+
+    if source:
+        selection = select_prepared_input(
+            Path(source), expected_sha256=expected_sha256,
+            acceptance_path=Path(acceptance_path),
+            expected_acceptance_sha256=acceptance_sha256, spec=spec,
+        )
+    else:
+        selection = load_saved_prepared_input(
+            Path(saved), expected_sha256=expected_sha256,
+            expected_acceptance_sha256=acceptance_sha256, spec=spec,
+        )
+    protected_roots = (
+        Path(__file__).resolve().parent.parent, DATA_DIR, RAW_DATA_DIR,
+        PROCESSED_DATA_DIR, MODELS_DIR, LOGS_DIR,
+    )
+    if output_root:
+        validate_prepared_output_root(selection, Path(output_root), protected_roots=protected_roots)
+    preflight = preflight_training_data(selection.dataframe, spec)
+    report = preflight.report()
+    report.update({
+        "input_id": selection.input_id,
+        "artifact_sha256": expected_sha256,
+        "acceptance_sha256": acceptance_sha256,
+        "reference_status": selection.reference_status,
+        "reference_coverage": "selected_prepared_input_direct_dependencies_only",
+        "pruning_authorized": False,
+    })
+    if output_root:
+        save_prepared_input(
+            selection, Path(output_root), preflight_report=report,
+            protected_roots=protected_roots,
+        )
+    if preflight_only:
+        logger.info("Prepared input passed no-fit preflight for spec %s", spec.name)
+        return report
+    root = Path(output_root)
+    return _fit_prepared_features(
+        selection.dataframe, spec=spec, models_dir=root / "models",
+        test_set_path=root / "processed" / "test_set.csv",
+    )
+
+
 def cmd_train(args):
-    """Load data, build features, and train models."""
+    """Train from raw fights or an explicitly pinned prepared feature table."""
+    prepared_sources = [getattr(args, name, None) for name in ("features_data", "saved_prepared_input")]
+    if sum(bool(value) for value in prepared_sources) + bool(getattr(args, "data", None)) > 1:
+        raise ValueError("Raw data, prepared features and saved prepared input are mutually exclusive")
+    if any(prepared_sources):
+        return _cmd_train_prepared(args)
+    if any(getattr(args, name, None) for name in (
+        "features_sha256", "prepared_input_manifest", "prepared_input_manifest_sha256",
+        "prepared_output_root", "preflight_only",
+    )):
+        raise ValueError("Prepared-input options require --features-data or --saved-prepared-input")
     from src.data.kaggle_loader import save_processed
     from src.features.build_features import build_features, save_features
     from src.model.train import train_all_models
@@ -3117,7 +3386,10 @@ def cmd_predict(args):
     from src.model.predict import predict_fight
     from src.model.train import load_model
     from src.strategy.value import compute_independent_blend_probs, _passes_filters
-    from src.data.fighter_lookup import build_fight_features
+    from src.data.fighter_lookup import (
+        AmbiguousFighterIdentityError,
+        build_fight_features,
+    )
     from src.data.line_tracker import detect_injury_or_cancellation
     from src.config import MIN_FIGHTER_FIGHTS
 
@@ -3142,6 +3414,7 @@ def cmd_predict(args):
 
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
+    from src.data.runtime_selected_inputs import SelectedRuntimeInputError
     inference_spec = _training_spec_from_model_result(model_result)
     no_odds_model_arg = _resolve_no_odds_model_arg(args.model)
     try:
@@ -3153,10 +3426,13 @@ def cmd_predict(args):
         no_odds_result=no_odds_result,
     )
     _enforce_runtime_bundle_freshness(runtime_bundle_summary, strict=False)
+    selected_runtime = _runtime_selected_inputs(
+        runtime_bundle_summary, model_result=model_result, no_odds_result=no_odds_result,
+    )
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
-    live_event_contexts = _load_live_event_contexts_for_fights(consensus)
+    live_event_contexts = _load_runtime_live_event_contexts(selected_runtime, consensus)
 
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
@@ -3205,23 +3481,34 @@ def cmd_predict(args):
             "b_implied_prob": market_b,
             "diff_implied_prob": market_a - market_b,
         }
-        feature_payload = build_fight_features(
-            fighter_a,
-            fighter_b,
-            odds_features=odds_features,
-            weight_class=event_context["weight_class"],
-            is_title_bout=event_context["is_title_bout"],
-            is_empty_arena=event_context.get("is_empty_arena"),
-            num_rounds=event_context["num_rounds"],
-            event_id=fight.get("event_id"),
-            commence_time=fight.get("commence_time"),
-            prefer_live_refresh=True,
-            training_spec=inference_spec,
-            processed_data_dir=runtime_processed_data_dir,
-            include_provenance=True,
-            fighter_a_lookup_name=lookup_fighter_a,
-            fighter_b_lookup_name=lookup_fighter_b,
-        )
+        try:
+            feature_payload = _build_runtime_fight_features(
+                selected_runtime, fighter_a, fighter_b,
+                odds_features=odds_features,
+                weight_class=event_context["weight_class"],
+                is_title_bout=event_context["is_title_bout"],
+                is_empty_arena=event_context.get("is_empty_arena"),
+                num_rounds=event_context["num_rounds"],
+                event_id=fight.get("event_id"),
+                commence_time=fight.get("commence_time"),
+                prefer_live_refresh=selected_runtime is None,
+                training_spec=inference_spec,
+                processed_data_dir=runtime_processed_data_dir,
+                include_provenance=True,
+                fighter_a_lookup_name=lookup_fighter_a,
+                fighter_b_lookup_name=lookup_fighter_b,
+                fighter_a_id=event_context.get("fighter_a_id"),
+                fighter_b_id=event_context.get("fighter_b_id"),
+                event_date=_canonical_card_date(event_context.get("card_date") or event_context.get("event_date")) if selected_runtime is not None else None,
+            )
+        except (AmbiguousFighterIdentityError, SelectedRuntimeInputError) as exc:
+            logger.warning(
+                "Skipping unresolved fighter identity for %s vs %s: %s",
+                fighter_a,
+                fighter_b,
+                exc,
+            )
+            continue
         if isinstance(feature_payload, tuple) and len(feature_payload) == 2:
             features, lookup_provenance = feature_payload
         else:
@@ -3240,6 +3527,7 @@ def cmd_predict(args):
             features,
             lookup_fighter_a,
             lookup_fighter_b,
+            allow_history_fallback=selected_runtime is None,
         )
         data_quality = _live_prediction_quality_assessment(
             features,
@@ -3842,6 +4130,24 @@ def cmd_btc5m_opportunity(args):
 
 def cmd_duo_live(args):
     """Run the UFC S/C/M portfolio with Single Trader evaluating first."""
+    from src.config import UFC_INCREMENTAL_REFRESH_ROOT, UFC_INCREMENTAL_REFRESH_BASELINE
+    refresh_root = getattr(args, "refresh_root", None) or UFC_INCREMENTAL_REFRESH_ROOT
+    if refresh_root:
+        from src.refresh_live import run_refresh_live_cycle
+        return run_refresh_live_cycle(
+            root=refresh_root,
+            baseline=getattr(args, "refresh_baseline", None) or UFC_INCREMENTAL_REFRESH_BASELINE,
+            dry_run=getattr(args, "dry_run", True),
+            min_edge=getattr(args, "min_edge", MIN_EDGE_THRESHOLD),
+            progress_callback=getattr(args, "progress_callback", None),
+            readonly_clob=getattr(args, "readonly_clob", None),
+            bankroll_basis=getattr(args, "bankroll_basis", None),
+            observation_dir=getattr(args, "observation_dir", None),
+            model_name=getattr(args, "model", None),
+            clob_client=getattr(args, "clob_client", None),
+            host=getattr(args, "host", "0.0.0.0"),
+            startup_source="refresh-cli",
+        )
     if not getattr(args, "dry_run", True):
         try:
             assert_real_trading_allowed(
@@ -3869,7 +4175,10 @@ def cmd_duo_live(args):
         run_duo_traders,
     )
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
-    from src.data.fighter_lookup import build_fight_features
+    from src.data.fighter_lookup import (
+        AmbiguousFighterIdentityError,
+        build_fight_features,
+    )
     from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
     import pandas as pd
 
@@ -3906,6 +4215,7 @@ def cmd_duo_live(args):
     _report_progress("Cycle active: loading model artifacts")
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
+    from src.data.runtime_selected_inputs import SelectedRuntimeInputError
     inference_spec = _training_spec_from_model_result(model_result)
     no_odds_model_arg = _resolve_no_odds_model_arg(args.model)
     try:
@@ -3916,6 +4226,9 @@ def cmd_duo_live(args):
         model_result=model_result,
         no_odds_result=no_odds_result,
     )
+    selected_runtime = _runtime_selected_inputs(
+        runtime_bundle_summary, model_result=model_result, no_odds_result=no_odds_result,
+    )
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
@@ -3923,6 +4236,7 @@ def cmd_duo_live(args):
         model_result=model_result,
         no_odds_result=no_odds_result,
         runtime_bundle_summary=runtime_bundle_summary,
+        selected_runtime=selected_runtime,
     )
 
     # Extract feature cols/medians and global importance for cache enrichment
@@ -4115,7 +4429,7 @@ def cmd_duo_live(args):
     live_event_contexts: list[dict] | None = None
     if not consensus.empty:
         _report_progress("Cycle active: loading UFC event context")
-        live_event_contexts = _load_live_event_contexts_for_fights(consensus)
+        live_event_contexts = _load_runtime_live_event_contexts(selected_runtime, consensus)
         freshness_reference_date, freshness_scope_is_bettable = _runtime_bundle_live_freshness_scope(
             consensus,
             live_event_contexts,
@@ -4251,7 +4565,7 @@ def cmd_duo_live(args):
         nonlocal live_event_contexts
         if live_event_contexts is None:
             _report_progress("Cycle active: loading UFC event context for uncached fights")
-            live_event_contexts = _load_live_event_contexts_for_fights(consensus)
+            live_event_contexts = _load_runtime_live_event_contexts(selected_runtime, consensus)
         return live_event_contexts
 
     def _persist_current_prediction_cache(*, announce: bool, validated_only: bool = False) -> None:
@@ -4280,6 +4594,8 @@ def cmd_duo_live(args):
     early_executed_cache_keys: set[str] = set()
     actionable_rows: list[tuple[datetime, dict]] = []
     for _, fight in consensus.iterrows():
+        if _withhold_unconfirmed_identity(fight):
+            continue
         cached_row = existing_cache.get(_prediction_cache_key(fight))
         if cached_row is None:
             continue
@@ -4304,6 +4620,7 @@ def cmd_duo_live(args):
             runtime_signature=runtime_signature,
             inference_spec=inference_spec,
             current_event_context_snapshot=current_event_context_snapshot,
+            selected_runtime=selected_runtime,
             require_no_odds_prediction=no_odds_result is not None,
         )
         if actionable_row is None:
@@ -4411,6 +4728,23 @@ def cmd_duo_live(args):
             continue
 
         tradeable_fight_count += 1
+        pending = _withhold_unconfirmed_identity(fight)
+        if pending:
+            reasons = [f"{name}: identity unconfirmed, skip" for name in pending]
+            blocked_row = dict(fight)
+            blocked_row.update({
+                "cache_key": fight_cache_key, "pair_key": _live_fight_pair_key(fighter_a, fighter_b),
+                "event_date": fight.get("commence_time"), "identity_complete": False,
+                "trade_blocked": True, "trade_block_reason": "; ".join(reasons),
+                "data_quality": {"blocked": True, "reasons": reasons, "fighters": {}},
+                "prob_a": None, "prob_b": None, "model_features": {},
+                "feature_provenance": {"identity_complete": False},
+            })
+            prediction_rows_by_key[fight_cache_key] = _sanitize_prediction_cache_value(blocked_row)
+            retained_prediction_keys.add(fight_cache_key)
+            validated_prediction_keys.add(fight_cache_key)
+            _persist_current_prediction_cache(announce=False)
+            continue
         event_context = _resolve_live_event_context(
             fight,
             _ensure_live_event_contexts(),
@@ -4478,8 +4812,8 @@ def cmd_duo_live(args):
         line_features = {}
         if "line_movement" in getattr(inference_spec, "feature_cols", []):
             try:
-                line_features = get_line_movement_features(
-                    fighter_a,
+                line_features = _runtime_observation_call(
+                    selected_runtime, get_line_movement_features, fighter_a,
                     fighter_b,
                     event_id=fight.get("event_id"),
                     commence_time=fight.get("commence_time"),
@@ -4492,18 +4826,30 @@ def cmd_duo_live(args):
             inference_spec=inference_spec,
         )
 
-        method_odds_fingerprint = _prediction_method_odds_fingerprint(
-            fight,
-            inference_spec=inference_spec,
-            # These must be the exact identities passed to get_method_odds()
-            # inside build_fight_features.  Roster-only aliases are not all
-            # understood by the method-odds matcher, so hashing the canonical
-            # lookup names could describe different inputs than the model sees.
-            fighter_a=fighter_a,
-            fighter_b=fighter_b,
-        )
+        try:
+            method_odds_fingerprint = _bound_method_fingerprint(
+                selected_runtime, fight, event_context,
+                inference_spec=inference_spec,
+                # These must be the exact identities passed to get_method_odds()
+                # inside build_fight_features.  Roster-only aliases are not all
+                # understood by the method-odds matcher, so hashing the canonical
+                # lookup names could describe different inputs than the model sees.
+                fighter_a=fighter_a,
+                fighter_b=fighter_b,
+            )
+        except SelectedRuntimeInputError as exc:
+            logger.warning("Withholding selected prediction for %s vs %s: %s", fighter_a, fighter_b, exc)
+            prediction_rows_by_key.pop(fight_cache_key, None)
+            retained_prediction_keys.discard(fight_cache_key)
+            validated_prediction_keys.discard(fight_cache_key)
+            _persist_current_prediction_cache(announce=False)
+            continue
 
         cached_row = existing_cache.get(fight_cache_key)
+        if cached_row is not None and not _selected_cache_identity_is_current(
+            selected_runtime, cached_row, fight, event_context,
+        ):
+            cached_row = None
         force_fighter_refresh = _blocked_data_quality_retry_due(cached_row)
         if cached_row is not None:
             needs_refresh, refresh_reason = _prediction_needs_refresh(
@@ -4521,6 +4867,8 @@ def cmd_duo_live(args):
             if refresh_reason == _DATA_QUALITY_RETRY_REASON:
                 force_fighter_refresh = True
             if not needs_refresh:
+                if cached_row.get("trade_blocked") is True:
+                    _record_model_quality_withholding(fight, cached_row.get("data_quality") or {})
                 reused_row = dict(cached_row)
                 reused_row["cache_key"] = fight_cache_key
                 reused_row["pair_key"] = _live_fight_pair_key(fighter_a, fighter_b)
@@ -4554,24 +4902,39 @@ def cmd_duo_live(args):
                 refresh_reason,
             )
 
-        feature_payload = build_fight_features(
-            fighter_a,
-            fighter_b,
-            odds_features=odds_features,
-            weight_class=event_context["weight_class"],
-            is_title_bout=event_context["is_title_bout"],
-            is_empty_arena=event_context.get("is_empty_arena"),
-            num_rounds=event_context["num_rounds"],
-            event_id=fight.get("event_id"),
-            commence_time=fight.get("commence_time"),
-            prefer_live_refresh=True,
-            training_spec=inference_spec,
-            processed_data_dir=runtime_processed_data_dir,
-            include_provenance=True,
-            fighter_a_lookup_name=lookup_fighter_a,
-            fighter_b_lookup_name=lookup_fighter_b,
-            force_fighter_refresh=force_fighter_refresh,
-        )
+        try:
+            feature_payload = _build_runtime_fight_features(
+                selected_runtime, fighter_a, fighter_b,
+                odds_features=odds_features,
+                weight_class=event_context["weight_class"],
+                is_title_bout=event_context["is_title_bout"],
+                is_empty_arena=event_context.get("is_empty_arena"),
+                num_rounds=event_context["num_rounds"],
+                event_id=fight.get("event_id"),
+                commence_time=fight.get("commence_time"),
+                prefer_live_refresh=selected_runtime is None,
+                training_spec=inference_spec,
+                processed_data_dir=runtime_processed_data_dir,
+                include_provenance=True,
+                fighter_a_lookup_name=lookup_fighter_a,
+                fighter_b_lookup_name=lookup_fighter_b,
+                force_fighter_refresh=force_fighter_refresh if selected_runtime is None else False,
+                fighter_a_id=event_context.get("fighter_a_id"),
+                fighter_b_id=event_context.get("fighter_b_id"),
+                event_date=_canonical_card_date(event_context.get("card_date") or event_context.get("event_date")) if selected_runtime is not None else None,
+            )
+        except (AmbiguousFighterIdentityError, SelectedRuntimeInputError) as exc:
+            from src.strategy.duo_trader import record_model_tracker_skip
+            record_model_tracker_skip(fight, "identity_unconfirmed", f"unresolved fighter identity: {exc}")
+            prediction_rows_by_key.pop(fight_cache_key, None)
+            retained_prediction_keys.discard(fight_cache_key)
+            validated_prediction_keys.discard(fight_cache_key)
+            _log_live_fight_skip_once(
+                fight,
+                f"unresolved fighter identity: {exc}",
+                force_warning=True,
+            )
+            continue
         if isinstance(feature_payload, tuple) and len(feature_payload) == 2:
             features, lookup_provenance = feature_payload
         else:
@@ -4598,6 +4961,7 @@ def cmd_duo_live(args):
             features,
             lookup_fighter_a,
             lookup_fighter_b,
+            allow_history_fallback=selected_runtime is None,
         )
         data_quality = _live_prediction_quality_assessment(
             features,
@@ -4609,6 +4973,7 @@ def cmd_duo_live(args):
         )
         feature_provenance["data_quality"] = data_quality
         if data_quality["blocked"]:
+            _record_model_quality_withholding(fight, data_quality)
             logger.warning(
                 "Trading blocked by feature-quality gate for %s vs %s: %s",
                 fighter_a,
@@ -4630,6 +4995,8 @@ def cmd_duo_live(args):
         try:
             pred = predict_fight(features, model_result=model_result)
         except Exception as e:
+            from src.strategy.duo_trader import record_model_tracker_skip
+            record_model_tracker_skip(fight, "missing_model_prob", f"model prediction unavailable: {e}")
             logger.warning(f"Prediction failed for {fighter_a} vs {fighter_b}: {e}")
             prediction_rows_by_key.pop(fight_cache_key, None)
             retained_prediction_keys.discard(fight_cache_key)
@@ -4852,6 +5219,10 @@ def cmd_duo_live(args):
     )
     _persist_prediction_cache(prediction_rows, announce=True)
     predictions = pd.DataFrame(prediction_rows)
+    # Recheck the current identity state at the final execution boundary too.
+    for index, row in predictions.iterrows():
+        if _withhold_unconfirmed_identity(row):
+            predictions.at[index, "trade_blocked"] = True
     if predictions.empty:
         executable_predictions = predictions
     elif (
@@ -5012,7 +5383,15 @@ def main():
 
     # Train command
     train_parser = subparsers.add_parser("train", help="Train prediction models")
-    train_parser.add_argument("--data", type=str, default=None, help="Path to CSV dataset")
+    train_sources = train_parser.add_mutually_exclusive_group()
+    train_sources.add_argument("--data", type=str, default=None, help="Path to raw fight CSV dataset")
+    train_sources.add_argument("--features-data", type=str, default=None, help="Exact accepted prepared feature CSV")
+    train_sources.add_argument("--saved-prepared-input", type=str, default=None, help="Previously completed isolated prepared-input record root")
+    train_parser.add_argument("--features-sha256", default=None, help="Independently supplied exact feature CSV SHA-256")
+    train_parser.add_argument("--prepared-input-manifest", default=None, help="Accepted prepared-input identity and evidence manifest")
+    train_parser.add_argument("--prepared-input-manifest-sha256", default=None, help="Independent accepted manifest SHA-256")
+    train_parser.add_argument("--preflight-only", action="store_true", help="Check prepared input without loading or fitting models")
+    train_parser.add_argument("--prepared-output-root", default=None, help="Fresh isolated root for saved inputs, report and optional model outputs")
     train_parser.add_argument("--spec", type=str, default=None, help="Named training spec to resolve")
     train_parser.add_argument(
         "--output-subdir",
@@ -5111,6 +5490,10 @@ def main():
                              help="Run with real money (requires explicit arming env vars)")
     live_parser.add_argument("--model", type=str, default="xgboost")
     live_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
+    live_parser.add_argument("--refresh-root", type=Path, default=None,
+                             help="Consume only the final published refresh snapshot using the configured live controls")
+    live_parser.add_argument("--refresh-baseline", type=Path, default=None,
+                             help="Immutable accepted payload for --refresh-root")
 
     btc5m_parser = subparsers.add_parser(
         "btc5m",

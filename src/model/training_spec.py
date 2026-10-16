@@ -379,6 +379,9 @@ class NamedModelTrainingSpec:
     # (a+b=1, diff=a-b) preserved — live rows satisfy these exactly.
     odds_noise_mode: str = "independent"
     required_feature_family_coverage_pct: dict[str, float] = field(default_factory=dict)
+    # Explicit native-NaN contract fields permitted to have no observed training
+    # value. This never permits an absent column or supplies an invented value.
+    all_missing_feature_allowlist: list[str] = field(default_factory=list)
 
     # ---- Extra feature flags ----
     add_rematch_features: bool = True
@@ -432,6 +435,13 @@ class NamedModelTrainingSpec:
         for col in self.feature_cols:
             if col in TRAINING_ONLY_FEATURES:
                 violations.append(f"TRAINING_ONLY feature in contract: {col}")
+        allowed = self.all_missing_feature_allowlist
+        if (not isinstance(allowed, list)
+                or not all(isinstance(col, str) and col in self.feature_cols for col in allowed)
+                or len(set(allowed)) != len(allowed)):
+            violations.append("Invalid all-missing feature allowlist: require unique declared feature names")
+        elif allowed and self.impute_strategy != "native_nan":
+            violations.append("All-missing feature allowance requires native_nan model preprocessing")
         return violations
 
 
@@ -999,6 +1009,21 @@ def full_live_contract_v6_durability_spec() -> NamedModelTrainingSpec:
     )
 
 
+def full_live_contract_v6_durability_2022_spec() -> NamedModelTrainingSpec:
+    """Durability contract whose model-example universe begins in 2022."""
+    base = full_live_contract_v6_durability_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_durability_2022",
+        description=(
+            "V6 tuned durability contract for 2022-present model examples; "
+            "pre-2022 fights remain eligible prior-history inputs."
+        ),
+        train_start_date="2022-01-01",
+        all_missing_feature_allowlist=["a_weight", "b_weight", "diff_weight"],
+    )
+
+
 def full_live_contract_v7_spec() -> NamedModelTrainingSpec:
     """
     V7 evaluation candidate: V6 feature set plus amateur career summary.
@@ -1054,6 +1079,9 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v6_noise_antithetic": full_live_contract_v6_noise_antithetic_spec,
         "full_live_contract_v6_grapdef": full_live_contract_v6_grapdef_spec,
         "full_live_contract_v6_durability": full_live_contract_v6_durability_spec,
+        "full_live_contract_v6_durability_2022": (
+            full_live_contract_v6_durability_2022_spec
+        ),
         "full_live_contract_v6_durability_fullfit": full_live_contract_v6_durability_fullfit_spec,
         "full_live_contract_v6_durability_corrected_20260805_fullfit": (
             full_live_contract_v6_durability_corrected_20260805_fullfit_spec
@@ -1087,8 +1115,8 @@ def materialize_contract_transforms(
     """
     transformed = features_df.copy()
 
-    from src.features.build_features import materialize_honest_context_features
-    from src.strategy.model_variants import (
+    from src.features.contract_transforms import (
+        materialize_honest_context_features,
         add_rematch_features as add_rematch_features_fn,
     )
 
@@ -1096,7 +1124,13 @@ def materialize_contract_transforms(
     # whenever they are available, preserving unknowns as NaN.
     transformed = materialize_honest_context_features(transformed)
 
-    if add_rematch_features:
+    # A prepared modeling snapshot already carries prior-history values. Its
+    # selected date range may omit earlier meetings, so rebuilding a complete
+    # pair here would replace those accepted values using incomplete history.
+    # Preserve its original row order as well. Raw frames lacking either field
+    # still take the existing materialization path for the complete pair.
+    rematch_columns = {"is_rematch", "h2h_record_diff"}
+    if add_rematch_features and not rematch_columns.issubset(transformed.columns):
         transformed = add_rematch_features_fn(transformed)
     if add_line_movement:
         from src.data.historical_backfill import merge_line_movement_features

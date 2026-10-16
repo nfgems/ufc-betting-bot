@@ -76,6 +76,11 @@ _METHOD_FEATURE_COLUMNS = [
     "b_sub_odds_prob",
     "b_dec_odds_prob",
 ]
+# Exact, source-bounded BFO spellings. Keep these out of project-wide identity
+# normalization unless the same alias is independently verified elsewhere.
+_BFO_EXACT_NAME_ALIASES = {
+    "stanley dorsainvil": "stan dorsainvil",
+}
 _method_odds_cache: dict[tuple[str, str, str, str, str], tuple[float, dict]] = {}
 _method_odds_state_lock = threading.RLock()
 
@@ -133,6 +138,44 @@ def _names_match(query_name: str, candidate_name: str) -> bool:
         return False
 
     return name_appears_in_text(query_name, candidate_name)
+
+
+def _bfo_name_key(name: str) -> str:
+    normalized = _normalize_name(name)
+    return _BFO_EXACT_NAME_ALIASES.get(normalized, normalized)
+
+
+def _bfo_name_variants(name: str) -> set[str]:
+    canonical = _bfo_name_key(name)
+    variants = {canonical}
+    variants.update(
+        alias
+        for alias, target in _BFO_EXACT_NAME_ALIASES.items()
+        if target == canonical
+    )
+    return variants
+
+
+def _bfo_names_match(query_name: str, candidate_name: str) -> bool:
+    """Match a tracked fighter against exact, source-reviewed BFO spellings."""
+    return any(
+        _names_match(variant, candidate_name)
+        for variant in _bfo_name_variants(query_name)
+    )
+
+
+def _bfo_match_fight(
+    home_name: str,
+    away_name: str,
+    fighter_a: str,
+    fighter_b: str,
+) -> tuple[bool, Optional[bool]]:
+    return _match_fight(
+        _bfo_name_key(home_name),
+        _bfo_name_key(away_name),
+        _bfo_name_key(fighter_a),
+        _bfo_name_key(fighter_b),
+    )
 
 
 def _event_date_key(fight: dict) -> str:
@@ -204,8 +247,24 @@ def _identify_fighter_side(text: str, fighter_a: str, fighter_b: str) -> Optiona
     return None
 
 
+# Exact "<fighter> [wins] by <method>" label. The fighter group is a run of
+# name tokens only: it may not contain a market word, so a compound prop such
+# as "Wint wins in final round or by decision" is rejected instead of being
+# read as a plain decision price (the earlier lazy group absorbed
+# "wins in final round or", which inflated decision cells by about 10 percent
+# on the 2026 pages re-derived on 2026-09-17). A surname that is itself a
+# market word ("Allan Goes wins by decision") is rejected by the same rule and
+# fails closed to NaN; no label on the saved pages is affected (checked in
+# review on 2026-09-17), and training and live share this classifier.
+_BFO_LABEL_STOP_WORDS = (
+    "wins|win|by|or|and|round|rounds|inside|within|in|not|points|distance|"
+    "goes|go|the|to"
+)
 _BFO_WINS_BY_RE = re.compile(
-    r"^(?!not\s)(.+?)\s+(?:wins\s+)?by\s+(tko/?ko|ko/?tko|knockout|submission|decision)\s*$",
+    r"^(?!not\s)"
+    r"((?:(?!\b(?:" + _BFO_LABEL_STOP_WORDS + r")\b)\S+\s+)*"
+    r"(?!\b(?:" + _BFO_LABEL_STOP_WORDS + r")\b)\S+)"
+    r"\s+(?:wins\s+)?by\s+(tko/?ko|ko/?tko|knockout|submission|decision)\s*$",
     re.IGNORECASE,
 )
 
@@ -415,8 +474,10 @@ def prune_method_odds_snapshots(
     now: datetime | float | int | None = None,
     protected_paths: tuple[Path, ...] = (),
     force: bool = False,
+    finalization_context: dict | None = None,
 ) -> int:
-    """Bound runtime method-odds snapshots and preserve a usable fallback."""
+    """Prune only finalized, unreferenced snapshots; missing proof preserves them."""
+    from src.data.method_observation_history import finalize_before_prune
     global _last_method_odds_snapshot_prune_monotonic
     monotonic = time.monotonic()
     with _method_odds_snapshot_prune_lock:
@@ -436,6 +497,7 @@ def prune_method_odds_snapshots(
             protected_paths=protected_paths,
             protect_latest_matching=_usable_method_odds_snapshot,
             prefer_daily_matching=_usable_method_odds_snapshot,
+            before_remove=lambda path: finalize_before_prune(path, finalization_context),
             now=now,
         )
         _last_method_odds_snapshot_prune_monotonic = monotonic
@@ -444,15 +506,38 @@ def prune_method_odds_snapshots(
     return len(removed)
 
 
-def _save_snapshot(snapshot: dict) -> Path:
+def _save_snapshot(snapshot: dict, *, proof=None, history_root=None, evidence_paths=()) -> Path:
     path = _snapshot_path(snapshot["snapshot_time"])
-    path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    if snapshot.get("observation_reference_schema") == 1:
+        from src.data.method_observation_history import _digest, _json_bytes, _write_immutable
+        body = _json_bytes(snapshot)
+        path = path.with_name(f"{path.stem}_{_digest(body)}.json")
+        _write_immutable(path, body)
+        finalize_saved_method_snapshot(path, proof=proof, history_root=history_root, evidence_paths=evidence_paths)
+    else:
+        path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     logger.info("Saved method-odds snapshot: %s", path)
     try:
         prune_method_odds_snapshots(protected_paths=(path,))
     except Exception as exc:
         logger.warning("Method-odds snapshot retention skipped: %s", exc)
     return path
+
+
+def finalize_saved_method_snapshot(path, *, proof, history_root=None, evidence_paths=()):
+    """Resume saved originals after a failed write without invoking transport."""
+    from src.data.method_observation_history import HISTORY_SUBDIR, finalize_snapshot
+    from src.data.observation_consumer_references import record_observation_consumer_artifact
+    snapshot = json.loads(Path(path).read_bytes())
+    saved_paths = [Path(item) for item in evidence_paths]
+    if snapshot.get("records"):
+        finalized = finalize_snapshot(Path(path), history_root=Path(history_root or METHOD_ODDS_SNAPSHOT_DIR / HISTORY_SUBDIR), proof=proof)
+        saved_paths.append(finalized)
+    for item in proof or []:
+        saved_paths.append(Path(item["reviewed_context"]["path"]))
+        for response in item["responses"]:
+            saved_paths.extend(Path(response[key]["path"]) for key in ("raw_response", "response_envelope"))
+    record_observation_consumer_artifact(Path(path), kind="method_snapshot", evidence_paths=sorted(set(saved_paths)))
 
 
 def _load_snapshot(path: Path) -> Optional[dict]:
@@ -820,7 +905,7 @@ def _record_candidates(
         as_of_date=as_of_date,
         tracked_fights=[tracked_fight],
     )
-    if snapshot is None:
+    if snapshot is None or "observation_reference_schema" in snapshot:
         return []
 
     requested_commence = _parse_datetime_like(commence_time)
@@ -989,6 +1074,8 @@ def _bfo_get(
     url: str,
     *,
     failure_budget: Optional[_BfoFailureBudget] = None,
+    response_capture=None,
+    request_get=None,
     **kwargs,
 ) -> Optional[requests.Response]:
     """GET with retry on transient BFO failures. Returns None on failure."""
@@ -999,7 +1086,11 @@ def _bfo_get(
     last_exc: Optional[Exception] = None
     for attempt in range(_BFO_MAX_RETRIES + 1):
         try:
-            resp = requests.get(url, **kwargs)
+            resp = (request_get or requests.get)(url, **kwargs)
+            if response_capture is not None:
+                # Preserve complete failures as well as successes before status
+                # handling. A local preservation refusal cannot consume retries.
+                response_capture(resp, requested_url=url, format="html")
             if resp.status_code in _BFO_TRANSIENT_CODES and attempt < _BFO_MAX_RETRIES:
                 wait_seconds = _bfo_retry_wait_seconds(attempt, resp)
                 logger.info(
@@ -1024,6 +1115,11 @@ def _bfo_get(
                 failure_budget.note_success()
             return resp
         except Exception as exc:
+            from src.data.source_response_capture import SourceCaptureRefusal
+            if isinstance(exc, SourceCaptureRefusal):
+                raise
+            if response_capture is not None and not isinstance(exc, requests.RequestException):
+                raise SourceCaptureRefusal(f"method response processing refused: {exc}", captures=response_capture.captures) from exc
             last_exc = exc
             response = getattr(exc, "response", None)
             status_code = getattr(response, "status_code", None)
@@ -1140,7 +1236,7 @@ def _count_bfo_page_fight_overlaps(soup: BeautifulSoup, fights: list[dict]) -> i
         fighter_b = str(fight.get("fighter_b", "") or "")
         if not fighter_a or not fighter_b:
             continue
-        if _names_match(fighter_a, page_text) and _names_match(fighter_b, page_text):
+        if _bfo_names_match(fighter_a, page_text) and _bfo_names_match(fighter_b, page_text):
             overlaps += 1
     return overlaps
 
@@ -1148,22 +1244,34 @@ def _count_bfo_page_fight_overlaps(soup: BeautifulSoup, fights: list[dict]) -> i
 class _BfoEventResolver:
     """Resolve and cache BFO event pages once per snapshot collection."""
 
-    def __init__(self, failure_budget: _BfoFailureBudget):
+    def __init__(self, failure_budget: _BfoFailureBudget, *, response_capture=None, request_get=None):
         self.failure_budget = failure_budget
         self._latest_candidates: Optional[list[dict]] = None
         self._event_page_cache: dict[str, Optional[BeautifulSoup]] = {}
-        self._resolved_events: dict[tuple[str, str], Optional[str]] = {}
+        self._resolved_events: dict[tuple[str, str], tuple[str, ...]] = {}
+        self.response_capture = response_capture
+        self.request_get = request_get
+        self.response_evidence = {}
+
+    def _get(self, url):
+        if self.response_capture is None and self.request_get is None:
+            return _bfo_get(url, failure_budget=self.failure_budget)
+        response = _bfo_get(url, failure_budget=self.failure_budget,
+                            response_capture=self.response_capture, request_get=self.request_get)
+        if response is not None and self.response_capture is not None:
+            self.response_evidence[url] = self.response_capture.captures[-1]
+        return response
 
     def _latest_event_candidates(self) -> list[dict]:
         if self._latest_candidates is not None:
             return self._latest_candidates
 
-        resp = _bfo_get(BFO_LATEST_URL, failure_budget=self.failure_budget)
+        resp = self._get(BFO_LATEST_URL)
         if resp is None:
             self._latest_candidates = []
             return self._latest_candidates
 
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = BeautifulSoup(resp.content if self.response_capture is not None else resp.text, "lxml")
         self._latest_candidates = _bfo_event_candidates_from_latest(soup)
         return self._latest_candidates
 
@@ -1172,33 +1280,49 @@ class _BfoEventResolver:
             return self._event_page_cache[url]
 
         time.sleep(REQUEST_DELAY)
-        resp = _bfo_get(url, failure_budget=self.failure_budget)
+        resp = self._get(url)
         if resp is None:
             self._event_page_cache[url] = None
             return None
 
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = BeautifulSoup(resp.content if self.response_capture is not None else resp.text, "lxml")
         self._event_page_cache[url] = soup
         return soup
 
-    def resolve_event_page(self, fights: list[dict]) -> Optional[tuple[str, BeautifulSoup]]:
+    @staticmethod
+    def _candidate_family(candidate: dict) -> tuple[str, str]:
+        """Return stable title/URL keys that join BFO split event pages."""
+        title_key = _normalize_event_text(candidate.get("title", ""))
+        url = str(candidate.get("url", "") or "").rstrip("/")
+        slug = url.rsplit("/", 1)[-1]
+        slug_key = re.sub(r"-\d+$", "", slug)
+        return title_key, slug_key
+
+    @classmethod
+    def _same_candidate_family(cls, left: dict, right: dict) -> bool:
+        _left_title, left_slug = cls._candidate_family(left)
+        _right_title, right_slug = cls._candidate_family(right)
+        return bool(left_slug and left_slug == right_slug)
+
+    def resolve_event_pages(self, fights: list[dict]) -> list[tuple[str, BeautifulSoup]]:
         if not fights:
-            return None
+            return []
 
         event_title = str(fights[0].get("event_title", "") or fights[0].get("event", "") or "")
         event_date = _event_date_key(fights[0])
         cache_key = (_normalize_event_text(event_title), event_date)
         if cache_key in self._resolved_events:
-            cached_url = self._resolved_events[cache_key]
-            if not cached_url:
-                return None
-            cached_page = self._event_page(cached_url)
-            return (cached_url, cached_page) if cached_page is not None else None
+            cached_pages = []
+            for cached_url in self._resolved_events[cache_key]:
+                cached_page = self._event_page(cached_url)
+                if cached_page is not None:
+                    cached_pages.append((cached_url, cached_page))
+            return cached_pages
 
         candidates = self._latest_event_candidates()
         if not candidates:
-            self._resolved_events[cache_key] = None
-            return None
+            self._resolved_events[cache_key] = ()
+            return []
 
         ranked = sorted(
             candidates,
@@ -1212,7 +1336,7 @@ class _BfoEventResolver:
                 if "ufc" in _normalize_event_text(f"{candidate.get('title', '')} {candidate.get('url', '')}")
             ] or ranked
 
-        best_url = None
+        best_candidate = None
         best_page = None
         best_overlap = 0
         target_overlap = min(2, len(fights))
@@ -1226,18 +1350,52 @@ class _BfoEventResolver:
                 continue
             overlap = _count_bfo_page_fight_overlaps(page, fights)
             if overlap > best_overlap:
-                best_url = url
+                best_candidate = candidate
                 best_page = page
                 best_overlap = overlap
             if best_overlap >= target_overlap:
                 break
 
-        if best_url is None or best_page is None:
-            self._resolved_events[cache_key] = None
-            return None
+        if best_candidate is None or best_page is None:
+            self._resolved_events[cache_key] = ()
+            return []
 
-        self._resolved_events[cache_key] = best_url
-        return best_url, best_page
+        best_url = str(best_candidate.get("url", "") or "")
+        resolved_pages = [(best_url, best_page)]
+        resolved_urls = {best_url}
+
+        if best_overlap >= len(fights):
+            self._resolved_events[cache_key] = (best_url,)
+            return resolved_pages
+
+        # BFO can publish a late-added bout on a second page with the same event
+        # title/URL family (for example, one page per provider-side date). Once
+        # the primary event is identified, inspect each advertised sibling and
+        # retain only pages containing an exact tracked matchup.
+        for candidate in candidates:
+            url = str(candidate.get("url", "") or "")
+            if (
+                not url
+                or url in resolved_urls
+                or not self._same_candidate_family(best_candidate, candidate)
+            ):
+                continue
+            try:
+                page = self._event_page(url)
+            except _BfoCircuitOpen as exc:
+                logger.info(
+                    "BFO optional sibling page unavailable; preserving primary page %s: %s",
+                    best_url,
+                    exc,
+                )
+                break
+            if page is None or not _count_bfo_page_fight_overlaps(page, fights):
+                continue
+            resolved_pages.append((url, page))
+            resolved_urls.add(url)
+
+        self._resolved_events[cache_key] = tuple(url for url, _page in resolved_pages)
+        return resolved_pages
 
 
 def _bfo_fighter_search_queries(fighter_name: str) -> list[str]:
@@ -1280,7 +1438,7 @@ def _bfo_find_fighter_url(
         soup = BeautifulSoup(resp.text, "lxml")
         for link in soup.select('a[href*="/fighters/"]'):
             link_text = link.get_text(strip=True)
-            if _names_match(fighter_name, link_text):
+            if _bfo_names_match(fighter_name, link_text):
                 href = link["href"]
                 return href if href.startswith("http") else f"https://www.bestfightodds.com{href}"
     return None
@@ -1325,7 +1483,10 @@ def _bfo_find_event_url_from_fighter_page(
         if expect_opponent:
             expect_opponent = False
             opponent_link = tr.select_one('a[href*="/fighters/"]')
-            if opponent_link and _names_match(opponent_name, opponent_link.get_text(strip=True)):
+            if opponent_link and _bfo_names_match(
+                opponent_name,
+                opponent_link.get_text(strip=True),
+            ):
                 if current_event_href:
                     return current_event_href
 
@@ -1390,12 +1551,12 @@ def _bfo_exact_matchup_rows(
     if not marker_tables:
         return None
 
-    matched_ranges: set[tuple[int, int, int]] = set()
-    for rows, marker_indices in marker_tables:
+    matched_ranges: list[tuple[int, int, int]] = []
+    for table_index, (rows, marker_indices) in enumerate(marker_tables):
         for marker_position, start in enumerate(marker_indices):
             if start + 1 >= len(rows):
                 continue
-            matched, _home_is_a = _match_fight(
+            matched, _home_is_a = _bfo_match_fight(
                 _bfo_matchup_fighter_name(rows[start]),
                 _bfo_matchup_fighter_name(rows[start + 1]),
                 fighter_a,
@@ -1408,18 +1569,20 @@ def _bfo_exact_matchup_rows(
                 if marker_position + 1 < len(marker_indices)
                 else len(rows)
             )
-            matched_ranges.add((len(rows), start, end))
+            matched_ranges.append((table_index, start, end))
 
     if len(matched_ranges) != 1:
         return []
 
-    row_count, start, end = matched_ranges.pop()
+    marker_table_index, start, end = matched_ranges[0]
+    marker_rows, _marker_indices = marker_tables[marker_table_index]
+    row_count = len(marker_rows)
     scoped_rows = []
     for table in tables:
         rows = table.select("tr")
         if len(rows) != row_count or start + 1 >= len(rows):
             continue
-        aligned, _home_is_a = _match_fight(
+        aligned, _home_is_a = _bfo_match_fight(
             _bfo_matchup_fighter_name(rows[start]),
             _bfo_matchup_fighter_name(rows[start + 1]),
             fighter_a,
@@ -1439,11 +1602,8 @@ def _parse_bfo_method_odds(soup: BeautifulSoup, fighter_a: str, fighter_b: str) 
     """
     rows = _bfo_exact_matchup_rows(soup, fighter_a, fighter_b)
     if rows is None:
-        page_text = soup.get_text(" ", strip=True)
-        if not (_names_match(fighter_a, page_text) and _names_match(fighter_b, page_text)):
-            return None
-        rows = soup.select("tr")
-    elif not rows:
+        return None
+    if not rows:
         return None
 
     prob_lists = _collect_method_probs()
@@ -1545,11 +1705,10 @@ def _collect_bfo_records_for_event_group(
     fights: list[dict],
     resolver: _BfoEventResolver,
 ) -> list[dict]:
-    resolved = resolver.resolve_event_page(fights)
-    if resolved is None:
+    resolved_pages = resolver.resolve_event_pages(fights)
+    if not resolved_pages:
         return []
 
-    event_url, soup = resolved
     records: list[dict] = []
     captured_at = _now_iso()
 
@@ -1559,7 +1718,11 @@ def _collect_bfo_records_for_event_group(
         if not fighter_a or not fighter_b:
             continue
 
-        method_probs = _parse_bfo_method_odds(soup, fighter_a, fighter_b)
+        method_probs = None
+        for _event_url, soup in resolved_pages:
+            method_probs = _parse_bfo_method_odds(soup, fighter_a, fighter_b)
+            if method_probs is not None:
+                break
         if method_probs is None:
             continue
 
@@ -1581,7 +1744,7 @@ def _collect_bfo_records_for_event_group(
             "Got BFO method odds for %s/%s tracked fights from %s",
             len(records),
             len(fights),
-            event_url,
+            ", ".join(url for url, _page in resolved_pages),
         )
     return records
 
@@ -1737,12 +1900,142 @@ def _collect_method_odds_snapshot_records(
     return records, source_runs
 
 
-def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None) -> dict:
+def _collect_bound_method_snapshot(*, tracked_fights, reviewed_context, transport, history_root):
+    """Ordinary BFO collection under independently pinned page/fighter bindings.
+
+    A durable original collection identity suppresses acquisition after uncertain
+    interruption. Saved ready work resumes only its local save/finalization.
+    Discovery and other sources cannot grant ownership in this route.
+    """
+    from src.data.method_observation_history import (
+        ObservationRefusal, _attachment, _digest, _json_bytes, _read_pin, _require, _safe_path,
+        _time, _write_immutable, load_reviewed_bindings, merge_bound_values, parse_bound_response,
+    )
+    from src.data.source_response_capture import SourceResponseCapture
+
+    context = load_reviewed_bindings(reviewed_context)
+    original_context = _read_pin(reviewed_context)
+    _require(transport is None or callable(transport), "invalid synthetic method transport")
+    fights = tracked_fights or []
+    _require(isinstance(fights, list) and bool(fights), "strict method collection needs tracked stable fight identities")
+    bindings = []
+    for fight in fights:
+        matches = [binding for binding in context["bindings"]
+                   if all(fight.get(field) == binding[field] for field in
+                          ("event_id", "fighter_a", "fighter_b", "fighter_a_id", "fighter_b_id", "commence_time"))]
+        _require(len(matches) == 1, "tracked fight lacks one independently reviewed method binding")
+        bindings.append(matches[0])
+    _require(len(bindings) == len(context["bindings"]) and len({_json_bytes(b) for b in bindings}) == len(bindings),
+             "reviewed/tracked method fight inventory differs")
+    root = _safe_path(METHOD_ODDS_SNAPSHOT_DIR)
+    collection_root = _safe_path(root / "method_response_captures_v1" / "collections" / _digest(context["collection_id"].encode()))
+    intent = {"schema": 1, "reviewed_context": reviewed_context, "context_sha256": _digest(original_context),
+              "original_context": _attachment(reviewed_context)}
+    intent_path, ready_path = collection_root / "intent.json", collection_root / "ready.json"
+    _safe_path(intent_path)
+    _safe_path(ready_path)
+    if intent_path.exists():
+        _require(json.loads(intent_path.read_bytes()) == intent, "collection identity already binds different original input")
+        _require(ready_path.exists(), "original method collection remains interrupted; automatic reacquisition refused")
+        ready = json.loads(ready_path.read_bytes())
+        _require(isinstance(ready, dict) and set(ready) == {"snapshot", "proof", "evidence_paths"}, "invalid saved method ready checkpoint")
+        _require(isinstance(ready["snapshot"], dict) and ready["snapshot"].get("collection_id") == context["collection_id"], "saved method ready collection identity differs")
+        _require(isinstance(ready["proof"], list) and len(ready["proof"]) == len(ready["snapshot"].get("records", [])), "saved method ready observation inventory differs")
+        for record, selected in zip(ready["snapshot"]["records"], ready["proof"]):
+            _require(selected.get("reviewed_context") == reviewed_context and selected.get("binding") in bindings,
+                     "saved method ready proof changes original reviewed authority")
+            _require(all(record.get(field) == selected["binding"][field] for field in
+                         ("event_id", "fighter_a", "fighter_b", "fighter_a_id", "fighter_b_id", "commence_time")),
+                     "saved method ready record changes original binding")
+        _require(_read_pin(reviewed_context) == original_context, "reviewed method context rotated")
+        path = _save_snapshot(ready["snapshot"], proof=ready["proof"], history_root=history_root,
+                              evidence_paths=ready["evidence_paths"])
+        return {**ready["snapshot"], "snapshot_path": str(path)}
+    collection_root.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        collection_root.mkdir()
+    except FileExistsError as exc:
+        raise ObservationRefusal("original method collection claim is incomplete or concurrent; reacquisition refused") from exc
+    _write_immutable(intent_path, _json_bytes(intent))
+    sink = SourceResponseCapture("bestfightodds", history_root=root, capture_subdir="method_response_captures_v1")
+    resolver = _BfoEventResolver(_BfoFailureBudget(_BFO_FAILURE_BUDGET_PER_SNAPSHOT), response_capture=sink, request_get=transport)
+    records, proof, failures, bout_outcomes = [], [], [], []
+    try:
+        for binding in bindings:
+            parts, contributors, receipt_times = [], [], []
+            failures_before = len(failures)
+            for url in binding["source_urls"]:
+                try:
+                    page = resolver._event_page(url)
+                except _BfoCircuitOpen as exc:
+                    failures.append({"url": url, "error": str(exc)})
+                    continue
+                if page is None:
+                    failures.append({"url": url, "error": "source response unavailable"})
+                    continue
+                descriptor = resolver.response_evidence[url]
+                envelope = json.loads(_read_pin(descriptor["response_envelope"]))
+                part = parse_bound_response(_read_pin(descriptor["raw_response"]), envelope, binding)
+                if part is None:
+                    continue
+                parts.append(part)
+                contributors.append(descriptor)
+                receipt_times.append(envelope["received_at"])
+            if not parts:
+                bout_outcomes.append({
+                    **{key: binding[key] for key in ("event_id", "fighter_a", "fighter_b", "fighter_a_id", "fighter_b_id", "commence_time")},
+                    "status": "unknown",
+                    "reason_code": "source_acquisition_failed" if len(failures) > failures_before else "no_usable_method_values_in_inspected_response",
+                })
+                continue
+            values = merge_bound_values(parts)
+            captured_at = max(receipt_times, key=_time)
+            record = _snapshot_record(fighter_a=binding["fighter_a"], fighter_b=binding["fighter_b"],
+                                      method_odds={key: np.nan if value is None else value for key, value in values.items()},
+                                      source="bestfightodds", captured_at=captured_at, event_id=binding["event_id"],
+                                      commence_time=binding["commence_time"])
+            record.update(fighter_a_id=binding["fighter_a_id"], fighter_b_id=binding["fighter_b_id"])
+            records.append(record)
+            proof.append({"binding": binding, "responses": contributors, "reviewed_context": reviewed_context})
+            bout_outcomes.append({
+                **{key: binding[key] for key in ("event_id", "fighter_a", "fighter_b", "fighter_a_id", "fighter_b_id", "commence_time")},
+                "status": "observed", "reason_code": None,
+            })
+        _require(_read_pin(reviewed_context) == original_context, "reviewed method context rotated during collection")
+        snapshot = {"schema_version": 2, "observation_reference_schema": 1, "snapshot_time": _now_iso(),
+                    "status": ("partial" if failures or len(records) < len(bindings) else "success") if records else "blocked",
+                    "collection_id": context["collection_id"], "collection_attempts": 1, "record_count": len(records),
+                    "tracked_fight_count": len(bindings), "covered_fight_count": len(records),
+                    "missing_fight_count": len(bindings) - len(records), "bout_outcomes": bout_outcomes,
+                    "records": records, "sources": [{"source": "bestfightodds", "status": "partial" if failures else "success",
+                                                       "failures": failures, "captures": sink.captures}],
+                    "unsupported_sources": ["odds_api", "legacy_discovery"]}
+        evidence_paths = [str(intent_path), reviewed_context["path"]]
+        for descriptor in sink.captures:
+            evidence_paths.extend(descriptor[key]["path"] for key in ("raw_response", "response_envelope"))
+        ready = {"snapshot": snapshot, "proof": proof, "evidence_paths": evidence_paths}
+        _write_immutable(ready_path, _json_bytes(ready))
+        path = _save_snapshot(snapshot, proof=proof, history_root=history_root, evidence_paths=evidence_paths)
+        _method_odds_cache.clear()
+        return {**snapshot, "snapshot_path": str(path)}
+    except Exception as exc:
+        # This is permanent uncertainty/processing evidence, never a request
+        # retry signal. Complete response originals remain under the capture root.
+        _write_immutable(collection_root / "failure.json", _json_bytes({"schema": 1, "error": str(exc), "captures": sink.captures}))
+        raise
+
+
+def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None,
+                                 reviewed_context=None, strict: bool = False,
+                                 transport=None, history_root: Path | None = None) -> dict:
     """
     Collect method odds into a timestamped normalized snapshot.
 
     Inference should not call this. Use it from scheduled monitor/collector jobs.
     """
+    if strict or reviewed_context is not None:
+        return _collect_bound_method_snapshot(tracked_fights=tracked_fights, reviewed_context=reviewed_context,
+                                              transport=transport, history_root=history_root)
     max_attempts = max(1, int(METHOD_ODDS_COLLECTION_MAX_ATTEMPTS))
     records: list[dict] = []
     source_runs: list[dict] = []
@@ -1822,6 +2115,42 @@ def _resolve_method_odds_result(
     return _orient_result_for_query(record, home_is_a), True
 
 
+def _bound_method_timestamp_text(value):
+    """Serialize aware runtime timestamps without relaxing saved timestamp rules."""
+    from src.data.method_observation_history import ObservationRefusal, _time
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ObservationRefusal("timestamp has no timezone")
+        value = value.isoformat()
+    _time(value)
+    return value
+
+
+def _resolve_bound_method_odds(*, fighter_a_id, fighter_b_id, event_id, commence_time, as_of_date):
+    from src.data.method_observation_history import HISTORY_SUBDIR, ObservationRefusal, _time, read_finalized_observations, select_finalized_observation
+    if not fighter_a_id or not fighter_b_id or not event_id or not commence_time:
+        return _nan_result()
+    commence_time = _bound_method_timestamp_text(commence_time)
+    commence = _time(commence_time)
+    # An explicit date-only query has no within-day availability authority.
+    # Midnight is conservative; ordinary live calls use an exact current time.
+    as_of = as_of_date or _now_iso()
+    if isinstance(as_of, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
+        as_of += "T00:00:00+00:00"
+    _time(as_of)
+    from src.data.selected_source_inputs import selected_path
+    rows = read_finalized_observations(selected_path("method_observations", METHOD_ODDS_SNAPSHOT_DIR / HISTORY_SUBDIR))
+    values = select_finalized_observation(rows, fighter_a_id=fighter_a_id, fighter_b_id=fighter_b_id,
+                                         event_date=commence.date().isoformat(), event_id=event_id,
+                                         commence_time=commence_time, as_of=as_of)
+    return _nan_result() if values is None else {key: np.nan if value is None else value for key, value in values.items()}
+
+
+def _has_finalized_method_history():
+    from src.data.method_observation_history import HISTORY_SUBDIR
+    return (METHOD_ODDS_SNAPSHOT_DIR / HISTORY_SUBDIR).exists()
+
+
 def get_method_odds_fingerprint(
     fighter_a: str,
     fighter_b: str,
@@ -1829,6 +2158,9 @@ def get_method_odds_fingerprint(
     event_id: Optional[str] = None,
     commence_time: Optional[str] = None,
     as_of_date: Optional[str] = None,
+    fighter_a_id: Optional[str] = None,
+    fighter_b_id: Optional[str] = None,
+    strict: bool = False,
 ) -> str:
     """Return a stable hash of the method-odds inputs for one fight.
 
@@ -1838,6 +2170,14 @@ def get_method_odds_fingerprint(
     Calling this helper also refreshes the short-lived result cache, ensuring a
     cache invalidation is followed by feature generation from the same record.
     """
+    if strict or fighter_a_id is not None or fighter_b_id is not None or _has_finalized_method_history():
+        if fighter_a_id and fighter_b_id and event_id and commence_time:
+            commence_time = _bound_method_timestamp_text(commence_time)
+        result = _resolve_bound_method_odds(fighter_a_id=fighter_a_id, fighter_b_id=fighter_b_id,
+                                            event_id=event_id, commence_time=commence_time, as_of_date=as_of_date)
+        payload = {"version": 2, "fighter_a_id": fighter_a_id, "fighter_b_id": fighter_b_id,
+                   "event_id": event_id, "commence_time": commence_time, "method_odds": _jsonable_method_result(result)}
+        return "method-odds-v2:" + hashlib.sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()
     with _method_odds_state_lock:
         result, available = _resolve_method_odds_result(
             fighter_a,
@@ -1879,12 +2219,18 @@ def get_method_odds(
     event_id: Optional[str] = None,
     commence_time: Optional[str] = None,
     as_of_date: Optional[str] = None,
+    fighter_a_id: Optional[str] = None,
+    fighter_b_id: Optional[str] = None,
+    strict: bool = False,
 ) -> dict:
     """
     Read method-of-victory implied probabilities from the latest snapshot.
 
     If no unique, confident snapshot match exists, return NaNs.
     """
+    if strict or fighter_a_id is not None or fighter_b_id is not None or _has_finalized_method_history():
+        return _resolve_bound_method_odds(fighter_a_id=fighter_a_id, fighter_b_id=fighter_b_id,
+                                          event_id=event_id, commence_time=commence_time, as_of_date=as_of_date)
     with _method_odds_state_lock:
         cached = _get_cached_method_odds(
             fighter_a,

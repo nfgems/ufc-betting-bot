@@ -19,6 +19,18 @@ from src.config import (
     UFCSTATS_FIGHTER_SEARCH_URL,
     RAW_DATA_DIR,
 )
+from src.data.fight_results import (
+    QUARANTINED_RESULT_CLASSES,
+    RESULT_CLASS_DRAW,
+    RESULT_CLASS_NO_CONTEST,
+    RESULT_POLICY_VERSION,
+    classify_official_result,
+    winner_for_side,
+)
+from src.data.name_utils import normalize_ufcstats_id
+from src.data.reviewed_roster_recovery import (
+    apply_permanent_profile_locks_to_raw_rows,
+)
 from src.data.ufcstats_http import DEFAULT_UFCSTATS_HEADERS, request_ufcstats
 
 logger = logging.getLogger(__name__)
@@ -133,29 +145,47 @@ def scrape_fight(fight_url: str) -> Optional[dict]:
         return None
     fighter_a = _clean_text(fighters[0].text)
     fighter_b = _clean_text(fighters[1].text)
+    fighter_a_id = normalize_ufcstats_id(fighters[0].get("href"))
+    fighter_b_id = normalize_ufcstats_id(fighters[1].get("href"))
 
-    # Winner / result type
+    # Preserve both official participant statuses; classification happens after
+    # the method is parsed so disqualifications can be distinguished from wins.
     results = soup.select("div.b-fight-details__person")
-    winner = None
-    result_type = None  # "win", "draw", "nc", or None
-    if results:
-        for i, res in enumerate(results[:2]):
-            status = res.select_one("i.b-fight-details__person-status")
-            if status:
-                status_text = _clean_text(status.text).upper()
-                if "W" in status_text:
-                    winner = fighter_a if i == 0 else fighter_b
-                    result_type = "win"
-                elif "D" in status_text:
-                    result_type = "draw"
-                elif "NC" in status_text:
-                    result_type = "nc"
-    if result_type in ("draw", "nc"):
-        logger.info(f"Non-standard result ({result_type}): {fighter_a} vs {fighter_b}")
+    statuses: list[str] = []
+    for res in results[:2]:
+        status = res.select_one("i.b-fight-details__person-status")
+        status_text = _clean_text(status.text).upper() if status else ""
+        if status_text.startswith("W"):
+            statuses.append("W")
+        elif status_text.startswith("L"):
+            statuses.append("L")
+        elif status_text.startswith("D"):
+            statuses.append("D")
+        elif "NC" in status_text:
+            statuses.append("NC")
+        else:
+            statuses.append(status_text or "?")
+    official_outcome = "/".join(statuses)
 
     # Fight details (method, round, time, weight class)
     method_el = soup.select_one("i.b-fight-details__text-item_first")
     method = _clean_text(method_el.text.replace("Method:", "")) if method_el else ""
+    classification = classify_official_result(official_outcome, method)
+    winner = winner_for_side(
+        classification.winner_side,
+        fighter_a=fighter_a,
+        fighter_b=fighter_b,
+    )
+    if classification.quarantined:
+        result_type = None
+    elif classification.result_class == RESULT_CLASS_DRAW:
+        result_type = "draw"
+    elif classification.result_class == RESULT_CLASS_NO_CONTEST:
+        result_type = "nc"
+    else:
+        result_type = "win"
+    if result_type in ("draw", "nc"):
+        logger.info(f"Non-standard result ({result_type}): {fighter_a} vs {fighter_b}")
 
     details_items = soup.select("i.b-fight-details__text-item")
     round_num = ""
@@ -178,8 +208,15 @@ def scrape_fight(fight_url: str) -> Optional[dict]:
     fight_data = {
         "fighter_a": fighter_a,
         "fighter_b": fighter_b,
+        "fighter_a_id": fighter_a_id,
+        "fighter_b_id": fighter_b_id,
         "winner": winner,
         "result_type": result_type,
+        "official_outcome": official_outcome,
+        "result_policy_version": RESULT_POLICY_VERSION,
+        "result_class": classification.result_class,
+        "binary_target_eligible": classification.binary_target_eligible,
+        "result_quarantine_reason": classification.quarantine_reason,
         "method": method,
         "round": round_num,
         "time": fight_time,
@@ -373,6 +410,7 @@ def _scrape_fighter_url_batch(fighter_urls: list[str], *, output_path: Path) -> 
     """Scrape a fixed list of fighter profile URLs into a CSV artifact."""
     existing_rows, existing_urls = _load_existing_rows(output_path, "fighter_url")
     all_fighters = list(existing_rows)
+    locked_existing_rows = apply_permanent_profile_locks_to_raw_rows(all_fighters)
     remaining_urls = [url for url in fighter_urls if url not in existing_urls]
 
     if existing_urls:
@@ -383,6 +421,16 @@ def _scrape_fighter_url_batch(fighter_urls: list[str], *, output_path: Path) -> 
             output_path,
         )
     if not remaining_urls:
+        if locked_existing_rows:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(all_fighters).drop_duplicates(
+                subset=["fighter_url"], keep="last"
+            ).to_csv(output_path, index=False)
+            logger.warning(
+                "Reapplied %d permanent owner profile lock(s) before completing %s",
+                locked_existing_rows,
+                output_path,
+            )
         logger.info("Fighter scrape already complete: %d/%d fighters present", len(existing_urls), len(fighter_urls))
         return pd.DataFrame(all_fighters)
 
@@ -392,6 +440,11 @@ def _scrape_fighter_url_batch(fighter_urls: list[str], *, output_path: Path) -> 
         try:
             fighter = scrape_fighter(url)
             if fighter:
+                if apply_permanent_profile_locks_to_raw_rows([fighter]):
+                    logger.warning(
+                        "Rejected refreshed profile value and reapplied permanent owner lock for %s",
+                        url,
+                    )
                 all_fighters.append(fighter)
         except Exception as e:
             logger.warning(f"Failed to scrape fighter {url}: {e}")
@@ -455,6 +508,13 @@ def scrape_all_fights(output_path: Optional[Path] = None) -> pd.DataFrame:
                 try:
                     fight = scrape_fight(fight_url)
                     if fight:
+                        if fight.get("result_class") in QUARANTINED_RESULT_CLASSES:
+                            logger.warning(
+                                "Quarantined fight %s before scrape artifact write: %s",
+                                fight_url,
+                                fight.get("result_quarantine_reason") or "unknown_result",
+                            )
+                            continue
                         fight["event_title"] = event["title"]
                         fight["event_date"] = event["date"]
                         all_fights.append(fight)

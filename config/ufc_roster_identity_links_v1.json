@@ -1,0 +1,2226 @@
+{
+  "schema_version": 1,
+  "audit_scope": {
+    "decision_report_sha256": "df1b7d02f037c08a018fce49fa5f498e87d1da984d4a7bfc385f9c16eaea271b",
+    "decision_report_csv_sha256": "2902d9ed0b628c444ad872fd849c9309623bd86eff03fb63f88d679fc1664c21",
+    "derived_queue_sha256": "b2e0bc9d25a66d868b1696e5934802f0da7104a8666a632f335541ce2e480f76",
+    "cells": 55,
+    "fighters": 31,
+    "field_counts": {
+      "age": 2,
+      "height": 26,
+      "reach": 18,
+      "stance": 4,
+      "weight": 5
+    },
+    "classification_counts": {
+      "verified alias/path miss": 39,
+      "conflicting": 9,
+      "wrong identity": 5,
+      "unresolved": 2
+    },
+    "decision_status_counts": {
+      "accepted_current_future": 41,
+      "conflicting_field_hold": 6,
+      "owner_field_hold": 1,
+      "rejected_wrong_identity": 5,
+      "unresolved_identity_hold": 2
+    }
+  },
+  "identity_bindings": [
+    {
+      "official_name": "Abdul Azeem Badakhshi",
+      "reviewed_official_names": [
+        "Abdul Azeem Badakhshi",
+        "Abdul Azim Badakhshi"
+      ],
+      "reviewed_nicknames": [
+        "The Afghan Lion"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/abdul-azeem-badakhshi",
+      "official_source_entity_id": "athlete:abdul-azeem-badakhshi",
+      "ufcstats_name": "Abdul Azeem Badakhshi",
+      "stable_ufcstats_id": "968764372c49eab6",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/968764372c49eab6",
+      "mapped_source_entity_ids": [
+        "tapology:49423",
+        "sherdog:136805",
+        "espn:5078261"
+      ],
+      "decision_cell_ids": [
+        "D001"
+      ],
+      "identity_basis": "Fabricio Oliveira on 2022-04-01 at Matrix Fight Night 8 and Agshin Babaev on 2021-03-11 at BRAVE CF 47 appear in the same stable ESPN/Tapology/Sherdog career; nickname, nationality, and record sequence match UFCStats one-to-one.",
+      "evidence_urls": [
+        "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",
+        "https://www.sherdog.com/fighter/Abdul-Azim-Badakhshi-136805",
+        "https://www.espn.com/mma/fighter/_/id/5078261/abdul-azim-badakhshi",
+        "http://ufcstats.com/fighter-details/968764372c49eab6"
+      ]
+    },
+    {
+      "official_name": "Brandon Sayles",
+      "reviewed_official_names": [
+        "Brandon Sayles"
+      ],
+      "reviewed_nicknames": [
+        "Man of War"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/brandon-sayles",
+      "official_source_entity_id": "athlete:brandon-sayles",
+      "ufcstats_name": "Brandon Sayles",
+      "stable_ufcstats_id": "72b7c071910990b1",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/72b7c071910990b1",
+      "mapped_source_entity_ids": [
+        "fightdx:brandon-sayles",
+        "pfl:brandon-sayles",
+        "espn:3165904",
+        "tapology:18826",
+        "sherdog:67806"
+      ],
+      "decision_cell_ids": [
+        "D002"
+      ],
+      "identity_basis": "Denis Goltsov on 2021-06-25 at PFL 6 appears on FightDX and official PFL pages; nickname, 6'5 height, heavyweight career, and record agree.",
+      "evidence_urls": [
+        "https://fightdx.com/person/brandon-sayles",
+        "https://pflmma.com/all-fighter/brandon-sayles",
+        "https://pflmma.com/news/goltsov-finishes-strong-vs-sayles-earns-no-2-seed-in-playoffs",
+        "http://ufcstats.com/fighter-details/72b7c071910990b1"
+      ]
+    },
+    {
+      "official_name": "Delphine Benouaich",
+      "reviewed_official_names": [
+        "Delphine Benouaich"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/delphine-benouaich",
+      "official_source_entity_id": "athlete:delphine-benouaich",
+      "ufcstats_name": "Delphine Benouaich",
+      "stable_ufcstats_id": "3138df4d117ebc12",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/3138df4d117ebc12",
+      "mapped_source_entity_ids": [
+        "espn:5345643",
+        "sherdog:413666",
+        "tapology:328062"
+      ],
+      "decision_cell_ids": [
+        "D003"
+      ],
+      "identity_basis": "Scheduled Sofia Montenegro bout on 2026-09-05 at UFC Fight Night: Hooker vs Parnasse appears on ESPN 5345643 and UFCStats 3138df4d117ebc12.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/5345643/delphine-benouaich",
+        "https://www.sherdog.com/fighter/Delphine-Benouaich-413666",
+        "http://ufcstats.com/fighter-details/3138df4d117ebc12"
+      ]
+    },
+    {
+      "official_name": "Emilio Cuellar",
+      "reviewed_official_names": [
+        "Emilio Cuellar",
+        "Emilio Cuéllar"
+      ],
+      "reviewed_nicknames": [
+        "Show Kid"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/emilio-cuellar",
+      "official_source_entity_id": "athlete:emilio-cuellar",
+      "ufcstats_name": "Emilio Cuellar",
+      "stable_ufcstats_id": "3aeb69b4a13ff0e8",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/3aeb69b4a13ff0e8",
+      "mapped_source_entity_ids": [
+        "tapology:183405",
+        "fightdx:emilio-cuellar"
+      ],
+      "decision_cell_ids": [
+        "D004",
+        "D005"
+      ],
+      "identity_basis": "Luis Ivan Rodriguez on 2022-11-18 at Lux Fight League 28 appears on FightDX and Tapology; UFCStats shares exact name and Show Kid nickname.",
+      "evidence_urls": [
+        "https://www.tapology.com/fightcenter/fighters/183405-emilio-cuellar-show-kid",
+        "https://fightdx.com/person/emilio-cuellar",
+        "https://www.tapology.com/fightcenter/bouts/708390-lux-fight-leage-28-luis-ivan-el-nino-azteca-rodriguez-vs-emilio-show-kid-cuellar",
+        "http://ufcstats.com/fighter-details/3aeb69b4a13ff0e8"
+      ]
+    },
+    {
+      "official_name": "Fabia Sintes",
+      "reviewed_official_names": [
+        "Fabia Sintes"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [
+        "tapology legacy slug fabian-sintes"
+      ],
+      "official_athlete_url": "https://www.ufc.com/athlete/fabia-sintes",
+      "official_source_entity_id": "athlete:fabia-sintes",
+      "ufcstats_name": "Fabia Sintes",
+      "stable_ufcstats_id": "9911989cf48b195d",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/9911989cf48b195d",
+      "mapped_source_entity_ids": [
+        "espn:5401055",
+        "sherdog:258937",
+        "tapology:159956"
+      ],
+      "decision_cell_ids": [
+        "D006"
+      ],
+      "identity_basis": "Scheduled Michael Aljarouj bout on 2026-09-05 at UFC Fight Night: Hooker vs Parnasse appears on ESPN 5401055 and UFCStats 9911989cf48b195d.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/5401055/fabia-sintes",
+        "https://www.sherdog.com/fighter/Fabia-Sintes-258937",
+        "https://www.tapology.com/fightcenter/fighters/159956-fabian-sintes",
+        "http://ufcstats.com/fighter-details/9911989cf48b195d"
+      ]
+    },
+    {
+      "official_name": "Fabiola Pidroni",
+      "reviewed_official_names": [
+        "Fabiola Pidroni"
+      ],
+      "reviewed_nicknames": [
+        "The Queen"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/fabiola-pidroni",
+      "official_source_entity_id": "athlete:fabiola-pidroni",
+      "ufcstats_name": "Fabiola Pidroni",
+      "stable_ufcstats_id": "9561eb5f0d63ffcc",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/9561eb5f0d63ffcc",
+      "mapped_source_entity_ids": [
+        "fightdx:fabiola-pidroni",
+        "tapology:246815",
+        "sherdog:328099"
+      ],
+      "decision_cell_ids": [
+        "D007",
+        "D008"
+      ],
+      "identity_basis": "Assia Miri on 2023-01-20 at Ares FC 11 appears in FightDX and Tapology; DOB 1994-01-04 and nickname The Queen agree with UFCStats.",
+      "evidence_urls": [
+        "https://fightdx.com/person/fabiola-pidroni",
+        "https://www.tapology.com/fightcenter/fighters/246815-fabiola-pidroni",
+        "https://www.tapology.com/fightcenter/bouts/716962-ares-fc-11-assia-miri-vs-fabiola-pidroni",
+        "https://www.sherdog.com/fighter/Fabiola-Pidroni-328099",
+        "http://ufcstats.com/fighter-details/9561eb5f0d63ffcc"
+      ]
+    },
+    {
+      "official_name": "Feng Pengchao",
+      "reviewed_official_names": [
+        "Feng Pengchao",
+        "Pengchao Feng"
+      ],
+      "reviewed_nicknames": [
+        "Winged Tiger",
+        "插翅虎"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/feng-pengchao",
+      "official_source_entity_id": "athlete:feng-pengchao",
+      "ufcstats_name": "Feng Pengchao",
+      "stable_ufcstats_id": "86597694317e5e1b",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/86597694317e5e1b",
+      "mapped_source_entity_ids": [
+        "tapology:230675",
+        "sherdog:336611"
+      ],
+      "decision_cell_ids": [
+        "D009",
+        "D010"
+      ],
+      "identity_basis": "Nikolay Samusev on 2025-11-29 at Naiza FC 78 and multiple older opponent/date/promotion rows agree across Tapology and Sherdog.",
+      "evidence_urls": [
+        "https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger",
+        "https://www.sherdog.com/fighter/Pengchao-Feng-336611",
+        "https://www.tapology.com/fightcenter/bouts/1066359-naiza-fc-78-nikolay-samusev-vs-pengchao-feng",
+        "http://ufcstats.com/fighter-details/86597694317e5e1b"
+      ]
+    },
+    {
+      "official_name": "Ilimbek Akylbek Uulu",
+      "reviewed_official_names": [
+        "Ilimbek Akylbek Uulu"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek-uulu",
+      "official_source_entity_id": "athlete:ilimbek-akylbek-uulu",
+      "ufcstats_name": "Ilimbek Akylbek Uulu",
+      "stable_ufcstats_id": "130b65b53f30f33c",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/130b65b53f30f33c",
+      "mapped_source_entity_ids": [
+        "espn:5345639",
+        "sherdog:388255"
+      ],
+      "decision_cell_ids": [
+        "D011"
+      ],
+      "identity_basis": "Official UFC event and UFCStats list Ilimbek vs Mehemmedeli Osmanli on 2026-09-26 at UFC Fight Night: Rosas Jr. vs Barcelos; official UFC, ESPN API, and Sherdog agree on DOB 2003-09-01.",
+      "evidence_urls": [
+        "https://www.espn.com/mma/fighter/_/id/5345639/ilimbek-akylbek-uulu",
+        "https://www.sherdog.com/fighter/Ilimbek-Akylbek-Uulu-388255",
+        "https://www.ufc.com/event/ufc-fight-night-september-26-2026",
+        "http://ufcstats.com/fighter-details/130b65b53f30f33c"
+      ]
+    },
+    {
+      "official_name": "Jae Hyun Park",
+      "reviewed_official_names": [
+        "Jae Hyun Park",
+        "JaeHyun Park",
+        "Park Jae Hyun"
+      ],
+      "reviewed_nicknames": [
+        "The First Prospect"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/jae-hyun-park",
+      "official_source_entity_id": "athlete:jae-hyun-park",
+      "ufcstats_name": "",
+      "stable_ufcstats_id": "",
+      "ufcstats_url": "",
+      "mapped_source_entity_ids": [
+        "espn:5138589",
+        "sherdog:325247",
+        "tapology:171979"
+      ],
+      "decision_cell_ids": [
+        "D012",
+        "D013",
+        "D014"
+      ],
+      "identity_basis": "Dom Mar Fan on 2025-08-22 at Road to UFC Shanghai is reported by ESPN, Sherdog, Tapology, UFC official results, and Dom Mar Fan's UFC biography; DOB 2001-12-10 and nickname agree.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/jae-hyun-park",
+        "https://www.espn.com/mma/fighter/history/_/id/5138589/jae-hyun-park",
+        "https://www.sherdog.com/fighter/Jae-Hyun-Park-325247",
+        "https://www.tapology.com/fightcenter/fighters/171979-jae-hyun-park",
+        "https://www.tapology.com/fightcenter/bouts/1028852-road-to-ufc-dom-mar-fan-street-buddha-vs-jae-hyun-the-first-prospect-park",
+        "https://www.ufc.com/news/road-to-ufc-live-results-season-4-semifinals-shi-vs-brasil-recaps-official-scorecards-interviews-shanghai",
+        "https://www.ufc.com/athlete/dom-mar-fan"
+      ]
+    },
+    {
+      "official_name": "Jose Augusto",
+      "reviewed_official_names": [
+        "Jose Augusto",
+        "Jose Augusto Azevedo Barros"
+      ],
+      "reviewed_nicknames": [
+        "Gugu"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/jose-augusto",
+      "official_source_entity_id": "athlete:jose-augusto",
+      "ufcstats_name": "Jose Augusto",
+      "stable_ufcstats_id": "4d3b08ab127c7585",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/4d3b08ab127c7585",
+      "mapped_source_entity_ids": [
+        "espn:4684239",
+        "sherdog:111573",
+        "tapology:133511",
+        "pfl:jose-augusto"
+      ],
+      "decision_cell_ids": [
+        "D017"
+      ],
+      "identity_basis": "UFC official, ESPN, Sherdog, and Tapology share DOB 1992-03-28. Linton Vassell on 2026-03-20 at PFL Madrid and Jonathan Wilson on 2021-04-02 at Bellator 255 appear in the same detailed career; nickname Gugu and Pitbull Brothers agree.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/jose-augusto",
+        "https://www.espn.com/mma/fighter/_/id/4684239/jose-augusto",
+        "https://www.sherdog.com/fighter/Jose-Augusto-111573",
+        "https://www.tapology.com/fightcenter/fighters/133511-jose-augusto-azevedo-gugu",
+        "https://pflmma.com/all-fighter/jose-augusto",
+        "http://ufcstats.com/fighter-details/4d3b08ab127c7585"
+      ]
+    },
+    {
+      "official_name": "Jung Hyun Lee",
+      "reviewed_official_names": [
+        "Jung Hyun Lee"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [
+        "tapology entity 174809 legacy slug chang-jun-lee"
+      ],
+      "official_athlete_url": "https://www.ufc.com/athlete/jung-hyun-lee",
+      "official_source_entity_id": "athlete:jung-hyun-lee",
+      "ufcstats_name": "",
+      "stable_ufcstats_id": "",
+      "ufcstats_url": "",
+      "mapped_source_entity_ids": [
+        "sherdog:289981",
+        "tapology:174809"
+      ],
+      "decision_cell_ids": [
+        "D018",
+        "D019"
+      ],
+      "identity_basis": "UFC official, Sherdog 289981, and Tapology 174809 all record Jung Hyun Lee vs Mark Climaco at Road to UFC Season 2 on 2023-05-27; the UFC result is a 15-minute unanimous-decision loss and describes the 20-year-old South Korean, matching the profile age/DOB context.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/jung-hyun-lee",
+        "https://www.ufc.com/news/road-to-ufc-results-scorecards-season-2-episodes-1-2-shanghai",
+        "https://www.sherdog.com/fighter/Jung-Hyun-Lee-289981",
+        "https://www.tapology.com/fightcenter/fighters/174809-chang-jun-lee",
+        "https://www.tapology.com/fightcenter/bouts/760427-road-to-ufc-mark-climaco-vs-the-phenom-jung-hyun-lee"
+      ]
+    },
+    {
+      "official_name": "Junye Gao",
+      "reviewed_official_names": [
+        "Junye Gao"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/junye-gao",
+      "official_source_entity_id": "athlete:junye-gao",
+      "ufcstats_name": "Junye Gao",
+      "stable_ufcstats_id": "8b27d25ce0221d60",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/8b27d25ce0221d60",
+      "mapped_source_entity_ids": [
+        "fightdx:junye-gao",
+        "tapology:130855",
+        "sherdog:239131",
+        "espn:4712751"
+      ],
+      "decision_cell_ids": [
+        "D020",
+        "D021"
+      ],
+      "identity_basis": "FightDX, Tapology, Sherdog, and ESPN independently align on exact career anchors: Sung Hoon Woo at WLF E.P.I.C. 7 on 2016-08-20, Sumudaerji at WLF on 2017-01-13, and Jilunzhou Qiu at WLF W.A.R.S. 43 on 2020-05-22. UFCStats 8b27d25ce0221d60 records 19-12-0 at the matching career snapshot and 125 lb.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/junye-gao",
+        "http://ufcstats.com/fighter-details/8b27d25ce0221d60",
+        "https://fightdx.com/person/junye-gao",
+        "https://www.tapology.com/fightcenter/fighters/130855-junye-gao",
+        "https://www.sherdog.com/fighter/Junye-Gao-239131",
+        "https://www.espn.com/mma/fighter/_/id/4712751/junye-gao"
+      ]
+    },
+    {
+      "official_name": "Kennedy Freeman",
+      "reviewed_official_names": [
+        "Kennedy Freeman"
+      ],
+      "reviewed_nicknames": [
+        "The Machine 2.0"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/kennedy-freeman",
+      "official_source_entity_id": "athlete:kennedy-freeman",
+      "ufcstats_name": "Kennedy Freeman",
+      "stable_ufcstats_id": "63d071997c75e3fd",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/63d071997c75e3fd",
+      "mapped_source_entity_ids": [
+        "fightdx:kennedy-freeman",
+        "tapology:121637",
+        "sherdog:239711",
+        "espn:4574786"
+      ],
+      "decision_cell_ids": [
+        "D024"
+      ],
+      "identity_basis": "UFC official identifies Kennedy Freeman vs Gisele Libanio at Cage Warriors 172 on 2024-05-25; FightDX, Tapology, Sherdog, and ESPN match that exact bout plus Mafalda Carmona at Cage Warriors 181 on 2024-11-23. UFCStats reports DOB 1996-11-26 and record 6-0, exactly matching ESPN 4574786.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/kennedy-freeman",
+        "http://ufcstats.com/fighter-details/63d071997c75e3fd",
+        "https://fightdx.com/person/kennedy-freeman",
+        "https://www.tapology.com/fightcenter/fighters/121637-kennedy-freeman",
+        "https://www.sherdog.com/fighter/Kennedy-Freeman-239711",
+        "https://www.espn.com/mma/fighter/_/id/4574786/kennedy-freeman",
+        "https://www.ufc.com/news/four-fights-follow-cage-warriors-172"
+      ]
+    },
+    {
+      "official_name": "Khadzhimurat Bestaev",
+      "reviewed_official_names": [
+        "Khadzhimurat Bestaev",
+        "Khadzhi Bestaev"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/khadzhimurat-bestaev",
+      "official_source_entity_id": "athlete:khadzhimurat-bestaev",
+      "ufcstats_name": "Khadzhi Bestaev",
+      "stable_ufcstats_id": "e05f4ce199baca91",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/e05f4ce199baca91",
+      "mapped_source_entity_ids": [
+        "fightdx:khadzhimurat-bestaev",
+        "espn:3162028",
+        "sherdog:164821",
+        "tapology:86855"
+      ],
+      "decision_cell_ids": [
+        "D025",
+        "D026"
+      ],
+      "identity_basis": "Every stable entity matches Phil Hawes at Dana White's Contender Series on 2020-09-08, TKO at 1:18 of round 1; later Ty Gwerder and Khalid Murtazaliev bouts also align.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/khadzhimurat-bestaev",
+        "http://ufcstats.com/fighter-details/e05f4ce199baca91",
+        "https://fightdx.com/person/khadzhimurat-bestaev",
+        "https://www.espn.com/mma/fighter/_/id/3162028/khadzhi-bestaev",
+        "https://www.sherdog.com/fighter/Khadzhimurat-Bestaev-164821",
+        "https://www.tapology.com/fightcenter/fighters/86855-khadzhimurat-bestaev",
+        "https://www.ufc.com/news/dana-whites-contender-series-results-week-6"
+      ]
+    },
+    {
+      "official_name": "Kyle Noblitt",
+      "reviewed_official_names": [
+        "Kyle Noblitt"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/kyle-noblitt",
+      "official_source_entity_id": "athlete:kyle-noblitt",
+      "ufcstats_name": "Kyle Noblitt",
+      "stable_ufcstats_id": "4acf03bdec2025d7",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/4acf03bdec2025d7",
+      "mapped_source_entity_ids": [
+        "tapology:57164",
+        "sherdog:197811"
+      ],
+      "decision_cell_ids": [
+        "D027"
+      ],
+      "identity_basis": "UFCStats 4acf03bdec2025d7 reports record 11-2, DOB 1989-12-26, height 6'2\", and weight 243 lb; Tapology 57164 and Sherdog 197811 match the same DOB, height, heavyweight class, and career. Exact independent bout anchors include Jamal Pogues at C3 Fights on 2018-02-10 and Jack May at XMMA on 2021-01-30.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/kyle-noblitt",
+        "http://ufcstats.com/fighter-details/4acf03bdec2025d7",
+        "https://www.tapology.com/fightcenter/fighters/57164-kyle-noblitt",
+        "https://www.sherdog.com/fighter/Kyle-Noblitt-197811",
+        "https://www.espn.com/mma/fighter/history/_/id/4565641/jamal-pogues",
+        "https://www.espn.com/mma/fighter/history/_/id/3091514/jack-may"
+      ]
+    },
+    {
+      "official_name": "Lu Zhengyong",
+      "reviewed_official_names": [
+        "Lu Zhengyong",
+        "Zhengyong Lu",
+        "陆正勇"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/lu-zhengyong",
+      "official_source_entity_id": "athlete:lu-zhengyong",
+      "ufcstats_name": "Lu Zhengyong",
+      "stable_ufcstats_id": "dc1bfd47c3b21ad3",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/dc1bfd47c3b21ad3",
+      "mapped_source_entity_ids": [
+        "tapology:133896",
+        "sherdog:233839",
+        "espn:5145073"
+      ],
+      "decision_cell_ids": [
+        "D031",
+        "D032"
+      ],
+      "identity_basis": "UFCStats dc1bfd47c3b21ad3 reports record 12-7 at the same chronological snapshot as the external career after the 2022-08-06 Sadier Tuerdiaji JCK win and before the 2022-09-28 Wancai Zhu bout. Tapology and Sherdog independently match numerous exact dates/opponents/promotions, including Sadier Tuerdiaji 2022-08-06 and Ayiding Tuohetaerbieke 2025-04-28. Official contemporaneous age/place/125-lb context aligns with ESPN DOB 1996-09-03 and the external flyweight.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/lu-zhengyong",
+        "http://ufcstats.com/fighter-details/dc1bfd47c3b21ad3",
+        "https://www.tapology.com/fightcenter/fighters/133896-zhengyong-lu",
+        "https://www.sherdog.com/fighter/Zhengyong-Lu-233839",
+        "https://www.espn.com/mma/fighter/_/id/5145073/lu-zhengyong",
+        "https://www.tapology.com/fightcenter/bouts/676831-jck-fight-night-2022-tuerdiaji-sadier-vs-zhengyong-lu"
+      ]
+    },
+    {
+      "official_name": "Matthieu Letho Duclos",
+      "reviewed_official_names": [
+        "Matthieu Letho Duclos",
+        "Matthieu Duclos"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [
+        "ESPN URL typo Mathieu"
+      ],
+      "official_athlete_url": "https://www.ufc.com/athlete/matthieu-letho-duclos",
+      "official_source_entity_id": "athlete:matthieu-letho-duclos",
+      "ufcstats_name": "",
+      "stable_ufcstats_id": "",
+      "ufcstats_url": "",
+      "mapped_source_entity_ids": [
+        "espn:5013686",
+        "tapology:239830"
+      ],
+      "decision_cell_ids": [
+        "D033",
+        "D034",
+        "D035"
+      ],
+      "identity_basis": "UFC official, ESPN 5013686, and Tapology 239830 all match Marco Tulio at Dana White's Contender Series Season 8 Week 3 on 2024-08-27, TKO at 2:38 of round 2. The official profile's 7:38 average fight time exactly equals that stoppage elapsed time; ESPN and Tapology also align on Alexis Fontes 2024-02-10 and other Hexagone bouts.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/matthieu-letho-duclos",
+        "https://www.espn.com/mma/fighter/_/id/5013686/matthieu-letho-duclos",
+        "https://www.tapology.com/fightcenter/fighters/239830-matthieu-letho",
+        "https://www.ufc.com/news/week-3-results-scorecards-dana-whites-contender-series-season-8",
+        "https://www.ufc.com/news/dana-whites-contender-series-season-8-week-3-preview"
+      ]
+    },
+    {
+      "official_name": "Mehemmedeli Osmanli",
+      "reviewed_official_names": [
+        "Mehemmedeli Osmanli"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/mehemmedeli-osmanli",
+      "official_source_entity_id": "athlete:mehemmedeli-osmanli",
+      "ufcstats_name": "Mehemmedeli Osmanli",
+      "stable_ufcstats_id": "2bbdbc925f4323ac",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/2bbdbc925f4323ac",
+      "mapped_source_entity_ids": [
+        "espn:5345640"
+      ],
+      "decision_cell_ids": [
+        "D036"
+      ],
+      "identity_basis": "Exact UFC official and UFCStats names agree; UFCStats and ESPN agree on DOB 2004-08-05; the exact scheduled UFC bout/date/opponent binds ESPN 5345640 to the canonical fighter.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/mehemmedeli-osmanli",
+        "http://ufcstats.com/fighter-details/2bbdbc925f4323ac",
+        "https://www.espn.com/mma/fighter/_/id/5345640/mehemmedeli-osmanli"
+      ]
+    },
+    {
+      "official_name": "Melissa Amaya",
+      "reviewed_official_names": [
+        "Melissa Amaya"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/melissa-amaya",
+      "official_source_entity_id": "athlete:melissa-amaya",
+      "ufcstats_name": "Melissa Amaya",
+      "stable_ufcstats_id": "71758ab9f337716c",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/71758ab9f337716c",
+      "mapped_source_entity_ids": [
+        "espn:5169699"
+      ],
+      "decision_cell_ids": [
+        "D037",
+        "D038"
+      ],
+      "identity_basis": "UFC node 159579, UFCStats 71758ab9f337716c, and ESPN 5169699 have the exact name; UFCStats/ESPN DOB agreement and the exact scheduled UFC bout provide the non-name identity bridge.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/melissa-amaya",
+        "http://ufcstats.com/fighter-details/71758ab9f337716c",
+        "https://www.espn.com/mma/fighter/_/id/5169699/melissa-amaya"
+      ]
+    },
+    {
+      "official_name": "Michael Aljarouj",
+      "reviewed_official_names": [
+        "Michael Aljarouj"
+      ],
+      "reviewed_nicknames": [
+        "The Soldier"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/michael-aljarouj",
+      "official_source_entity_id": "athlete:michael-aljarouj",
+      "ufcstats_name": "Michael Aljarouj",
+      "stable_ufcstats_id": "22e3458965d5d08a",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/22e3458965d5d08a",
+      "mapped_source_entity_ids": [
+        "sherdog:250049",
+        "espn:5142304"
+      ],
+      "decision_cell_ids": [
+        "D039"
+      ],
+      "identity_basis": "UFC official/UFCStats exact identity is linked to Sherdog 250049 and ESPN 5142304 by DOB 1997-08-21 and exact Brave CF and UFC bout anchors.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/michael-aljarouj",
+        "http://ufcstats.com/fighter-details/22e3458965d5d08a",
+        "https://www.sherdog.com/fighter/Michael-Aljarouj-250049",
+        "https://www.espn.com/mma/fighter/_/id/5142304/michael-aljarouj"
+      ]
+    },
+    {
+      "official_name": "Michael Venom Page",
+      "reviewed_official_names": [
+        "Michael Venom Page",
+        "Michael Page",
+        "Michael 'Venom' Page",
+        "Michael “Venom” Page"
+      ],
+      "reviewed_nicknames": [
+        "MVP"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/michael-page",
+      "official_source_entity_id": "athlete:michael-page",
+      "ufcstats_name": "Michael Page",
+      "stable_ufcstats_id": "a67d071163962af8",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/a67d071163962af8",
+      "mapped_source_entity_ids": [],
+      "decision_cell_ids": [
+        "D040",
+        "D041",
+        "D042"
+      ],
+      "identity_basis": "The official display inserts the well-known nickname while UFCStats uses Michael Page. Five exact UFC date/opponent/event anchors, including UFC debut versus Kevin Holland, make the alias one-to-one; this is the explicit Michael Page/Michael 'Venom' Page case.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/michael-page",
+        "http://ufcstats.com/fighter-details/a67d071163962af8"
+      ]
+    },
+    {
+      "official_name": "Rafael de Freitas",
+      "reviewed_official_names": [
+        "Rafael de Freitas",
+        "Rafael De Freitas",
+        "Rafael 'Barata' de Freitas"
+      ],
+      "reviewed_nicknames": [
+        "Barata",
+        "Barata (Cockroach)"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/rafael-de-freitas",
+      "official_source_entity_id": "athlete:rafael-de-freitas",
+      "ufcstats_name": "",
+      "stable_ufcstats_id": "",
+      "ufcstats_url": "",
+      "mapped_source_entity_ids": [
+        "sherdog:25607",
+        "tapology:16686",
+        "fightdx:rafael-de-freitas"
+      ],
+      "decision_cell_ids": [
+        "D043",
+        "D044"
+      ],
+      "identity_basis": "UFC node 27914, Sherdog 25607, and Tapology 16686 share DOB 1983-10-04, Barata nickname, and the exact Cody Bollinger TUF 18 anchor. UFCStats 14b9e0f2679a2205 is separately rejected: it is a 205 lb Rafael Freitas with a Mauricio Rua/Meca 7 bout on 2002-11-08.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/rafael-de-freitas",
+        "https://www.sherdog.com/fighter/Rafael-de-Freitas-25607",
+        "https://www.tapology.com/fightcenter/fighters/16686-rafael-freitas-barata",
+        "http://ufcstats.com/fighter-details/14b9e0f2679a2205"
+      ]
+    },
+    {
+      "official_name": "Rheza Arianto",
+      "reviewed_official_names": [
+        "Rheza Arianto",
+        "Reza Arianto",
+        "Muhammad Rheza Arianto"
+      ],
+      "reviewed_nicknames": [
+        "The Crazy Lion"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/rheza-arianto",
+      "official_source_entity_id": "athlete:rheza-arianto",
+      "ufcstats_name": "Reza Arianto",
+      "stable_ufcstats_id": "90063913321e7670",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/90063913321e7670",
+      "mapped_source_entity_ids": [
+        "sherdog:356941",
+        "fightdx:rheza-arianto"
+      ],
+      "decision_cell_ids": [
+        "D045"
+      ],
+      "identity_basis": "Official node 128768 JSON-LD DOB 2000-07-08 exactly matches Sherdog 356941 and FightDX; the two external stable entities have exact bout agreement. UFCStats Reza Arianto has the same distinctive nickname, 5-0 pre-loss record, and 155 lb value, supporting the reviewed Rheza/Reza spelling map even though its profile has no recorded UFCStats bout rows.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/rheza-arianto",
+        "http://ufcstats.com/fighter-details/90063913321e7670",
+        "https://www.sherdog.com/fighter/Rheza-Arianto-356941",
+        "https://fightdx.com/person/rheza-arianto"
+      ]
+    },
+    {
+      "official_name": "Roman Puga",
+      "reviewed_official_names": [
+        "Roman Puga",
+        "Roman Gabriel Puga"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/roman-puga",
+      "official_source_entity_id": "athlete:roman-puga",
+      "ufcstats_name": "",
+      "stable_ufcstats_id": "",
+      "ufcstats_url": "",
+      "mapped_source_entity_ids": [
+        "espn:5116187",
+        "sherdog:183547",
+        "tapology:79385"
+      ],
+      "decision_cell_ids": [
+        "D046",
+        "D047",
+        "D048",
+        "D049"
+      ],
+      "identity_basis": "UFC node 159452 and ESPN 5116187 share exact DOB 1996-09-17; ESPN/Sherdog share the Bellator 219 anchor; UFC official/Sherdog share the DWCS Taner Trembley anchor. Roman Gabriel Puga is the expanded name, not another person.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/roman-puga",
+        "https://www.espn.com/mma/fighter/_/id/5116187/roman-puga",
+        "https://www.sherdog.com/fighter/Roman-Puga-183547",
+        "https://www.tapology.com/fightcenter/fighters/79385-roman-puga"
+      ]
+    },
+    {
+      "official_name": "Salahdine Parnasse",
+      "reviewed_official_names": [
+        "Salahdine Parnasse"
+      ],
+      "reviewed_nicknames": [],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/salahdine-parnasse",
+      "official_source_entity_id": "athlete:salahdine-parnasse",
+      "ufcstats_name": "Salahdine Parnasse",
+      "stable_ufcstats_id": "b3cb9dfccff3be76",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/b3cb9dfccff3be76",
+      "mapped_source_entity_ids": [
+        "espn:4312859",
+        "sherdog:172169"
+      ],
+      "decision_cell_ids": [
+        "D050",
+        "D051"
+      ],
+      "identity_basis": "UFC official, UFCStats b3cb9dfccff3be76, ESPN 4312859, and Sherdog 172169 agree on identity/DOB and are bridged by exact KSW and scheduled UFC bouts. A fresh direct ESPN response still exposes 5 ft 10 in and 73 in at this stable ID.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/salahdine-parnasse",
+        "http://ufcstats.com/fighter-details/b3cb9dfccff3be76",
+        "https://www.espn.com/mma/fighter/_/id/4312859/salahdine-parnasse",
+        "https://www.sherdog.com/fighter/Salahdine-Parnasse-172169"
+      ]
+    },
+    {
+      "official_name": "Simon Biyong",
+      "reviewed_official_names": [
+        "Simon Biyong",
+        "Simon 'Hemle' Biyong"
+      ],
+      "reviewed_nicknames": [
+        "Hemle"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/simon-biyong",
+      "official_source_entity_id": "athlete:simon-biyong",
+      "ufcstats_name": "Simon Biyong",
+      "stable_ufcstats_id": "27ab7257bf6a3b65",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/27ab7257bf6a3b65",
+      "mapped_source_entity_ids": [
+        "espn:4689220",
+        "sherdog:252287",
+        "fightdx:simon-biyong"
+      ],
+      "decision_cell_ids": [
+        "D052",
+        "D053"
+      ],
+      "identity_basis": "Exact DOB 1991-04-05 plus repeated Bellator anchors bind ESPN/Sherdog/FightDX to UFCStats 27ab7257bf6a3b65 and official node 118476. The unusual measurements are corroborated: ESPN, Sherdog, and FightDX report 6 ft 6 in; ESPN 74 in equals FightDX 6 ft 2 in reach.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/simon-biyong",
+        "http://ufcstats.com/fighter-details/27ab7257bf6a3b65",
+        "https://www.espn.com/mma/fighter/_/id/4689220/simon-biyong",
+        "https://www.sherdog.com/fighter/Simon-Biyong-252287",
+        "https://fightdx.com/person/simon-biyong"
+      ]
+    },
+    {
+      "official_name": "Willian Souza",
+      "reviewed_official_names": [
+        "Willian Souza",
+        "Willian Souza Guadalupe",
+        "Willian 'Colorado' Souza"
+      ],
+      "reviewed_nicknames": [
+        "Colorado"
+      ],
+      "reviewed_route_aliases": [],
+      "official_athlete_url": "https://www.ufc.com/athlete/willian-souza",
+      "official_source_entity_id": "athlete:willian-souza",
+      "ufcstats_name": "",
+      "stable_ufcstats_id": "",
+      "ufcstats_url": "",
+      "mapped_source_entity_ids": [
+        "espn:5030323",
+        "fightdx:willian-souza",
+        "sherdog:256857"
+      ],
+      "decision_cell_ids": [
+        "D054",
+        "D055"
+      ],
+      "identity_basis": "The 2022 UFC DWCS Farid Basharat/146 lb anchor ties historical official node 119217 to Colorado. ESPN 5030323, FightDX, and Sherdog 256857 then agree on DOB and two exact Jungle Fight bouts. Sherdog 51374 is conclusively another fighter (Palito, 170 lb, 2-2, 2009-10 history). Current official-page age metadata conflicts with the exact historical bridge and must not be used to reject the Colorado mapping silently.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/willian-souza",
+        "https://www.espn.com/mma/fighter/_/id/5030323/willian-souza",
+        "https://fightdx.com/person/willian-souza",
+        "https://www.sherdog.com/fighter/Willian-Souza-256857",
+        "https://www.sherdog.com/fighter/Willian-Souza-51374"
+      ]
+    }
+  ],
+  "source_identity_rejections": [
+    {
+      "official_name": "Jordan Jackson",
+      "official_athlete_url": "https://www.ufc.com/athlete/jordan-jackson",
+      "official_source_entity_id": "athlete:jordan-jackson",
+      "source": "tapology",
+      "source_entity_id": "tapology:21470",
+      "source_url": "https://www.tapology.com/fightcenter/fighters/21470-jordan-jackson",
+      "source_identity_cluster": "jordan-tapology-21470",
+      "decision_cell_ids": [
+        "D015"
+      ],
+      "remove_from_profile_supplement": true,
+      "expected_profile_supplement_row": {
+        "name": "Jordan Jackson",
+        "source": "tapology",
+        "source_name": "Jordan Jackson",
+        "search_name": "Jordan Jackson",
+        "fighter_url": "https://www.tapology.com/fightcenter/fighters/21470-jordan-jackson",
+        "height": "5'9\" (175cm)",
+        "reach": "",
+        "weight": "",
+        "stance": "",
+        "dob": "1984-02-14"
+      }
+    },
+    {
+      "official_name": "Jordan Jackson",
+      "official_athlete_url": "https://www.ufc.com/athlete/jordan-jackson",
+      "official_source_entity_id": "athlete:jordan-jackson",
+      "source": "sherdog",
+      "source_entity_id": "sherdog:400887",
+      "source_url": "https://www.sherdog.com/fighter/Jordan-Jackson-400887",
+      "source_identity_cluster": "jordan-sherdog-400887",
+      "decision_cell_ids": [
+        "D016"
+      ],
+      "remove_from_profile_supplement": true,
+      "expected_profile_supplement_row": {
+        "name": "Jordan Jackson",
+        "source": "sherdog",
+        "source_name": "Jordan Jackson",
+        "search_name": "Jordan Jackson",
+        "fighter_url": "https://www.sherdog.com/fighter/Jordan-Jackson-400887",
+        "height": "",
+        "reach": "",
+        "weight": "185 lbs / 83.91 kg",
+        "stance": "",
+        "dob": ""
+      }
+    },
+    {
+      "official_name": "Kyle Reyes",
+      "official_athlete_url": "https://www.ufc.com/athlete/kyle-reyes",
+      "official_source_entity_id": "athlete:kyle-reyes",
+      "source": "wikipedia",
+      "source_entity_id": "wikipedia:page-title:Kyle_Reyes",
+      "source_url": "https://en.wikipedia.org/wiki/Kyle_Reyes",
+      "source_identity_cluster": "kyle-reyes-canadian-judoka",
+      "decision_cell_ids": [
+        "D028"
+      ],
+      "remove_from_profile_supplement": true,
+      "expected_profile_supplement_row": {
+        "name": "Kyle Reyes",
+        "source": "wikipedia",
+        "source_name": "Kyle Reyes",
+        "search_name": "Kyle Reyes",
+        "fighter_url": "https://en.wikipedia.org/wiki/Kyle_Reyes",
+        "height": "",
+        "reach": "",
+        "weight": "",
+        "stance": "",
+        "dob": "1993-10-10"
+      }
+    },
+    {
+      "official_name": "Kyle Reyes",
+      "official_athlete_url": "https://www.ufc.com/athlete/kyle-reyes",
+      "official_source_entity_id": "athlete:kyle-reyes",
+      "source": "ufcstats",
+      "source_entity_id": "ufcstats:7333d6e0f6428acb",
+      "source_url": "http://ufcstats.com/fighter-details/7333d6e0f6428acb",
+      "source_identity_cluster": "kyle-boom-reyes-historical-mma",
+      "decision_cell_ids": [
+        "D028"
+      ],
+      "remove_from_profile_supplement": false,
+      "expected_profile_supplement_row": null
+    },
+    {
+      "official_name": "Kyle Reyes",
+      "official_athlete_url": "https://www.ufc.com/athlete/kyle-reyes",
+      "official_source_entity_id": "athlete:kyle-reyes",
+      "source": "tapology",
+      "source_entity_id": "tapology:31244",
+      "source_url": "https://www.tapology.com/fightcenter/fighters/31244-kyle-reyes-boom",
+      "source_identity_cluster": "kyle-boom-reyes-historical-mma",
+      "decision_cell_ids": [
+        "D028"
+      ],
+      "remove_from_profile_supplement": false,
+      "expected_profile_supplement_row": null
+    },
+    {
+      "official_name": "Kyle Reyes",
+      "official_athlete_url": "https://www.ufc.com/athlete/kyle-reyes",
+      "official_source_entity_id": "athlete:kyle-reyes",
+      "source": "sherdog",
+      "source_entity_id": "sherdog:45110",
+      "source_url": "https://www.sherdog.com/fighter/Kyle-Reyes-45110",
+      "source_identity_cluster": "kyle-boom-reyes-historical-mma",
+      "decision_cell_ids": [
+        "D028"
+      ],
+      "remove_from_profile_supplement": false,
+      "expected_profile_supplement_row": null
+    },
+    {
+      "official_name": "Kyle Reyes",
+      "official_athlete_url": "https://www.ufc.com/athlete/kyle-reyes",
+      "official_source_entity_id": "athlete:kyle-reyes",
+      "source": "espn",
+      "source_entity_id": "espn:3953378",
+      "source_url": "https://www.espn.com/mma/fighter/_/id/3953378/kyle-reyes",
+      "source_identity_cluster": "kyle-boom-reyes-historical-mma",
+      "decision_cell_ids": [
+        "D028"
+      ],
+      "remove_from_profile_supplement": false,
+      "expected_profile_supplement_row": null
+    },
+    {
+      "official_name": "Leonardo De Oliveira",
+      "official_athlete_url": "https://www.ufc.com/athlete/leonardo-de-oliveira",
+      "official_source_entity_id": "athlete:leonardo-de-oliveira",
+      "source": "tapology",
+      "source_entity_id": "tapology:67533",
+      "source_url": "https://www.tapology.com/fightcenter/fighters/67533-leonardo-sorriso",
+      "source_identity_cluster": "leonardo-caetano",
+      "decision_cell_ids": [
+        "D029",
+        "D030"
+      ],
+      "remove_from_profile_supplement": true,
+      "expected_profile_supplement_row": {
+        "name": "Leonardo De Oliveira",
+        "source": "tapology",
+        "source_name": "Leonardo de Oliveira",
+        "search_name": "Leonardo De Oliveira",
+        "fighter_url": "https://www.tapology.com/fightcenter/fighters/67533-leonardo-sorriso",
+        "height": "5'4\" (163cm)",
+        "reach": "",
+        "weight": "",
+        "stance": "",
+        "dob": "1998 Oct 19"
+      }
+    },
+    {
+      "official_name": "Leonardo De Oliveira",
+      "official_athlete_url": "https://www.ufc.com/athlete/leonardo-de-oliveira",
+      "official_source_entity_id": "athlete:leonardo-de-oliveira",
+      "source": "sherdog",
+      "source_entity_id": "sherdog:84049",
+      "source_url": "https://www.sherdog.com/fighter/Leonardo-de-Oliveira-Barbosa-84049",
+      "source_identity_cluster": "leonardo-barbosa",
+      "decision_cell_ids": [
+        "D029",
+        "D030"
+      ],
+      "remove_from_profile_supplement": true,
+      "expected_profile_supplement_row": {
+        "name": "Leonardo De Oliveira",
+        "source": "sherdog",
+        "source_name": "Leonardo de Oliveira Barbosa",
+        "search_name": "Leonardo De Oliveira",
+        "fighter_url": "https://www.sherdog.com/fighter/Leonardo-de-Oliveira-Barbosa-84049",
+        "height": "",
+        "reach": "",
+        "weight": "125 lbs / 56.7 kg",
+        "stance": "",
+        "dob": ""
+      }
+    },
+    {
+      "official_name": "Rafael de Freitas",
+      "official_athlete_url": "https://www.ufc.com/athlete/rafael-de-freitas",
+      "official_source_entity_id": "athlete:rafael-de-freitas",
+      "source": "ufcstats",
+      "source_entity_id": "ufcstats:14b9e0f2679a2205",
+      "source_url": "http://ufcstats.com/fighter-details/14b9e0f2679a2205",
+      "source_identity_cluster": "rafael-freitas-205lb-meca",
+      "decision_cell_ids": [
+        "D043",
+        "D044"
+      ],
+      "remove_from_profile_supplement": false,
+      "expected_profile_supplement_row": null
+    },
+    {
+      "official_name": "Willian Souza",
+      "official_athlete_url": "https://www.ufc.com/athlete/willian-souza",
+      "official_source_entity_id": "athlete:willian-souza",
+      "source": "sherdog",
+      "source_entity_id": "sherdog:51374",
+      "source_url": "https://www.sherdog.com/fighter/Willian-Souza-51374",
+      "source_identity_cluster": "willian-palito",
+      "decision_cell_ids": [
+        "D054",
+        "D055"
+      ],
+      "remove_from_profile_supplement": true,
+      "expected_profile_supplement_row": {
+        "name": "Willian Souza",
+        "source": "sherdog",
+        "source_name": "Willian Souza",
+        "search_name": "Willian Souza",
+        "fighter_url": "https://www.sherdog.com/fighter/Willian-Souza-51374",
+        "height": "5'11\" / 180.34 cm",
+        "reach": "",
+        "weight": "",
+        "stance": "",
+        "dob": ""
+      }
+    }
+  ],
+  "field_decisions": [
+    {
+      "cell_id": "D001",
+      "official_source_entity_id": "athlete:abdul-azeem-badakhshi",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "conflicting",
+      "decision_status": "conflicting_field_hold",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D002",
+      "official_source_entity_id": "athlete:brandon-sayles",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "conflicting",
+      "decision_status": "conflicting_field_hold",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D003",
+      "official_source_entity_id": "athlete:delphine-benouaich",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 160.02,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "ufcstats",
+        "source": "ufcstats",
+        "source_entity_id": "3138df4d117ebc12",
+        "source_url": "http://ufcstats.com/fighter-details/3138df4d117ebc12",
+        "source_name": "Delphine Benouaich",
+        "field": "height",
+        "raw_value": "5' 3\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D004",
+      "official_source_entity_id": "athlete:emilio-cuellar",
+      "audit_field": "age",
+      "profile_field": "dob",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": "1995-12-17",
+      "normalized_unit": "date",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:183405",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/183405-emilio-cuellar-show-kid",
+        "source_name": "Emilio Cuéllar",
+        "field": "dob",
+        "raw_value": "1995-12-17"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D005",
+      "official_source_entity_id": "athlete:emilio-cuellar",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "conflicting",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 162.56,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "fightdx",
+        "source_entity_id": "fightdx:emilio-cuellar",
+        "source_url": "https://fightdx.com/person/emilio-cuellar",
+        "source_name": "Emilio Cuellar",
+        "field": "height",
+        "raw_value": "5'4\" (1.62m)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D006",
+      "official_source_entity_id": "athlete:fabia-sintes",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "conflicting",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 170.18,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "ufcstats",
+        "source": "ufcstats",
+        "source_entity_id": "9911989cf48b195d",
+        "source_url": "http://ufcstats.com/fighter-details/9911989cf48b195d",
+        "source_name": "Fabia Sintes",
+        "field": "height",
+        "raw_value": "5' 7\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D007",
+      "official_source_entity_id": "athlete:fabiola-pidroni",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 160.02,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "fightdx",
+        "source_entity_id": "fightdx:fabiola-pidroni",
+        "source_url": "https://fightdx.com/person/fabiola-pidroni",
+        "source_name": "Fabiola Pidroni",
+        "field": "height",
+        "raw_value": "5'3\" (1.6m)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D008",
+      "official_source_entity_id": "athlete:fabiola-pidroni",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 160.02,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "fightdx",
+        "source_entity_id": "fightdx:fabiola-pidroni",
+        "source_url": "https://fightdx.com/person/fabiola-pidroni",
+        "source_name": "Fabiola Pidroni",
+        "field": "reach",
+        "raw_value": "5'3\" (1.6m)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D009",
+      "official_source_entity_id": "athlete:feng-pengchao",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "conflicting",
+      "decision_status": "conflicting_field_hold",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D010",
+      "official_source_entity_id": "athlete:feng-pengchao",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 172.974,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:230675",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger",
+        "source_name": "Pengchao Feng",
+        "field": "reach",
+        "raw_value": "68.1\" (173cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D011",
+      "official_source_entity_id": "athlete:ilimbek-akylbek-uulu",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 170.18,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:5345639",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/5345639/ilimbek-akylbek-uulu",
+        "source_name": "Ilimbek Akylbek Uulu",
+        "field": "height",
+        "raw_value": "5' 7\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D012",
+      "official_source_entity_id": "athlete:jae-hyun-park",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "conflicting",
+      "decision_status": "conflicting_field_hold",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D013",
+      "official_source_entity_id": "athlete:jae-hyun-park",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 185.42,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:171979",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/171979-jae-hyun-park",
+        "source_name": "Jae Hyun Park",
+        "field": "reach",
+        "raw_value": "73.0\" (185cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D014",
+      "official_source_entity_id": "athlete:jae-hyun-park",
+      "audit_field": "stance",
+      "profile_field": "stance",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": "Orthodox",
+      "normalized_unit": "stance",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:5138589",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/5138589/jae-hyun-park",
+        "source_name": "Jae Hyun Park",
+        "field": "stance",
+        "raw_value": "Orthodox"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D015",
+      "official_source_entity_id": "athlete:jordan-jackson",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "wrong identity",
+      "decision_status": "rejected_wrong_identity",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D016",
+      "official_source_entity_id": "athlete:jordan-jackson",
+      "audit_field": "weight",
+      "profile_field": "weight",
+      "classification": "wrong identity",
+      "decision_status": "rejected_wrong_identity",
+      "normalized_value": null,
+      "normalized_unit": "lb",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D017",
+      "official_source_entity_id": "athlete:jose-augusto",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 185.42,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:4684239",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/4684239/jose-augusto",
+        "source_name": "Jose Augusto",
+        "field": "reach",
+        "raw_value": "73\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D018",
+      "official_source_entity_id": "athlete:jung-hyun-lee",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 165.1,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "sherdog",
+        "source_entity_id": "sherdog:289981",
+        "source_url": "https://www.sherdog.com/fighter/Jung-Hyun-Lee-289981",
+        "source_name": "Jung Hyun Lee",
+        "field": "height",
+        "raw_value": "5'5\" / 165.1 cm"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D019",
+      "official_source_entity_id": "athlete:jung-hyun-lee",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 165.1,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:174809",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/174809-chang-jun-lee",
+        "source_name": "Jung Hyun Lee",
+        "field": "reach",
+        "raw_value": "65.0\" (165cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D020",
+      "official_source_entity_id": "athlete:junye-gao",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 172.72,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "fightdx",
+        "source_entity_id": "fightdx:junye-gao",
+        "source_url": "https://fightdx.com/person/junye-gao",
+        "source_name": "Junye Gao",
+        "field": "height",
+        "raw_value": "5'8\" (1.72m)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D021",
+      "official_source_entity_id": "athlete:junye-gao",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 165.1,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:130855",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/130855-junye-gao",
+        "source_name": "Junye Gao",
+        "field": "reach",
+        "raw_value": "65.0\" (165cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D022",
+      "official_source_entity_id": "athlete:keifer-roberts",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "unresolved",
+      "decision_status": "unresolved_identity_hold",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D023",
+      "official_source_entity_id": "athlete:keifer-roberts",
+      "audit_field": "weight",
+      "profile_field": "weight",
+      "classification": "unresolved",
+      "decision_status": "unresolved_identity_hold",
+      "normalized_value": null,
+      "normalized_unit": "lb",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D024",
+      "official_source_entity_id": "athlete:kennedy-freeman",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 167.64,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "fightdx",
+        "source_entity_id": "fightdx:kennedy-freeman",
+        "source_url": "https://fightdx.com/person/kennedy-freeman",
+        "source_name": "Kennedy Freeman",
+        "field": "height",
+        "raw_value": "5'6\" (1.67m)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D025",
+      "official_source_entity_id": "athlete:khadzhimurat-bestaev",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "conflicting",
+      "decision_status": "conflicting_field_hold",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D026",
+      "official_source_entity_id": "athlete:khadzhimurat-bestaev",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "conflicting",
+      "decision_status": "conflicting_field_hold",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D027",
+      "official_source_entity_id": "athlete:kyle-noblitt",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 194.31,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:57164",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/57164-kyle-noblitt",
+        "source_name": "Kyle Noblitt",
+        "field": "reach",
+        "raw_value": "76.5\" (194cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D028",
+      "official_source_entity_id": "athlete:kyle-reyes",
+      "audit_field": "age",
+      "profile_field": "dob",
+      "classification": "wrong identity",
+      "decision_status": "rejected_wrong_identity",
+      "normalized_value": null,
+      "normalized_unit": "date",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D029",
+      "official_source_entity_id": "athlete:leonardo-de-oliveira",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "wrong identity",
+      "decision_status": "rejected_wrong_identity",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D030",
+      "official_source_entity_id": "athlete:leonardo-de-oliveira",
+      "audit_field": "weight",
+      "profile_field": "weight",
+      "classification": "wrong identity",
+      "decision_status": "rejected_wrong_identity",
+      "normalized_value": null,
+      "normalized_unit": "lb",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D031",
+      "official_source_entity_id": "athlete:lu-zhengyong",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 162.56,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:133896",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/133896-zhengyong-lu",
+        "source_name": "Zhengyong Lu",
+        "field": "height",
+        "raw_value": "5'4\" (162cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D032",
+      "official_source_entity_id": "athlete:lu-zhengyong",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 161.036,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:133896",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/133896-zhengyong-lu",
+        "source_name": "Zhengyong Lu",
+        "field": "reach",
+        "raw_value": "63.4\" (161cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D033",
+      "official_source_entity_id": "athlete:matthieu-letho-duclos",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 190.5,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:239830",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/239830-matthieu-letho",
+        "source_name": "Matthieu Duclos",
+        "field": "height",
+        "raw_value": "6'3\" (191cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D034",
+      "official_source_entity_id": "athlete:matthieu-letho-duclos",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 195.58,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:239830",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/239830-matthieu-letho",
+        "source_name": "Matthieu Duclos",
+        "field": "reach",
+        "raw_value": "77.0\" (196cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D035",
+      "official_source_entity_id": "athlete:matthieu-letho-duclos",
+      "audit_field": "stance",
+      "profile_field": "stance",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": "Orthodox",
+      "normalized_unit": "stance",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:5013686",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/5013686/matthieu-letho-duclos",
+        "source_name": "Matthieu Letho Duclos",
+        "field": "stance",
+        "raw_value": "Orthodox"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D036",
+      "official_source_entity_id": "athlete:mehemmedeli-osmanli",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 175.26,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:5345640",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/5345640/mehemmedeli-osmanli",
+        "source_name": "Mehemmedeli Osmanli",
+        "field": "height",
+        "raw_value": "5' 9\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D037",
+      "official_source_entity_id": "athlete:melissa-amaya",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 162.56,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:5169699",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/5169699/melissa-amaya",
+        "source_name": "Melissa Amaya",
+        "field": "height",
+        "raw_value": "5' 4\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D038",
+      "official_source_entity_id": "athlete:melissa-amaya",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 162.56,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:5169699",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/5169699/melissa-amaya",
+        "source_name": "Melissa Amaya",
+        "field": "reach",
+        "raw_value": "64\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D039",
+      "official_source_entity_id": "athlete:michael-aljarouj",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 165.1,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "ufcstats",
+        "source": "ufcstats",
+        "source_entity_id": "22e3458965d5d08a",
+        "source_url": "http://ufcstats.com/fighter-details/22e3458965d5d08a",
+        "source_name": "Michael Aljarouj",
+        "field": "height",
+        "raw_value": "5' 5\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D040",
+      "official_source_entity_id": "athlete:michael-page",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 190.5,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "official",
+        "source": "ufc",
+        "source_entity_id": "athlete:michael-page",
+        "source_url": "https://www.ufc.com/athlete/michael-page",
+        "source_name": "Michael Venom Page",
+        "field": "height",
+        "raw_value": "75.00 in"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D041",
+      "official_source_entity_id": "athlete:michael-page",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 200.66,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "official",
+        "source": "ufc",
+        "source_entity_id": "athlete:michael-page",
+        "source_url": "https://www.ufc.com/athlete/michael-page",
+        "source_name": "Michael Venom Page",
+        "field": "reach",
+        "raw_value": "79.00 in"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D042",
+      "official_source_entity_id": "athlete:michael-page",
+      "audit_field": "stance",
+      "profile_field": "stance",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": "Switch",
+      "normalized_unit": "stance",
+      "observation_selector": {
+        "carrier": "ufcstats",
+        "source": "ufcstats",
+        "source_entity_id": "a67d071163962af8",
+        "source_url": "http://ufcstats.com/fighter-details/a67d071163962af8",
+        "source_name": "Michael Page",
+        "field": "stance",
+        "raw_value": "Switch"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D043",
+      "official_source_entity_id": "athlete:rafael-de-freitas",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 167.64,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "official",
+        "source": "ufc",
+        "source_entity_id": "athlete:rafael-de-freitas",
+        "source_url": "https://www.ufc.com/athlete/rafael-de-freitas",
+        "source_name": "Rafael de Freitas",
+        "field": "height",
+        "raw_value": "66.00 in"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D044",
+      "official_source_entity_id": "athlete:rafael-de-freitas",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 175.26,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "tapology",
+        "source_entity_id": "tapology:16686",
+        "source_url": "https://www.tapology.com/fightcenter/fighters/16686-rafael-freitas-barata",
+        "source_name": "Rafael de Freitas",
+        "field": "reach",
+        "raw_value": "69.0\" (175cm)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D045",
+      "official_source_entity_id": "athlete:rheza-arianto",
+      "audit_field": "weight",
+      "profile_field": "weight",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 155.0,
+      "normalized_unit": "lb",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "sherdog",
+        "source_entity_id": "sherdog:356941",
+        "source_url": "https://www.sherdog.com/fighter/Rheza-Arianto-356941",
+        "source_name": "Rheza Arianto",
+        "field": "weight",
+        "raw_value": "155 lbs / 70.31 kg"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D046",
+      "official_source_entity_id": "athlete:roman-puga",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 171.45,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "official",
+        "source": "ufc",
+        "source_entity_id": "athlete:roman-puga",
+        "source_url": "https://www.ufc.com/athlete/roman-puga",
+        "source_name": "Roman Puga",
+        "field": "height",
+        "raw_value": "67.50 in"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D047",
+      "official_source_entity_id": "athlete:roman-puga",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 181.61,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "official",
+        "source": "ufc",
+        "source_entity_id": "athlete:roman-puga",
+        "source_url": "https://www.ufc.com/athlete/roman-puga",
+        "source_name": "Roman Puga",
+        "field": "reach",
+        "raw_value": "71.50 in"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D048",
+      "official_source_entity_id": "athlete:roman-puga",
+      "audit_field": "stance",
+      "profile_field": "stance",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": "Orthodox",
+      "normalized_unit": "stance",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:5116187",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/5116187/roman-puga",
+        "source_name": "Roman Puga",
+        "field": "stance",
+        "raw_value": "Orthodox"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D049",
+      "official_source_entity_id": "athlete:roman-puga",
+      "audit_field": "weight",
+      "profile_field": "weight",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 144.0,
+      "normalized_unit": "lb",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:5116187",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/5116187/roman-puga",
+        "source_name": "Roman Puga",
+        "field": "weight",
+        "raw_value": "144 lbs"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D050",
+      "official_source_entity_id": "athlete:salahdine-parnasse",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 177.8,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "espn",
+        "source_entity_id": "espn:4312859",
+        "source_url": "https://www.espn.com/mma/fighter/_/id/4312859/salahdine-parnasse",
+        "source_name": "Salahdine Parnasse",
+        "field": "height",
+        "raw_value": "5' 10\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D051",
+      "official_source_entity_id": "athlete:salahdine-parnasse",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 180.34,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "ufcstats",
+        "source": "ufcstats",
+        "source_entity_id": "b3cb9dfccff3be76",
+        "source_url": "http://ufcstats.com/fighter-details/b3cb9dfccff3be76",
+        "source_name": "Salahdine Parnasse",
+        "field": "reach",
+        "raw_value": "71\""
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D052",
+      "official_source_entity_id": "athlete:simon-biyong",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 198.12,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "fightdx",
+        "source_entity_id": "fightdx:simon-biyong",
+        "source_url": "https://fightdx.com/person/simon-biyong",
+        "source_name": "Simon Biyong",
+        "field": "height",
+        "raw_value": "6'6\" (1.98m)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D053",
+      "official_source_entity_id": "athlete:simon-biyong",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 187.96,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "fightdx",
+        "source_entity_id": "fightdx:simon-biyong",
+        "source_url": "https://fightdx.com/person/simon-biyong",
+        "source_name": "Simon Biyong",
+        "field": "reach",
+        "raw_value": "6'2\" (1.87m)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D054",
+      "official_source_entity_id": "athlete:willian-souza",
+      "audit_field": "height",
+      "profile_field": "height",
+      "classification": "conflicting",
+      "decision_status": "owner_field_hold",
+      "normalized_value": null,
+      "normalized_unit": "cm",
+      "observation_selector": null,
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    },
+    {
+      "cell_id": "D055",
+      "official_source_entity_id": "athlete:willian-souza",
+      "audit_field": "reach",
+      "profile_field": "reach",
+      "classification": "verified alias/path miss",
+      "decision_status": "accepted_current_future",
+      "normalized_value": 182.88,
+      "normalized_unit": "cm",
+      "observation_selector": {
+        "carrier": "supplement",
+        "source": "fightdx",
+        "source_entity_id": "fightdx:willian-souza",
+        "source_url": "https://fightdx.com/person/willian-souza",
+        "source_name": "Willian Souza",
+        "field": "reach",
+        "raw_value": "6'0\" (1.82m)"
+      },
+      "scope": "current_and_future",
+      "historical_backfill_allowed": false,
+      "automatic_release_allowed": false
+    }
+  ],
+  "identity_link_holds": [
+    {
+      "official_name": "Keifer Roberts",
+      "reviewed_official_names": [
+        "Keifer Roberts"
+      ],
+      "official_athlete_url": "https://www.ufc.com/athlete/keifer-roberts",
+      "official_source_entity_id": "athlete:keifer-roberts",
+      "candidate_source_entity_ids": [
+        "tapology:52400",
+        "sherdog:84920"
+      ],
+      "decision_cell_ids": [
+        "D022",
+        "D023"
+      ],
+      "decision_status": "unresolved_identity_hold",
+      "automatic_release_allowed": false,
+      "requires_non_name_official_anchor": true,
+      "reason": "The external amateur/Power Slap identity lacks a non-name anchor to the current UFC entity.",
+      "evidence_urls": [
+        "https://www.ufc.com/athlete/keifer-roberts",
+        "https://www.tapology.com/fightcenter/fighters/52400-keifer-roberts",
+        "https://www.sherdog.com/fighter/Keifer-Michael-Roberts-84920",
+        "https://www.tapology.com/fightcenter/bouts/937733-power-slap-ke-ali-i-the-saint-kanekoa-vs-keifer-roberts"
+      ]
+    }
+  ]
+}

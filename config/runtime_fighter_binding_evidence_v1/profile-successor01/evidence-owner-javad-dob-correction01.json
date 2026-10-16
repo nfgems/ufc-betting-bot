@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "recorded_utc": "2026-09-20T23:47:15.3824031+00:00",
+  "owner_verbatim": "# Javad Mahjoub was born May 26, 1992",
+  "fighter_name": "Javad Mahjoub",
+  "retained_selected_fighter_id": "e9f9add1481fc11c",
+  "corrected_dob": "1992-05-26",
+  "attribution": "Owner correction; agrees with retained embedded UFCStats profile",
+  "retained_official_profile_dob": "1991-05-26",
+  "current_runtime_outcome": "Withheld: selected primary and supplemental prediction profile absent",
+  "correction_applied_to": "Current human-readable outcome and continuation checkpoint only",
+  "frozen_candidate_and_tests_predate_correction": true,
+  "frozen_candidate_and_tests_changed": false,
+  "historical_source_conflict_and_reviews_preserved": true,
+  "selected_models_data_profiles_features_changed": false,
+  "source_requests": 0,
+  "hosted_actions": 0,
+  "supporting_retained_evidence": {
+    "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\javad-embedded-conflict01.json",
+    "sha256": "cc1c9664be4ef25f095ad56f5fcaee8cb311ceb0dbf37684aea6b57f68f49dfc",
+    "bytes": 4043
+  }
+}

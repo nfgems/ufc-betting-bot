@@ -8,10 +8,6 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
-from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
-
-from src.model.predict import predict_batch
-from src.model.train import load_model
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -55,20 +51,59 @@ def evaluate_model_artifact(
     test_df: pd.DataFrame,
 ) -> dict[str, object]:
     """Evaluate one saved model artifact on a supplied refreshed V4 test set."""
+    from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
+    from src.model.train import load_model
+
     resolved_path = Path(model_path).resolve()
     model_result = load_model(str(resolved_path))
-    predictions = predict_batch(test_df, model_result=model_result)
-
+    measured = evaluate_loaded_model(test_df=test_df, model_result=model_result)
+    predictions = measured["predictions"]
     y_true = predictions["target"].to_numpy()
     y_prob = predictions["prob_a"].to_numpy()
-    y_pred = (y_prob > 0.5).astype(int)
 
     return {
         "model_path": _repo_display_path(resolved_path),
         "feature_count": int(len(model_result.get("feature_cols", []))),
-        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "accuracy": float(accuracy_score(y_true, (y_prob > 0.5).astype(int))),
         "log_loss": float(log_loss(y_true, y_prob, labels=[0, 1])),
         "brier": float(brier_score_loss(y_true, y_prob)),
+    }
+
+
+def evaluate_loaded_model(*, test_df: pd.DataFrame, model_result: dict) -> dict:
+    """Score an explicitly loaded result without a loader, alias or file write.
+
+    Callers accepting immutable artifacts must validate their exact selected
+    contract and load them read-only before reaching this operation.
+    """
+    from src.model.predict import predict_batch
+
+    predictions = predict_batch(test_df, model_result=model_result)
+    return {"predictions": predictions, "metrics": prediction_metrics(predictions)}
+
+
+def prediction_metrics(predictions: pd.DataFrame) -> dict[str, float]:
+    """Explicit binary scalar definitions over supplied probabilities only.
+
+    Accuracy uses the existing strict >0.5 decision, Brier is mean squared
+    probability error, and binary log loss uses explicit float64 epsilon at
+    zero/one. These mathematical calculations need no estimator or ML runtime.
+    The legacy artifact entrypoint retains its original sklearn calculations.
+    """
+    import numpy as np
+
+    y_true = predictions["target"].to_numpy()
+    y_prob = predictions["prob_a"].to_numpy(dtype=float)
+    if (len(y_true) == 0 or not np.isin(y_true, [0, 1]).all()
+            or not np.isfinite(y_prob).all() or ((y_prob < 0) | (y_prob > 1)).any()):
+        raise ValueError("Evaluation requires nonempty binary targets and finite probabilities.")
+    y_pred = (y_prob > 0.5).astype(int)
+    clipped = np.clip(y_prob, np.finfo(np.float64).eps, 1.0 - np.finfo(np.float64).eps)
+
+    return {
+        "accuracy": float(np.mean(y_true == y_pred)),
+        "log_loss": float(np.mean(-(y_true * np.log(clipped) + (1 - y_true) * np.log1p(-clipped)))),
+        "brier": float(np.mean((y_prob - y_true) ** 2)),
     }
 
 

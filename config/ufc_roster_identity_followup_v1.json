@@ -1,0 +1,1042 @@
+{
+  "schema_version": 1,
+  "scope": {
+    "scope_id": "canonical-118-targeted-identity-followup-2026-08-30",
+    "approved_as_of_date": "2026-08-30",
+    "approved_decision_ids": ["R1", "R2", "R3", "R4", "R5", "R6", "U30-EMILIO-SHERDOG", "U30-EMILIO-HEIGHT-5FT4", "U30-FELIX-ESPN", "U30-FENG-ESPN", "U30-JOSE-FIGHTDX", "U30-JOSE-WIKIPEDIA-NAMESAKE"],
+    "identity_worklist_sha256": "414c78e71d69b1c9378015b6e4280b8b00ee207e5fd05762c0eeb80e718e82b7",
+    "stop_review_sha256": "2df4dc51b2b224f7c739abcee34fabd78184553b7f731edefed6b5ddc74456a2",
+    "stop_review_markdown_sha256": "5b4ff5cf3ae90b62f29aadcc697f63c52a98ee063e1cd9eb24f66e3b50d3a84c",
+    "stop_proof_sha256": "571093c7c12febdd20b516d73ddad90a43e7e1f6276826a3b2e7c8fbc3ec82d7",
+    "independent_validation_sha256": "d07617b8b6c718907af9101f43e97d5f23f4d9d522c0786ed6eb52764724db9d",
+    "unavailable_worklist_sha256": "e27d2c1788c3a6d4545d5a1ef489aad88d02e4a99f44fc040f560995d3db8bb9",
+    "unavailable_research_manifest_sha256": "a951712c13caf163146ef521d6f9f6776edf50fb9e3f68cf82b0c0d0e73b76e4",
+    "unavailable_research_validation_sha256": "90420cd9f6df7908106a76ef2091918f58d1de1b2dc997bcba9c25518f12626c",
+    "remaining_unavailable_research_manifest_sha256": "3e4bb1f046b2d2375822cecf9c5640c7bd589a5076fab0f9cfaafa12e6b7435d",
+    "stable_worklist_cells": 55,
+    "stable_worklist_fighters": 17,
+    "active_research_cells": 50,
+    "active_research_fighters": 14
+  },
+  "candidate_effect": {
+    "immutable_baseline_candidate_id": "u55p1",
+    "fresh_review_candidate_id": "u30h1",
+    "field_values_authorized": ["D005:athlete:emilio-cuellar:height:162.56cm:fightdx:emilio-cuellar"],
+    "modern_ufcstats_bindings_authorized": [],
+    "new_non_mma_exclusions_authorized": [],
+    "roster_deletions_authorized": [],
+    "runtime_behavior_changed": true,
+    "publication_authorized": false
+  },
+  "official_search_anchors": [
+    {
+      "official_name": "Fabio Agu",
+      "official_athlete_url": "https://www.ufc.com/athlete/fabio-agu",
+      "official_source_entity_id": "athlete:fabio-agu",
+      "official_node_id": 118470,
+      "official_uuid": "c3553b19-cca7-4518-8552-0b99dfc069e7",
+      "dob": "1988-02-10",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "3555",
+      "decision_ids": ["R1"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_html",
+          "artifact_sha256": "b892817de28fbc8fa95f5674a4e7a70536d317b3d6e418d18e0531b996342623",
+          "recorded_at_utc": "2026-08-29T17:47:47.997881Z"
+        },
+        {
+          "evidence_grade": "transcribed_no_raw_capture",
+          "artifact_sha256": "32aa9a212774c85296fcb2f65810e12f3a478dde9872669037e8ae8fd2450ee7",
+          "recorded_at_utc": "2026-08-30T04:23:04.2719869Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Dakota Weigher",
+      "official_athlete_url": "https://www.ufc.com/athlete/dakota-weigher",
+      "official_source_entity_id": "athlete:dakota-weigher",
+      "official_node_id": 131058,
+      "official_uuid": "65dbc69a-ebd0-4776-96d8-4fd472d2c65b",
+      "dob": "1990-04-23",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R5"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_html",
+          "artifact_sha256": "049e8c8f6ca76c098731d7fe2d12c86d5c7a2c274f702060e5fe5dd2794791d9",
+          "recorded_at_utc": "2026-08-29T17:50:08.034614Z"
+        },
+        {
+          "evidence_grade": "transcribed_no_raw_capture",
+          "artifact_sha256": "32aa9a212774c85296fcb2f65810e12f3a478dde9872669037e8ae8fd2450ee7",
+          "recorded_at_utc": "2026-08-30T04:23:04.2719869Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Jesse Mariotti",
+      "official_athlete_url": "https://www.ufc.com/athlete/jesse-mariotti",
+      "official_source_entity_id": "athlete:jesse-mariotti",
+      "official_node_id": 131061,
+      "official_uuid": "bbbf5bcc-78f0-4751-8aa8-ef5130ac8be3",
+      "dob": "1997-01-11",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R5"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_html",
+          "artifact_sha256": "142ef573a9dd24148bb5d1e12a8f85d050a6ac2280316925adb6f0b648a6996c",
+          "recorded_at_utc": "2026-08-29T17:30:51.138916Z"
+        },
+        {
+          "evidence_grade": "transcribed_no_raw_capture",
+          "artifact_sha256": "32aa9a212774c85296fcb2f65810e12f3a478dde9872669037e8ae8fd2450ee7",
+          "recorded_at_utc": "2026-08-30T04:23:04.2719869Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Jordan Jackson",
+      "official_athlete_url": "https://www.ufc.com/athlete/jordan-jackson",
+      "official_source_entity_id": "athlete:jordan-jackson",
+      "official_node_id": 131056,
+      "official_uuid": "6c906217-365d-4cf6-a5c9-1c67fd1e646e",
+      "dob": "1999-08-06",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R5", "R6"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_jsonapi",
+          "artifact_sha256": "fc43a8c066f030e63edd8bb6a20998772e9a3dc2e001d0f33ccdddd37889be0c",
+          "recorded_at_utc": "2026-08-30T04:16:26.7500259Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Keifer Roberts",
+      "official_athlete_url": "https://www.ufc.com/athlete/keifer-roberts",
+      "official_source_entity_id": "athlete:keifer-roberts",
+      "official_node_id": 131059,
+      "official_uuid": "bca4b3b0-31dc-49c2-aaa8-f48bae567258",
+      "dob": "1992-08-11",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R5"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_jsonapi",
+          "artifact_sha256": "c730b8ee5dfba4bf7e9cbcdb99a9b7a3eb1f63f7ccff49b18ae8908c037d4546",
+          "recorded_at_utc": "2026-08-30T04:16:27.0903646Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Michael Bonnette",
+      "official_athlete_url": "https://www.ufc.com/athlete/michael-bonnette",
+      "official_source_entity_id": "athlete:michael-bonnette",
+      "official_node_id": 130703,
+      "official_uuid": "",
+      "dob": "1988-09-21",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R4", "R5"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_html",
+          "artifact_sha256": "f3a3130c8ea1674ba5758e824dace0a3925dff89b207cb7144a7af672925431b",
+          "recorded_at_utc": "2026-08-29T17:20:57.45341Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Montrel Talbert",
+      "official_athlete_url": "https://www.ufc.com/athlete/montrel-talbert",
+      "official_source_entity_id": "athlete:montrel-talbert",
+      "official_node_id": 130706,
+      "official_uuid": "",
+      "dob": "1992-07-01",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R5"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_html",
+          "artifact_sha256": "d75dbe2a6518e6af30d55d2f3efb04ea962ad095411d479ba44ecf7a4c9fca5e",
+          "recorded_at_utc": "2026-08-29T17:21:00.969496Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Martin Mishtaku",
+      "official_athlete_url": "https://www.ufc.com/athlete/martin-mishtaku",
+      "official_source_entity_id": "athlete:martin-mishtaku",
+      "official_node_id": 131060,
+      "official_uuid": "",
+      "dob": "1987-05-21",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R4", "R5"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_html",
+          "artifact_sha256": "169b90749c4e75a386343b2ef37a454fbb477da3254f263eece4e9ef32c78468",
+          "recorded_at_utc": "2026-08-29T17:31:29.642002Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Timothy Thomas",
+      "official_athlete_url": "https://www.ufc.com/athlete/timothy-thomas",
+      "official_source_entity_id": "athlete:timothy-thomas",
+      "official_node_id": 128385,
+      "official_uuid": "",
+      "dob": "1989-01-01",
+      "mma_id": "",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R4", "R5"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_html",
+          "artifact_sha256": "d57fdedff6e4ffe5eeb6af415f36c9ead1e354c7b960a61fe2d91b10cfacc7ea",
+          "recorded_at_utc": "2026-08-29T17:21:59.107667Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    },
+    {
+      "official_name": "Harrison Garcia",
+      "official_athlete_url": "https://www.ufc.com/athlete/harrison-garcia",
+      "official_source_entity_id": "athlete:harrison-garcia",
+      "official_node_id": 132237,
+      "official_uuid": "e1110eed-571a-4b85-8b20-1ac4305d74f7",
+      "dob": "",
+      "mma_id": "175",
+      "legacy_numeric_fightmetric_id": "",
+      "decision_ids": ["R5"],
+      "evidence": [
+        {
+          "evidence_grade": "captured_official_html",
+          "artifact_sha256": "68c92b1532d4f5bfd94da7f96e4e1d1840eec5f2328539e24089b972cb53547c",
+          "recorded_at_utc": "2026-08-29T17:30:50.057131Z"
+        },
+        {
+          "evidence_grade": "transcribed_no_raw_capture",
+          "artifact_sha256": "32aa9a212774c85296fcb2f65810e12f3a478dde9872669037e8ae8fd2450ee7",
+          "recorded_at_utc": "2026-08-30T04:23:04.2719869Z"
+        }
+      ],
+      "search_use_only": true,
+      "profile_value_import_allowed": false
+    }
+  ],
+  "official_internal_identity_edges": [
+    {
+      "official_name": "Leonardo De Oliveira",
+      "official_athlete_url": "https://www.ufc.com/athlete/leonardo-de-oliveira",
+      "official_source_entity_id": "athlete:leonardo-de-oliveira",
+      "official_node_id": 118341,
+      "official_uuid": "0456ec94-9179-47aa-8cec-5e8e902eea03",
+      "athlete_stat_uuid": "e567a99f-09dc-4435-9350-7c53c4bf191d",
+      "legacy_numeric_fightmetric_id": "3165",
+      "career_fights_fightid": "7490",
+      "relationship_url": "https://www.ufc.com/jsonapi/node/athlete/0456ec94-9179-47aa-8cec-5e8e902eea03/athlete_stat?resourceVersion=id%3A295816",
+      "athlete_stat_url": "https://www.ufc.com/jsonapi/athlete_stat/athlete_stat/e567a99f-09dc-4435-9350-7c53c4bf191d",
+      "queue_indices": [67, 68],
+      "requested_fields": ["reach", "stance"],
+      "capture_sha256s": [
+        "d860ff3c021b06f19c36369c4b6cba06efdcfffde86c0cc609a017c7bd3bedbc",
+        "98574b88989318da833f09f77cec6a45e643375d63f3658617a34eceb6094274"
+      ],
+      "decision_id": "R2",
+      "edge_recording_authorized": true,
+      "modern_ufcstats_binding_authorized": false,
+      "profile_value_import_allowed": false,
+      "non_mma_exclusion_authorized": false,
+      "roster_deletion_authorized": false
+    }
+  ],
+  "external_identity_bindings": [
+    {
+      "official_name": "Sean Mcinerney",
+      "official_athlete_url": "https://www.ufc.com/athlete/sean-mcinerney",
+      "official_source_entity_id": "athlete:sean-mcinerney",
+      "official_node_id": 131076,
+      "source": "wikipedia",
+      "source_entity_ids": [
+        "page-title:Sean_McInerney_(stunt_performer)",
+        "wikidata:Q138337036"
+      ],
+      "source_url": "https://en.wikipedia.org/wiki/Sean_McInerney_(stunt_performer)",
+      "identity_anchors": [
+        {
+          "kind": "dob",
+          "official_raw": "1986-10-21",
+          "external_raw": "October 21, 1986",
+          "normalized": "1986-10-21"
+        },
+        {
+          "kind": "nickname",
+          "official_raw": "Poopies",
+          "external_raw": "Poopies",
+          "normalized": "poopies"
+        },
+        {
+          "kind": "full_name",
+          "official_raw": "Sean Mcinerney",
+          "external_raw": "Sean Patrick McInerney",
+          "normalized": "sean mcinerney"
+        }
+      ],
+      "queue_indices": [99, 100, 101, 102],
+      "requested_fields": ["height", "reach", "stance", "weight"],
+      "capture_sha256s": [
+        "71f4dc4b9f7e3066cce65a409acc496a4cadfbb86f5ee5053139d59af7aea3cd",
+        "ef4ad6184a2aea8370ee6bf05e5343a93a0f15e784f9415d19344493a8d858be"
+      ],
+      "decision_id": "R3",
+      "edge_recording_authorized": true,
+      "modern_ufcstats_binding_authorized": false,
+      "profile_value_import_allowed": false,
+      "non_mma_exclusion_authorized": false,
+      "roster_deletion_authorized": false
+    }
+  ],
+  "approved_unavailable_source_bindings": [
+    {
+      "official_name": "Emilio Cuellar",
+      "official_athlete_url": "https://www.ufc.com/athlete/emilio-cuellar",
+      "official_source_entity_id": "athlete:emilio-cuellar",
+      "official_node_id": 118293,
+      "canonical_ufcstats_id": "3aeb69b4a13ff0e8",
+      "canonical_ufcstats_url": "http://ufcstats.com/fighter-details/3aeb69b4a13ff0e8",
+      "source": "sherdog",
+      "source_entity_id": "sherdog:275203",
+      "source_url": "https://www.sherdog.com/fighter/Emilio-Cuellar-275203",
+      "identity_anchors": [
+        {
+          "opponent": "Jorge Calvo",
+          "date": "2022-03-18",
+          "organization": "LUX 021",
+          "normalized": "2022-03-18|lux-021|jorge-calvo"
+        },
+        {
+          "opponent": "Luis Ivan Rodriguez",
+          "date": "2022-11-18",
+          "organization": "LUX 028",
+          "normalized": "2022-11-18|lux-028|luis-ivan-rodriguez"
+        }
+      ],
+      "corroborating_external_only_observations": [
+        {
+          "opponent": "Enrique Gonzalez",
+          "date": "2023-12-01",
+          "organization": "LUX 038",
+          "normalized": "2023-12-01|lux-038|enrique-gonzalez",
+          "identity_bridge_claimed": false
+        }
+      ],
+      "requested_field_results": [
+        {
+          "queue_index": 24,
+          "field": "reach",
+          "raw_value": "",
+          "normalized_value": null,
+          "decision": "keep_unresolved_blank",
+          "import_allowed": false
+        },
+        {
+          "queue_index": 25,
+          "field": "stance",
+          "raw_value": "",
+          "normalized_value": "",
+          "decision": "keep_unresolved_blank",
+          "import_allowed": false
+        }
+      ],
+      "nonrequested_values_withheld": [
+        {
+          "field": "dob",
+          "raw_value": "Dec 17, 1995",
+          "normalized_value": "1995-12-17",
+          "existing_state": "accepted_current_future_d004",
+          "disposition": "already_present_no_new_import",
+          "import_allowed": false
+        },
+        {
+          "field": "height",
+          "raw_value": "5'4\" / 162.56 cm",
+          "normalized_value": 64.0,
+          "existing_state": "accepted_current_future_d005",
+          "disposition": "owner_approved_corroboration_selected_via_fightdx",
+          "import_allowed": false
+        },
+        {
+          "field": "weight",
+          "raw_value": "125 lbs / 56.7 kg",
+          "normalized_value": 125.0,
+          "existing_state": "ufcstats_scraped_125_lb",
+          "disposition": "already_present_no_new_import",
+          "import_allowed": false
+        }
+      ],
+      "evidence": {
+        "retrieval_date_utc": "2026-08-30",
+        "exact_request_timestamp_available": false,
+        "raw_http_capture_available": false,
+        "search_result_transcript_sha256": "671c7b8463c75f0dedd7dfaf5a07aff4a07832ba0f7089ad68bdd46b9a0dd74f",
+        "route_ledger_sha256": "07d3535c554a7a25663b7db64ee1331f6e98051dd31d554baa0eaebe20cb2c83",
+        "official_html_capture_sha256": "583fdce41bf9cee3045816c3e3d08224408eb826147c3eacad105e34dd2d5e8d",
+        "ufcstats_capture_sha256": "c76969c1303f4199f6ea85d723982d5f331e6114362f886ec02c9b8d7267d45e",
+        "fightdx_capture_sha256": "5f74b3eaf78b3bbf33f303d8646d64ed72085c3032b4092f4fe6282da6f2c85f",
+        "tapology_capture_sha256": "9f0fecc028374481e4cf090ab087da99cca22a1d041f5193ce0b768cfa477f50",
+        "independent_validation_sha256": "90420cd9f6df7908106a76ef2091918f58d1de1b2dc997bcba9c25518f12626c"
+      },
+      "decision_id": "U30-EMILIO-SHERDOG",
+      "owner_approved_at_date": "2026-08-30",
+      "edge_recording_authorized": true,
+      "profile_value_import_allowed": false,
+      "non_mma_exclusion_authorized": false,
+      "roster_deletion_authorized": false,
+      "candidate_effect_authorized": false,
+      "runtime_consumption_authorized": false
+    },
+    {
+      "official_name": "Felix Klinkhammer",
+      "official_athlete_url": "https://www.ufc.com/athlete/felix-klinkhammer",
+      "official_source_entity_id": "athlete:felix-klinkhammer",
+      "canonical_ufcstats_id": "8276f28f1ad087de",
+      "canonical_ufcstats_url": "http://ufcstats.com/fighter-details/8276f28f1ad087de",
+      "known_source_entity_ids": ["tapology:120890", "sherdog:213423"],
+      "source": "espn",
+      "source_entity_id": "espn:5078427",
+      "source_url": "https://www.espn.com/mma/fighter/_/id/5078427/felix-klinkhammer",
+      "identity_anchors": [
+        {
+          "source_opponent": "Wissame Akhmouch",
+          "matched_opponent": "Wissem Akhmouch",
+          "date": "2022-04-16",
+          "organization": "Ares FC 5",
+          "normalized": "2022-04-16|ares-fc-5|wissem-akhmouch"
+        },
+        {
+          "source_opponent": "Karim Rabei",
+          "matched_opponent": "Karim Rabei",
+          "date": "2021-12-11",
+          "organization": "Ares FC 2",
+          "normalized": "2021-12-11|ares-fc-2|karim-rabei"
+        },
+        {
+          "source_opponent": "Anatoly Tarasenko",
+          "matched_opponent": "Anatoly Tarasenko",
+          "date": "2021-07-24",
+          "organization": "Oktagon MMA 26",
+          "normalized": "2021-07-24|oktagon-mma-26|anatoly-tarasenko"
+        },
+        {
+          "source_opponent": "Laid Zerhouni",
+          "matched_opponent": "Laid Zerhouni",
+          "date": "2019-09-28",
+          "organization": "Contenders Norwich 27",
+          "normalized": "2019-09-28|contenders-norwich-27|laid-zerhouni"
+        }
+      ],
+      "requested_field_results": [
+        {
+          "queue_index": 37,
+          "field": "reach",
+          "raw_value": "",
+          "normalized_value": null,
+          "decision": "keep_unresolved_blank",
+          "import_allowed": false
+        },
+        {
+          "queue_index": 38,
+          "field": "stance",
+          "raw_value": "-",
+          "normalized_value": "",
+          "decision": "keep_unresolved_blank",
+          "import_allowed": false
+        }
+      ],
+      "nonrequested_values_withheld": [
+        {
+          "field": "height",
+          "raw_value": "6'0\"",
+          "normalized_value_cm": 182.88,
+          "existing_state": "ufcstats_scraped_6ft0",
+          "disposition": "already_present_no_new_import",
+          "import_allowed": false
+        }
+      ],
+      "evidence": {
+        "retrieval_date_utc": "2026-08-30",
+        "exact_request_timestamp_available": false,
+        "http_status_available": false,
+        "raw_http_capture_available": false,
+        "capture_kind": "human_transcribed_web_search_tool_output",
+        "evidence_manifest_sha256": "21f293cb748a718e5cbeff10e4bb99c377ddf66a3c055f87db2558dd63b98622",
+        "search_result_transcript_sha256": "796e6004734629cb693de988d01272e1c21245f71968177e74d21e7fadab7812",
+        "route_ledger_sha256": "f3265cf519d18f06737657b38c2661b3496183a6540a0d48e933a0718d20d20d",
+        "finding_report_sha256": "31b98aa74270a2f05e7f14d81c1472a93ef1d87911d11c6d6141d8ac54e019ae",
+        "sherdog_capture_sha256": "345db09f9be27925cfd5bc6d5ba9d4967b750335c3b86216e3ff45748ff7269a"
+      },
+      "decision_id": "U30-FELIX-ESPN",
+      "owner_approved_at_date": "2026-08-30",
+      "edge_recording_authorized": true,
+      "profile_value_import_allowed": false,
+      "non_mma_exclusion_authorized": false,
+      "roster_deletion_authorized": false,
+      "candidate_effect_authorized": false,
+      "runtime_consumption_authorized": false
+    },
+    {
+      "official_name": "Feng Pengchao",
+      "official_athlete_url": "https://www.ufc.com/athlete/feng-pengchao",
+      "official_source_entity_id": "athlete:feng-pengchao",
+      "canonical_ufcstats_id": "86597694317e5e1b",
+      "canonical_ufcstats_url": "http://ufcstats.com/fighter-details/86597694317e5e1b",
+      "known_source_entity_ids": ["tapology:230675", "sherdog:336611"],
+      "source": "espn",
+      "source_entity_id": "espn:5073905",
+      "source_url": "https://www.espn.com/mma/fighter/_/id/5073905/feng-pengchao",
+      "source_profile_context": {
+        "name": "Feng Pengchao",
+        "nickname": "Winged Tiger",
+        "country": "China",
+        "division": "Featherweight",
+        "record": "0-2-0",
+        "record_disposition": "incomplete_not_imported_not_used_as_identity_anchor"
+      },
+      "identity_anchors": [
+        {
+          "source_opponent": "Yibugele",
+          "matched_opponent": "Yibugele",
+          "date": "2021-04-30",
+          "organization": "WLF: W.A.R.S. 52",
+          "result": "loss by TKO (Retirement), round 2 at 5:00",
+          "normalized": "2021-04-30|wlf-wars-52|yibugele"
+        },
+        {
+          "source_opponent": "A. Jinensibieke",
+          "matched_opponent": "Jinensibieke Asikeerbai",
+          "date": "2020-08-21",
+          "organization": "WLF: W.A.R.S. 46",
+          "result": "loss by unanimous decision, round 3 at 5:00",
+          "normalized": "2020-08-21|wlf-wars-46|jinensibieke-asikeerbai"
+        }
+      ],
+      "requested_field_results": [
+        {
+          "queue_index": 39,
+          "field": "stance",
+          "raw_value": "",
+          "normalized_value": "",
+          "decision": "keep_unresolved_blank",
+          "import_allowed": false
+        }
+      ],
+      "nonrequested_values_withheld": [
+        {
+          "field": "reach",
+          "raw_value": "68\"",
+          "normalized_value_inches": 68.0,
+          "normalized_value_cm": 172.72,
+          "existing_state": "accepted_current_future_d010",
+          "disposition": "rounding_compatible_noncarrier_corroboration_keep_tapology_d010",
+          "existing_carrier": {
+            "cell_id": "D010",
+            "source": "tapology",
+            "source_entity_id": "tapology:230675",
+            "source_url": "https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger",
+            "raw_value": "68.1\" (173cm)",
+            "normalized_value_cm": 172.974
+          },
+          "exact_delta_inches": 0.1,
+          "exact_delta_cm": 0.254,
+          "genuine_conflict": false,
+          "import_allowed": false,
+          "replacement_allowed": false
+        }
+      ],
+      "evidence": {
+        "retrieval_date_utc": "2026-08-30",
+        "exact_request_timestamp_available": false,
+        "http_status_available": false,
+        "raw_http_capture_available": false,
+        "capture_kind": "human_transcribed_web_search_tool_output",
+        "evidence_manifest_sha256": "a138b4a58101ac4ba8c288183f921edffbc53fc521c5f4cbcf9810da3a67983b",
+        "search_result_transcript_sha256": "c86595ddcc4c6dc95d17dd17916f209779aa111f7e8d05e24d720ceefef17725",
+        "route_ledger_sha256": "d9d5479ecb88720ca449dfd0d6595fe230b48016955086fd8d3e91cf6cf0e9ed",
+        "finding_report_sha256": "1caaae1c2c5f84e662dcf2b27b193ea2a828ffccebc44e01f6dc8c3f47094cd3",
+        "sherdog_capture_sha256": "a3c30be972072a1835d7c04efc82f1c1124cbc484c57f6da374c0e7553e16c45",
+        "tapology_capture_sha256": "97566ecd9ddd2337104c61cc6cf882c57a36956024585bd0565f84c99739c8a7",
+        "owner_decision_sha256": "da4c2f43d9929de4689188b64ef3f91cb0553686074299db51c1e7592a918a4f"
+      },
+      "decision_id": "U30-FENG-ESPN",
+      "owner_approved_at_date": "2026-08-30",
+      "edge_recording_authorized": true,
+      "profile_value_import_allowed": false,
+      "non_mma_exclusion_authorized": false,
+      "roster_deletion_authorized": false,
+      "candidate_effect_authorized": false,
+      "runtime_consumption_authorized": false,
+      "historical_backfill_allowed": false
+    },
+    {
+      "official_name": "Jose Augusto",
+      "official_athlete_url": "https://www.ufc.com/athlete/jose-augusto",
+      "official_source_entity_id": "athlete:jose-augusto",
+      "canonical_ufcstats_id": "4d3b08ab127c7585",
+      "canonical_ufcstats_url": "http://ufcstats.com/fighter-details/4d3b08ab127c7585",
+      "known_source_entity_ids": ["espn:4684239", "sherdog:111573", "tapology:133511", "pfl:jose-augusto"],
+      "source": "fightdx",
+      "source_entity_id": "fightdx:jose-augusto-azevedo",
+      "source_url": "https://fightdx.com/person/jose-augusto-azevedo",
+      "prior_url_only_context": {
+        "url_was_previously_visible_as_opponent_link": true,
+        "prior_capture_path": "C:/Temp/u118r1/sources/batch-06/raw/simon-biyong-fightdx-initial--565532344f185256.html",
+        "prior_capture_sha256": "565532344f1852569066aaac1366cc9525ead87cfdad58b9d061dc72707333bf",
+        "prior_capture_retrieved_at_utc": "2026-08-29T17:21:54.701965Z",
+        "jose_profile_previously_fetched": false,
+        "jose_to_fightdx_binding_previously_registered": false,
+        "jose_field_evidence_previously_used": false,
+        "disposition": "url_known_only_as_opponent_link_new_jose_to_fightdx_edge"
+      },
+      "source_profile_context": {
+        "name": "Jose Augusto Azevedo",
+        "record": "7-3-1-0",
+        "record_disposition": "stale_search_index_context_not_imported_not_used_for_roster_status"
+      },
+      "identity_anchors": [
+        {
+          "source_opponent": "Jonathan Wilson",
+          "matched_opponent": "Jonathan Wilson",
+          "date": "2021-04-02",
+          "organization": "Bellator 255",
+          "result": "win by arm-triangle submission, round 1 at 4:58",
+          "normalized": "2021-04-02|bellator-255|jonathan-wilson"
+        },
+        {
+          "source_opponent": "Anthony Johnson",
+          "matched_opponent": "Anthony Johnson",
+          "date": "2021-05-07",
+          "organization": "Bellator 258",
+          "result": "loss by punch knockout, round 2 at 1:30",
+          "normalized": "2021-05-07|bellator-258|anthony-johnson"
+        },
+        {
+          "source_opponent": "Alex Polizzi",
+          "matched_opponent": "Alex Polizzi",
+          "date": "2022-03-12",
+          "organization": "Bellator 276",
+          "result": "loss by rear-naked-choke submission, round 3 at 0:49",
+          "normalized": "2022-03-12|bellator-276|alex-polizzi"
+        },
+        {
+          "source_opponent": "Simon Biyong",
+          "matched_opponent": "Simon Biyong",
+          "date": "2023-05-12",
+          "organization": "Bellator 296",
+          "result": "win by unanimous decision, round 3 at 5:00",
+          "normalized": "2023-05-12|bellator-296|simon-biyong"
+        },
+        {
+          "source_opponent": "Richard Jacobi",
+          "matched_opponent": "Richard Jacobi",
+          "date": "2023-11-03",
+          "organization": "LFA 171",
+          "result": "win by decision, round 3 at 5:00",
+          "normalized": "2023-11-03|lfa-171|richard-jacobi"
+        },
+        {
+          "source_opponent": "Edivan Santos",
+          "matched_opponent": "Edivan Mineiro Santos",
+          "date": "2024-11-22",
+          "organization": "LFA 197",
+          "result": "win by punch TKO, round 2 at 3:20",
+          "normalized": "2024-11-22|lfa-197|edivan-mineiro-santos"
+        }
+      ],
+      "requested_field_results": [
+        {
+          "queue_index": 56,
+          "field": "stance",
+          "raw_value": "",
+          "normalized_value": "",
+          "decision": "keep_unresolved_blank",
+          "import_allowed": false
+        }
+      ],
+      "nonrequested_values_withheld": [
+        {
+          "cell_id": "D017",
+          "field": "reach",
+          "source": "espn",
+          "source_entity_id": "espn:4684239",
+          "raw_value": "73\"",
+          "normalized_value_inches": 73.0,
+          "normalized_value_cm": 185.42,
+          "existing_state": "accepted_current_future_d017",
+          "disposition": "existing_carrier_unchanged_no_new_import",
+          "import_allowed": false,
+          "replacement_allowed": false
+        }
+      ],
+      "evidence": {
+        "retrieval_date_utc": "2026-08-30",
+        "exact_request_timestamp_available": false,
+        "http_status_available": false,
+        "raw_http_capture_available": false,
+        "capture_kind": "human_transcribed_web_search_tool_output",
+        "evidence_manifest_sha256": "347e6e37b2311df584b9d43328e777502ece6b096079a0acffaa8c187de03656",
+        "search_result_transcript_sha256": "4cafa8b18ffdd61228e554288218f0edf8d3545d5febf09b660be015ad637efc",
+        "route_ledger_sha256": "5a0fc7f0f7a8cf11281bbe3c2d0bb830675d7c5a898ec3cc6ce5e83160506e25",
+        "finding_report_sha256": "38673701ee5603400b21e1f88bbd86676247a4c4cff00de4cae7962032fbaffc",
+        "owner_review_sha256": "3a33526f3f8a03c98c2604d91accdb38b31fcb2a7c7ee792792923f665076fe7",
+        "independent_audit_sha256": "9809a0449a58702f55ed2346eb6052d7234b1e22bae3feef37a11ad4bbc30c19",
+        "sherdog_capture_sha256": "cfe0b04ba02e0797911dfb40837a681adcf11b40b295da784d36433bf3478273",
+        "simon_fightdx_capture_sha256": "565532344f1852569066aaac1366cc9525ead87cfdad58b9d061dc72707333bf",
+        "owner_decision_sha256": "2ec36cdeeed038950e8189571738c372ec0dcbdb2f5f437882d547777350375e"
+      },
+      "decision_id": "U30-JOSE-FIGHTDX",
+      "owner_approved_at_date": "2026-08-30",
+      "edge_recording_authorized": true,
+      "profile_value_import_allowed": false,
+      "non_mma_exclusion_authorized": false,
+      "roster_deletion_authorized": false,
+      "candidate_effect_authorized": false,
+      "runtime_consumption_authorized": false,
+      "historical_backfill_allowed": false,
+      "roster_status_use_allowed": false
+    }
+  ],
+  "unbound_candidate_holds": [
+    {
+      "official_name": "Fabio Agu",
+      "official_athlete_url": "https://www.ufc.com/athlete/fabio-agu",
+      "official_source_entity_id": "athlete:fabio-agu",
+      "candidate_source_entities": [
+        {
+          "source": "ufcstats",
+          "source_entity_id": "ufcstats:501821d7fb7b95c1",
+          "source_url": "http://ufcstats.com/fighter-details/501821d7fb7b95c1"
+        },
+        {
+          "source": "espn",
+          "source_entity_id": "espn:4334743",
+          "source_url": "https://www.espn.com/mma/fighter/_/id/4334743/fabio-aguiar"
+        },
+        {
+          "source": "tapology",
+          "source_entity_id": "tapology:103527",
+          "source_url": "https://www.tapology.com/fightcenter/fighters/103527-fabio-aguiar"
+        },
+        {
+          "source": "sherdog",
+          "source_entity_id": "sherdog:132429",
+          "source_url": "https://www.sherdog.com/fighter/Fabio-Aguiar-132429"
+        }
+      ],
+      "queue_indices": [32, 33, 34, 35],
+      "requested_fields": ["height", "reach", "stance", "weight"],
+      "identity_evidence": "Exact DOB match is a search lead, but no approved source maps official legacy FightMetric 3555 or the truncated official surname to a modern UFCStats hex entity or exact official bout.",
+      "missing_bridge": "Direct legacy FightMetric 3555 to modern UFCStats-hex crosswalk or exact official bout/date/opponent/organization bridge.",
+      "conditional_values_withheld": ["height:72 in", "reach:72 in", "listed_weight:185 lb"],
+      "evidence_sha256s": [
+        "b892817de28fbc8fa95f5674a4e7a70536d317b3d6e418d18e0531b996342623",
+        "7b5b40db69c4a9d23c92ae14af0bdbe63092041a50b8447332ea29b8adaeb148",
+        "60269faca2b5f26beb78fdd4213516cdc09adc702f0a2ebd6e29841512044011",
+        "d7472265bb80dade3021ab5b415468f9bf983926d039136b3a6239de6dc85aba",
+        "4a40807ccafe50455a0dba52e4598b5991d10b27d01016ff1aa975541e6fcbac"
+      ],
+      "decision_id": "R1",
+      "automatic_binding_allowed": false,
+      "profile_value_import_allowed": false,
+      "permanent_exclusion_authorized": false,
+      "roster_deletion_authorized": false
+    },
+    {
+      "official_name": "Michael Bonnette",
+      "official_athlete_url": "https://www.ufc.com/athlete/michael-bonnette",
+      "official_source_entity_id": "athlete:michael-bonnette",
+      "candidate_source_entities": [
+        {
+          "source": "tapology",
+          "source_entity_id": "tapology:22573",
+          "source_url": "https://www.tapology.com/fightcenter/fighters/22573-mike-bonnette-no-mercy"
+        }
+      ],
+      "queue_indices": [82, 83, 84],
+      "requested_fields": ["height", "reach", "stance"],
+      "identity_evidence": "Candidate reports Christopher Debow at Power Slap 3 on 2023-07-07, but the official entity does not state that bout.",
+      "missing_bridge": "Explicit official Christopher Debow / 2023-07-07 / Power Slap 3 bridge or matching independent DOB.",
+      "conditional_values_withheld": ["event_weight:170 lb"],
+      "evidence_sha256s": [
+        "f3a3130c8ea1674ba5758e824dace0a3925dff89b207cb7144a7af672925431b",
+        "fc7dcbec72f94ad62de872dc1ddf4b6ea687803a8ea18108ca2ef945d00f45f6"
+      ],
+      "decision_id": "R4",
+      "automatic_binding_allowed": false,
+      "profile_value_import_allowed": false,
+      "permanent_exclusion_authorized": false,
+      "roster_deletion_authorized": false
+    },
+    {
+      "official_name": "Martin Mishtaku",
+      "official_athlete_url": "https://www.ufc.com/athlete/martin-mishtaku",
+      "official_source_entity_id": "athlete:martin-mishtaku",
+      "candidate_source_entities": [
+        {
+          "source": "tapology",
+          "source_entity_id": "tapology:427291",
+          "source_url": "https://www.tapology.com/fightcenter/fighters/427291-martin-mishtaku-ag-booth"
+        }
+      ],
+      "queue_indices": [75, 76, 77],
+      "requested_fields": ["height", "reach", "stance"],
+      "identity_evidence": "Candidate reports TJ Thomas at Power Slap 1 on 2023-03-11, but the official entity does not state that bout or expose a matching external DOB.",
+      "missing_bridge": "Explicit official TJ Thomas / 2023-03-11 / Power Slap 1 bridge or matching independent DOB.",
+      "conditional_values_withheld": ["event_weight:265 lb"],
+      "evidence_sha256s": [
+        "169b90749c4e75a386343b2ef37a454fbb477da3254f263eece4e9ef32c78468",
+        "c006bf6f563875137b4615f86575f36221719df0cbba2e3cb78aad0153411d5b"
+      ],
+      "decision_id": "R4",
+      "automatic_binding_allowed": false,
+      "profile_value_import_allowed": false,
+      "permanent_exclusion_authorized": false,
+      "roster_deletion_authorized": false
+    },
+    {
+      "official_name": "Timothy Thomas",
+      "official_athlete_url": "https://www.ufc.com/athlete/timothy-thomas",
+      "official_source_entity_id": "athlete:timothy-thomas",
+      "candidate_source_entities": [
+        {
+          "source": "tapology",
+          "source_entity_id": "tapology:7574",
+          "source_url": "https://www.tapology.com/fightcenter/fighters/7574-tj-thomas-the-gorilla"
+        }
+      ],
+      "queue_indices": [107, 108, 109],
+      "requested_fields": ["height", "reach", "stance"],
+      "identity_evidence": "Candidate shares Tim/TJ and The Gorilla and reports Power Slap bouts, but exposes no DOB matching official 1989-01-01 and the official entity states no exact bout.",
+      "missing_bridge": "Exact official opponent/date/organization bridge or matching independent DOB.",
+      "conditional_values_withheld": ["height:70 in"],
+      "evidence_sha256s": [
+        "d57fdedff6e4ffe5eeb6af415f36c9ead1e354c7b960a61fe2d91b10cfacc7ea",
+        "c006bf6f563875137b4615f86575f36221719df0cbba2e3cb78aad0153411d5b"
+      ],
+      "decision_id": "R4",
+      "automatic_binding_allowed": false,
+      "profile_value_import_allowed": false,
+      "permanent_exclusion_authorized": false,
+      "roster_deletion_authorized": false
+    },
+    {
+      "official_name": "Vineesh Subrahmanyan",
+      "official_athlete_url": "https://www.ufc.com/athlete/vineesh-subrahmanyan",
+      "official_source_entity_id": "athlete:vineesh-subrahmanyan",
+      "candidate_source_entities": [
+        {
+          "source": "tapology",
+          "source_entity_id": "tapology:485663",
+          "source_url": "https://www.tapology.com/fightcenter/fighters/485663-vineesh-subrahmanyan-vini"
+        }
+      ],
+      "queue_indices": [110, 111, 112, 113, 114],
+      "requested_fields": ["age", "height", "reach", "stance", "weight"],
+      "identity_evidence": "Candidate reports Cody Belisle at Power Slap 4 on 2023-08-09, but the official entity has no DOB or exact bout bridge.",
+      "missing_bridge": "Explicit official Cody Belisle / 2023-08-09 / Power Slap 4 bridge or equivalent independent anchor.",
+      "conditional_values_withheld": ["event_weight:198 lb"],
+      "evidence_sha256s": [
+        "b7b98ec80dd7438aa9172d845f298a01101675c99d0868dcb30ac32c02120a93",
+        "05067433b5ce77c06f78438c27dd7bfbe205e2c9dc2b393a712e6005bddefb2b"
+      ],
+      "decision_id": "R4",
+      "automatic_binding_allowed": false,
+      "profile_value_import_allowed": false,
+      "permanent_exclusion_authorized": false,
+      "roster_deletion_authorized": false
+    }
+  ],
+  "preserved_source_identity_rejections": [
+    {
+      "official_name": "Jordan Jackson",
+      "official_athlete_url": "https://www.ufc.com/athlete/jordan-jackson",
+      "official_source_entity_id": "athlete:jordan-jackson",
+      "source": "tapology",
+      "source_entity_id": "tapology:21470",
+      "source_url": "https://www.tapology.com/fightcenter/fighters/21470-jordan-jackson",
+      "official_dob": "1999-08-06",
+      "candidate_dob": "1984-02-14",
+      "rejection_basis": "exact_dob_mismatch",
+      "decision_id": "R6"
+    },
+    {
+      "official_name": "Jordan Jackson",
+      "official_athlete_url": "https://www.ufc.com/athlete/jordan-jackson",
+      "official_source_entity_id": "athlete:jordan-jackson",
+      "source": "sherdog",
+      "source_entity_id": "sherdog:400887",
+      "source_url": "https://www.sherdog.com/fighter/Jordan-Jackson-400887",
+      "official_dob": "1999-08-06",
+      "candidate_dob": "",
+      "rejection_basis": "preserved_owner_approved_different_person",
+      "decision_id": "R6"
+    },
+    {
+      "official_name": "Leonardo De Oliveira",
+      "official_athlete_url": "https://www.ufc.com/athlete/leonardo-de-oliveira",
+      "official_source_entity_id": "athlete:leonardo-de-oliveira",
+      "source": "tapology",
+      "source_entity_id": "tapology:67533",
+      "source_url": "https://www.tapology.com/fightcenter/fighters/67533-leonardo-sorriso",
+      "official_dob": "1992-04-23",
+      "candidate_dob": "1998-10-19",
+      "rejection_basis": "exact_dob_mismatch",
+      "decision_id": "R6"
+    },
+    {
+      "official_name": "Leonardo De Oliveira",
+      "official_athlete_url": "https://www.ufc.com/athlete/leonardo-de-oliveira",
+      "official_source_entity_id": "athlete:leonardo-de-oliveira",
+      "source": "sherdog",
+      "source_entity_id": "sherdog:84049",
+      "source_url": "https://www.sherdog.com/fighter/Leonardo-de-Oliveira-Barbosa-84049",
+      "official_dob": "1992-04-23",
+      "candidate_dob": "1991-04-21",
+      "rejection_basis": "exact_dob_mismatch",
+      "decision_id": "R6"
+    }
+  ],
+  "permanent_search_false_positive_rejections": [
+    {
+      "official_name": "Jose Augusto",
+      "official_full_name": "Jose Augusto Azevedo Barros",
+      "official_athlete_url": "https://www.ufc.com/athlete/jose-augusto",
+      "official_source_entity_id": "athlete:jose-augusto",
+      "canonical_ufcstats_id": "4d3b08ab127c7585",
+      "canonical_ufcstats_url": "http://ufcstats.com/fighter-details/4d3b08ab127c7585",
+      "canonical_sherdog_source_entity_id": "sherdog:111573",
+      "canonical_dob": "1992-03-28",
+      "canonical_nickname": "Gugu",
+      "route_id": "U21",
+      "search_query": "site:wikipedia.org \"Jose Augusto\" stance MMA",
+      "source": "wikipedia",
+      "result_page_title": "Joao Zaiden",
+      "result_page_url": "https://pt.wikipedia.org/wiki/Jo%C3%A3o_Zaiden",
+      "result_page_source_entity_id": "wikipedia:page-title:Joao_Zaiden",
+      "mentioned_person_name": "Jose Augusto Lima",
+      "mentioned_person_source_entity_id": "",
+      "raw_context": {
+        "narrative_date": "2014-09-13",
+        "table_date": "",
+        "event": "Colina Fight",
+        "opponent": "Joao Zaiden",
+        "result_from_page_owner_perspective": "win_by_triangle_submission",
+        "round": 1,
+        "location": "Colina"
+      },
+      "identity_comparison": {
+        "full_name_mismatch": "Jose Augusto Lima versus Jose Augusto Azevedo Barros",
+        "stable_id_bridge_found": false,
+        "matching_bout_bridge_found": false,
+        "joao_zaiden_or_colina_fight_present_in_canonical_record": false,
+        "canonical_2014_bouts": [
+          "2014-02-15|Bokum Fight Championship 2|Jhon Lourenco",
+          "2014-04-26|Bokum Fight Championship 3|Jackson Goncalves"
+        ]
+      },
+      "requested_field_result": {
+        "queue_index": 56,
+        "field": "stance",
+        "raw_value": "",
+        "normalized_value": "",
+        "decision": "keep_unresolved_blank"
+      },
+      "evidence": {
+        "retrieval_date_utc": "2026-08-30",
+        "capture_kind": "human_transcribed_web_search_tool_output",
+        "raw_http_capture_available": false,
+        "http_status_available": false,
+        "exact_request_timestamp_available": false,
+        "evidence_manifest_sha256": "3e4bb1f046b2d2375822cecf9c5640c7bd589a5076fab0f9cfaafa12e6b7435d",
+        "search_result_transcript_sha256": "2c87285246d750f0522c8de243041a85e613213afe7169f013aebcb548f81745",
+        "route_ledger_sha256": "03ffdc8d4ad20842b0032dd2b0e385ecaccafae1ec7063d151b9f2b8a15fe071",
+        "failure_ledger_sha256": "94616fc56fca25f36eced56382b8180a780a4232946be8787c4e087e88ee6b37",
+        "owner_decision_sha256": "65d5e47f9bde82bfb64907c9d5d848101c7136b1493a120a51c85ccae1d0096e",
+        "independent_u21_audit_sha256": "add509635a8bc9bde176261835f43a8371a130bb302124161c4d46970adffeae",
+        "prior_route_identity_audit_sha256": "35ebb51bddae465fdb9ab60ae9ac51d24bd5b45bb08ad804f748c339ddeb11ad",
+        "remaining_route_identity_audit_sha256": "d76969aa73fe880a7df6982c18e86207b6077f68c3ba3c1e313f03ac4b0a21a0",
+        "registry_candidate_identity_audit_sha256": "9b6680568ee0d9387ae24ede76c653f11abce3eaf46e7ff631d2d1979f95c245",
+        "finding_report_sha256": "bba4c6697026689f3b9e4bad63b63e4f690dd1133344eaefb66f5bc340ed1a97",
+        "canonical_sherdog_capture_sha256": "cfe0b04ba02e0797911dfb40837a681adcf11b40b295da784d36433bf3478273"
+      },
+      "decision_id": "U30-JOSE-WIKIPEDIA-NAMESAKE",
+      "owner_approved_at_date": "2026-08-30",
+      "permanent_search_false_positive_rejection": true,
+      "different_person": true,
+      "bind_result_page_to_canonical_fighter": false,
+      "bind_mentioned_person_to_canonical_fighter": false,
+      "profile_value_import_allowed": false,
+      "candidate_effect_authorized": false,
+      "runtime_consumption_authorized": false,
+      "historical_backfill_allowed": false,
+      "roster_status_use_allowed": false,
+      "roster_deletion_authorized": false,
+      "non_mma_exclusion_authorized": false,
+      "publication_authorized": false
+    }
+  ],
+  "non_mma_policy": {
+    "permanent_exclusion_selection_key": "official_source_entity_id",
+    "exact_permanent_exclusions": [
+      {
+        "official_name": "Cory Corbin",
+        "official_athlete_url": "https://www.ufc.com/athlete/cory-corbin",
+        "official_source_entity_id": "athlete:cory-corbin"
+      },
+      {
+        "official_name": "Dallas Marron",
+        "official_athlete_url": "https://www.ufc.com/athlete/dallas-marron",
+        "official_source_entity_id": "athlete:dallas-marron"
+      },
+      {
+        "official_name": "Frank Holland",
+        "official_athlete_url": "https://www.ufc.com/athlete/frank-holland",
+        "official_source_entity_id": "athlete:frank-holland"
+      }
+    ],
+    "unbound_power_slap_candidate_entity_ids": [
+      "tapology:22573",
+      "tapology:427291",
+      "tapology:7574",
+      "tapology:485663"
+    ],
+    "broad_name_blacklist_allowed": false,
+    "unbound_candidate_permanent_exclusion_allowed": false,
+    "missing_information_authorizes_deletion": false
+  }
+}

@@ -144,10 +144,28 @@ def _normalized_resource(value: object) -> str:
 
 def build_stable_id_resolver(
     roster_path: Path = OFFICIAL_ROSTER_PATH,
+    *,
+    accepted_membership: Mapping[str, object] | None = None,
 ) -> Callable[[str, str], object]:
     """Resolve only reviewed roster athlete-URL bindings, without name guessing."""
     by_athlete_url: dict[str, str] = {}
-    if Path(roster_path).exists():
+    if accepted_membership is not None:
+        from src.data.provider_membership import load_accepted_rosterwatch_membership
+
+        roster = load_accepted_rosterwatch_membership(
+            Path(str(accepted_membership["path"])),
+            expected_sha256=str(accepted_membership["sha256"]),
+            expected_generation=str(accepted_membership["generation"]),
+        )
+        for row in roster.to_dict("records"):
+            athlete_key = _normalized_resource(row.get("official_athlete_url") or row.get("athlete_url"))
+            fighter_id = normalize_ufcstats_id(row.get("fighter_id") or row.get("ufcstats_id") or row.get("ufcstats_url")) or ""
+            if athlete_key and fighter_id:
+                existing = by_athlete_url.get(athlete_key)
+                if existing and existing != fighter_id:
+                    raise ValueError("accepted_membership_athlete_binding_conflict")
+                by_athlete_url[athlete_key] = fighter_id
+    elif Path(roster_path).exists():
         try:
             roster = pd.read_csv(roster_path, dtype=object)
             for row in roster.to_dict("records"):
@@ -178,11 +196,14 @@ def _default_context_enricher(rows: list[dict]) -> list[dict]:
     return enrich_upcoming_fight_contexts(rows)
 
 
-def _default_pre_ufc_runner(queue_path: Path, summary_path: Path) -> dict[str, object]:
+def _default_pre_ufc_runner(
+    queue_path: Path, summary_path: Path, *, retained_inputs: Mapping[str, object] | None = None,
+    accepted_membership: Mapping[str, object] | None = None,
+    provider_transport=None,
+) -> dict[str, object]:
     from scripts.build_pre_ufc_career_supplement import main as pre_ufc_main
 
-    exit_code = pre_ufc_main(
-        [
+    argv = [
             "--resume",
             "--retry-zero-rows",
             "--candidate-file",
@@ -190,7 +211,20 @@ def _default_pre_ufc_runner(queue_path: Path, summary_path: Path) -> dict[str, o
             "--summary-json",
             str(summary_path),
         ]
-    )
+    for key in ("retained_observations", "profile_integrity_decisions", "provider_history_root", "available_before"):
+        if retained_inputs is not None and retained_inputs.get(key) is not None:
+            argv.extend(["--" + key.replace("_", "-"), str(retained_inputs[key])])
+    if retained_inputs is not None and retained_inputs.get("ordinary_provider_sources") is not None:
+        if accepted_membership is None:
+            raise ValueError("ordinary_sunday_provider_collection_requires_original_accepted_membership")
+        from src.data.method_observation_history import _json_bytes, _write_immutable
+        import hashlib
+        body = _json_bytes(dict(accepted_membership))
+        membership_path = summary_path.parent / "provider-membership-inputs" / f"{hashlib.sha256(body).hexdigest()}.json"
+        _write_immutable(membership_path, body)
+        argv.extend(["--accepted-membership", str(membership_path), "--ordinary-provider-sources",
+                     *retained_inputs["ordinary_provider_sources"]])
+    exit_code = pre_ufc_main(argv, **({"provider_transport": provider_transport} if provider_transport is not None else {}))
     payload: dict[str, object] = {}
     if summary_path.exists():
         loaded = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -272,11 +306,19 @@ def _run_unlocked(
     context_enricher: Callable[[list[dict]], list[dict]] | None = None,
     fighter_id_resolver: Callable[[str, str], object] | None = None,
     pre_ufc_runner: Callable[[Path, Path], Mapping[str, object]] | None = None,
+    retained_discovery: Mapping[str, object] | None = None,
+    retained_pre_ufc_inputs: Mapping[str, object] | None = None,
+    accepted_membership: Mapping[str, object] | None = None,
+    provider_transport=None,
 ) -> dict[str, object]:
     if mode != "daily":
         raise ValueError(f"unsupported_sunday_collection_mode:{mode}")
     if execution_contract != "sunday_pre_ufc":
         raise ValueError(f"unsupported_sunday_execution_contract:{execution_contract}")
+    if retained_discovery is not None and accepted_membership is None:
+        raise ValueError("retained_sunday_collection_requires_accepted_membership")
+    if (retained_pre_ufc_inputs is not None or accepted_membership is not None) and retained_discovery is None:
+        raise ValueError("retained_sunday_discovery_input_missing")
 
     root = Path(storage_root)
     started = utc_text(now)
@@ -284,18 +326,25 @@ def _run_unlocked(
     discovery: dict[str, object] | None = None
 
     try:
-        provider = discovery_provider or _default_discovery_provider
-        snapshot = dict(provider(force_refresh=True))
+        if retained_discovery is not None:
+            snapshot = dict(retained_discovery)
+            enricher = context_enricher or (lambda rows: rows)
+        else:
+            provider = discovery_provider or _default_discovery_provider
+            snapshot = dict(provider(force_refresh=True))
+            enricher = context_enricher or _default_context_enricher
         cards, schedule_issues = enrich_event_cards_with_schedule(
             list(snapshot.get("event_cards") or []),
-            context_enricher=context_enricher or _default_context_enricher,
+            context_enricher=enricher,
         )
         discovery = persist_upcoming_discovery(
             event_cards=cards,
             scan_complete=bool(snapshot.get("scan_complete")),
             storage_root=root,
             observed_at=snapshot.get("collected_at_utc") or started,
-            fighter_id_resolver=fighter_id_resolver or build_stable_id_resolver(roster_path),
+            fighter_id_resolver=fighter_id_resolver or build_stable_id_resolver(
+                roster_path, accepted_membership=accepted_membership,
+            ),
             source_responses=list(snapshot.get("source_responses") or []),
             require_raw_evidence=True,
         )
@@ -325,6 +374,7 @@ def _run_unlocked(
                 roster_path=Path(roster_path),
                 storage_root=root,
                 observed_at=started,
+                **({"accepted_membership": accepted_membership} if accepted_membership is not None else {}),
             )
             stages.append(
                 _stage(
@@ -339,11 +389,11 @@ def _run_unlocked(
     if candidates is not None:
         try:
             summary_path = root / "latest-pre-ufc-run-summary.json"
-            payload = dict(
-                (pre_ufc_runner or _default_pre_ufc_runner)(
-                    Path(str(candidates["queue_path"])), summary_path
-                )
-            )
+            queue_path = Path(str(candidates["queue_path"]))
+            payload = dict(pre_ufc_runner(queue_path, summary_path) if pre_ufc_runner else
+                           _default_pre_ufc_runner(queue_path, summary_path, retained_inputs=retained_pre_ufc_inputs,
+                                                   accepted_membership=accepted_membership,
+                                                   provider_transport=provider_transport))
             status = str(payload.get("status") or "failed")
             exit_code = int(payload.get("exit_code", 0) or 0)
             retryable = exit_code == 2 and status == "incomplete"

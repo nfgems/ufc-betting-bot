@@ -142,6 +142,8 @@ def _row_has_explicit_untrusted_identity_evidence(
 def _row_has_hard_current_verification_block(
     row: pd.Series | dict[str, object],
 ) -> bool:
+    if _optional_cell_text(row.get("active_roster_status_reason")) == "rosterwatch_authoritative_current":
+        return not _coverage_enabled(row.get("coverage_eligible"))
     return (
         _coverage_enabled(row.get(_HOSTED_CURRENT_VERIFICATION_BLOCK_COLUMN))
         or _row_has_explicit_inactive_evidence(row)
@@ -189,6 +191,9 @@ def _verified_candidate_row_count(candidate_df: pd.DataFrame) -> int:
             _row_has_hard_current_verification_block(row)
             or not _coverage_enabled(row.get("coverage_eligible"))
         ):
+            continue
+        if _optional_cell_text(row.get("active_roster_status_reason")) == "rosterwatch_authoritative_current":
+            verified_rows += 1
             continue
         status_key = _normalized_status_key(row.get("profile_status"))
         if status_key in {"active", "current"} or _coverage_enabled(
@@ -252,142 +257,28 @@ def _build_bounded_active_roster_candidates(
     *,
     active_roster_path: Path,
     temporary_output_path: Path,
+    accepted_membership: dict[str, object] | None = None,
 ) -> tuple[Path, dict[str, object]]:
-    """Intersect a fast live listing with previously verified active statuses.
+    """Nominate only an explicitly pinned accepted Roster Watch generation."""
+    from src.data.provider_membership import load_accepted_rosterwatch_membership
+    from src.data.io_utils import write_csv_atomically
 
-    UFC's server-side active-status filter currently returns thousands of old
-    profiles. Fetching every profile takes longer than the hosted job budget.
-    This scan makes live presence current while reusing only positive cached
-    status evidence; unmatched rows stay quarantined until the normal full
-    roster refresh verifies them.
-    """
-    cached, cache_state = _load_candidate_status_cache(active_roster_path)
-    live = sync_official_active_roster(
-        output_path=temporary_output_path,
-        fetch_profile_details=False,
-        resolve_ufcstats=False,
-        # The active-status endpoint currently returns the full 3,000+ profile
-        # archive. A Power Slap API lookup per row defeats this bounded hosted
-        # path. Unmatched rows remain quarantined, while cached negative
-        # evidence is copied below before any current-card override is allowed.
-        classify_combat_sport=False,
-        identity_audit_path=None,
+    if accepted_membership is None:
+        raise ValueError("An explicit accepted Roster Watch membership pin is required")
+    if Path(accepted_membership["path"]).resolve() != Path(active_roster_path).resolve():
+        raise ValueError("Accepted membership path differs from the nominated roster")
+    frame = load_accepted_rosterwatch_membership(
+        active_roster_path, expected_sha256=accepted_membership["sha256"],
+        expected_generation=accepted_membership["generation"],
     )
-
-    cached_by_key: dict[str, list[pd.Series]] = {}
-    for _, cached_row in cached.iterrows():
-        for key in _roster_identity_keys(cached_row):
-            cached_by_key.setdefault(key, []).append(cached_row)
-
-    hydrated = live.copy()
-    hydrated[_HOSTED_ORIGINAL_PROFILE_STATUS_COLUMN] = (
-        hydrated["profile_status"]
-        if "profile_status" in hydrated.columns
-        else ""
-    )
-    hydrated[_HOSTED_CURRENT_VERIFICATION_BLOCK_COLUMN] = False
-    matched_rows = 0
-    copied_columns = (
-        "profile_status",
-        "profile_name",
-        "alternate_slug_names",
-        "ufcstats_url",
-        "combat_sport",
-        "combat_sport_reason",
-        "combat_sport_profile_url",
-        "coverage_eligible",
-        "official_url_identity_valid",
-        "official_url_identity_status",
-        "official_url_identity_reason",
-        "active_roster_status_reason",
-    )
-    for index, live_row in hydrated.iterrows():
-        if _row_has_hard_current_verification_block(live_row):
-            hydrated.at[
-                index,
-                _HOSTED_CURRENT_VERIFICATION_BLOCK_COLUMN,
-            ] = True
-            continue
-        candidates: list[pd.Series] = []
-        seen_candidate_ids: set[int] = set()
-        for key in _roster_identity_keys(live_row):
-            for cached_row in cached_by_key.get(key, []):
-                candidate_id = id(cached_row)
-                if candidate_id in seen_candidate_ids:
-                    continue
-                seen_candidate_ids.add(candidate_id)
-                if _roster_rows_same_identity(live_row, cached_row):
-                    candidates.append(cached_row)
-        hard_blocked_candidates = [
-            candidate
-            for candidate in candidates
-            if _row_has_hard_current_verification_block(candidate)
-        ]
-        if hard_blocked_candidates:
-            # A fast listing scan cannot safely disprove cached inactive,
-            # Power Slap, or negative identity evidence. Carry that evidence
-            # into the temporary candidate file so the current-card verifier
-            # remains fail-closed.
-            cached_row = hard_blocked_candidates[0]
-            for column in copied_columns:
-                if column in cached_row.index:
-                    value = cached_row.get(column)
-                    if column == "official_url_identity_valid":
-                        explicit = _explicit_boolean(value)
-                        value = explicit if explicit is not None else value
-                    hydrated.at[index, column] = value
-            hydrated.at[
-                index,
-                _HOSTED_CURRENT_VERIFICATION_BLOCK_COLUMN,
-            ] = True
-            hydrated.at[index, "coverage_eligible"] = False
-            current_reason = (
-                hydrated.at[index, "active_roster_status_reason"]
-                if "active_roster_status_reason" in hydrated.columns
-                else ""
-            )
-            if not _optional_cell_text(current_reason):
-                hydrated.at[index, "active_roster_status_reason"] = (
-                    "hard_block_preserved_from_cached_roster"
-                )
-            continue
-        if len(candidates) != 1:
-            continue
-        cached_row = candidates[0]
-        if (
-            not _coverage_enabled(cached_row.get("coverage_eligible"))
-            or _normalized_status_key(cached_row.get("profile_status"))
-            not in {"active", "current"}
-        ):
-            continue
-        for column in copied_columns:
-            if column in cached_row.index:
-                hydrated.at[index, column] = cached_row.get(column)
-        hydrated.at[index, "active_roster_status_reason"] = (
-            "verified_from_cached_active_roster"
-        )
-        matched_rows += 1
-
-    preserved_hard_block_reasons = {
-        index: _optional_cell_text(row.get("active_roster_status_reason"))
-        for index, row in hydrated.iterrows()
-        if _coverage_enabled(
-            row.get(_HOSTED_CURRENT_VERIFICATION_BLOCK_COLUMN)
-        )
-        and _optional_cell_text(row.get("active_roster_status_reason"))
-    }
-    hydrated = _apply_profile_status_eligibility(hydrated)
-    for index, reason in preserved_hard_block_reasons.items():
-        hydrated.at[index, "active_roster_status_reason"] = reason
-    hydrated.to_csv(temporary_output_path, index=False)
-    verified_rows = _verified_candidate_row_count(hydrated)
+    write_csv_atomically(frame, temporary_output_path)
     return temporary_output_path, {
-        "action": "synced_fast_verified_cache_join",
-        "rows": int(len(hydrated)),
-        "verified_candidate_rows": verified_rows,
-        "matched_cached_status_rows": matched_rows,
-        "unmatched_quarantined_rows": int(len(hydrated) - matched_rows),
-        "cached_status_state": cache_state,
+        "action": "accepted_rosterwatch_membership",
+        "rows": len(frame),
+        "verified_candidate_rows": int(frame["coverage_eligible"].sum()),
+        "pending_identity_rows": int((~frame["coverage_eligible"]).sum()),
+        "accepted_membership_sha256": accepted_membership["sha256"],
+        "accepted_membership_generation": accepted_membership["generation"],
         "output_path": str(temporary_output_path),
     }
 
@@ -680,6 +571,9 @@ def _prioritize_current_card_candidates(
     current_verified_rows = 0
     hollow_quarantined_names: list[str] = []
     for index, row in candidate_df.iterrows():
+        if _optional_cell_text(row.get("active_roster_status_reason")) == "rosterwatch_authoritative_current":
+            # Cards may adjust priority, never grant or revoke membership/identity.
+            continue
         if _row_has_hard_current_verification_block(row):
             candidate_df.at[index, "coverage_eligible"] = False
             continue
@@ -753,6 +647,90 @@ def _prioritize_current_card_candidates(
 
 
 def run_hosted_refresh(args: argparse.Namespace) -> dict[str, object]:
+    if getattr(args, "retained_provider_observations", None) is not None:
+        # Offline replay is an explicit processing input, not a failed-fetch
+        # fallback. Validate membership before considering any source operation.
+        accepted = getattr(args, "accepted_membership", None)
+        if accepted is None:
+            raise ValueError("Retained provider processing requires accepted membership")
+        with TemporaryDirectory(prefix="retained_tapology_candidates_") as tmp_dir:
+            _, roster_summary = _build_bounded_active_roster_candidates(
+                active_roster_path=Path(accepted["path"]),
+                temporary_output_path=Path(tmp_dir) / "candidates.csv",
+                accepted_membership=accepted,
+            )
+            summary = run_profile_supplement_refresh(
+                scraped_fighters_path=args.scraped_fighters_path,
+                output_path=args.output, sources=["tapology"], limit=args.limit,
+                accepted_membership=accepted,
+                retained_provider_observations=args.retained_provider_observations,
+                available_before=args.available_before,
+                observation_history_root=args.observation_history_root,
+                profile_integrity_decisions_path=args.profile_integrity_decisions_path,
+            )
+        refused = bool(summary["processing_error_count"] or summary["identity_rejection_count"])
+        return {"action": "processing_refused" if refused else "refreshed_retained",
+                "active_roster": roster_summary, "profile_supplement_refresh": summary,
+                "source_requests": 0, "progress_state": "processing_refused" if refused else "complete"}
+    if not getattr(args, "probe_only", False):
+        # Collection uses only accepted members and their independently reviewed
+        # bound response routes. A separate access probe cannot authorize it.
+        accepted = getattr(args, "accepted_membership", None)
+        required = (accepted, getattr(args, "available_before", None),
+                    getattr(args, "observation_history_root", None),
+                    getattr(args, "profile_integrity_decisions_path", None))
+        if args.limit is not None and int(args.limit) <= 0:
+            return {"action": "configuration_error", "progress_state": "configuration_error",
+                    "source_requests": 0, "source_health_ok": False, "error": "--limit must be a positive integer"}
+        if any(value is None for value in required):
+            return {"action": "processing_refused", "progress_state": "processing_refused",
+                    "source_requests": 0, "source_health_ok": False,
+                    "error": "Ordinary provider collection requires original accepted membership, reviewed decisions, cutoff, evidence destination, and a positive limit"}
+        with TemporaryDirectory(prefix="ordinary_tapology_candidates_") as tmp_dir:
+            nominated, roster_summary = _build_bounded_active_roster_candidates(
+                active_roster_path=Path(accepted["path"]), accepted_membership=accepted,
+                temporary_output_path=Path(tmp_dir) / "accepted-candidates.csv",
+            )
+            # Optional supplied card names are priority hints only. No card
+            # acquisition is hidden inside ordinary provider collection.
+            names = getattr(args, "current_card_names", ()) or ()
+            keys = {normalize_cross_source_name(name) for name in names}
+            nominated_rows = pd.read_csv(nominated, dtype=str, keep_default_na=False)
+            priorities = {str(row["stable_ufcstats_id"]): 100 for row in nominated_rows.to_dict("records")
+                          if str(row.get("stable_ufcstats_id", "")) and any(normalize_cross_source_name(row.get(column, "")) in keys
+                                 for column in _PRIORITY_NAME_COLUMNS)}
+            summary = run_profile_supplement_refresh(
+                scraped_fighters_path=args.scraped_fighters_path,
+                output_path=args.output, sources=["tapology"], limit=args.limit,
+                accepted_membership=accepted, candidate_priorities=priorities,
+                available_before=args.available_before,
+                observation_history_root=args.observation_history_root,
+                profile_integrity_decisions_path=args.profile_integrity_decisions_path,
+                provider_transport=getattr(args, "provider_transport", None),
+                provider_response_format=getattr(args, "provider_response_format", "html"),
+                candidate_offset=max(int(getattr(args, "candidate_offset", 0) or 0), 0),
+                candidate_rotation_index=(None if getattr(args, "candidate_offset", None) is not None
+                                          else _hosted_candidate_rotation_index()),
+            )
+        refused = bool(summary.get("processing_error_count") or summary.get("identity_rejection_count"))
+        source_failed = bool(summary.get("source_error_count"))
+        empty = int(summary.get("candidate_universe_rows") or 0) <= 0
+        recoverable = int(summary.get("recoverable_candidate_rows") or 0)
+        zero_attempts = recoverable > 0 and int(summary.get("attempted_rows") or 0) <= 0
+        configuration_error = empty or zero_attempts
+        progress = ("processing_refused" if refused else "configuration_error" if configuration_error
+                    else "source_error" if source_failed else "recovered" if summary.get("recovered_rows")
+                    else "no_fields_available" if recoverable else "no_recoverable_candidates")
+        result = {"action": "processing_refused" if refused else "configuration_error" if configuration_error else "refreshed",
+                "active_roster": roster_summary, "profile_supplement_refresh": summary,
+                "candidate_priority": {"accepted_priority_ids": sorted(priorities)},
+                "source_health_ok": not (refused or source_failed or configuration_error), "progress_state": progress}
+        if source_failed:
+            result["failure_kind"] = _profile_refresh_failure_kind(summary)
+        if configuration_error:
+            result["error"] = ("Tapology candidate source produced zero eligible fighter rows; refusing to report a healthy no-op"
+                               if empty else "Tapology candidate source had recoverable rows but selected zero attempts; refusing to report a healthy no-op")
+        return result
     if args.limit is not None and int(args.limit) <= 0:
         return {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -778,115 +756,6 @@ def run_hosted_refresh(args: argparse.Namespace) -> dict[str, object]:
             "tapology_probe": probe,
         }
 
-    roster_summary: dict[str, object] = {"action": "skip", "reason": "disabled"}
-    priority_summary: dict[str, object] = {"action": "not_attempted"}
-    candidate_source_csv = args.active_roster_path
-    with TemporaryDirectory(prefix="tapology_active_roster_candidates_") as tmp_dir:
-        if args.sync_active_roster:
-            roster_output_path, roster_summary = _build_bounded_active_roster_candidates(
-                active_roster_path=args.active_roster_path,
-                temporary_output_path=(
-                    Path(tmp_dir) / "ufc_active_roster_tapology_candidates.csv"
-                ),
-            )
-            candidate_source_csv = roster_output_path
-
-        candidate_source_csv, priority_summary = _prioritize_current_card_candidates(
-            candidate_source_csv,
-            output_path=Path(tmp_dir) / "ufc_profile_candidates_with_card_priority.csv",
-        )
-        if args.sync_active_roster:
-            if "verified_candidate_rows" in priority_summary:
-                roster_summary["verified_candidate_rows"] = int(
-                    priority_summary.get("verified_candidate_rows") or 0
-                )
-                roster_summary["current_card_verified_rows"] = int(
-                    priority_summary.get("current_card_verified_rows") or 0
-                )
-                roster_summary["remaining_quarantined_rows"] = max(
-                    int(roster_summary.get("rows") or 0)
-                    - int(roster_summary.get("verified_candidate_rows") or 0),
-                    0,
-                )
-            if int(roster_summary.get("verified_candidate_rows") or 0) <= 0:
-                return {
-                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                    "action": "candidate_roster_unavailable",
-                    "tapology_probe": probe,
-                    "active_roster": roster_summary,
-                    "candidate_priority": priority_summary,
-                    "progress_state": "configuration_error",
-                    "source_health_ok": False,
-                    "error": (
-                        "Fast roster sync produced no candidates with a verified "
-                        "cached active status or unambiguous current-card evidence"
-                    ),
-                }
-
-        explicit_candidate_offset = args.candidate_offset
-        refresh_summary = run_profile_supplement_refresh(
-            scraped_fighters_path=args.scraped_fighters_path,
-            candidate_source_csv=candidate_source_csv,
-            output_path=args.output,
-            sources=["tapology"],
-            limit=args.limit,
-            candidate_offset=max(int(explicit_candidate_offset or 0), 0),
-            candidate_rotation_index=(
-                None
-                if explicit_candidate_offset is not None
-                else _hosted_candidate_rotation_index()
-            ),
-        )
-    recovered_rows = int(refresh_summary.get("recovered_rows") or 0)
-    source_error_count = int(refresh_summary.get("source_error_count") or 0)
-    candidate_universe_rows = int(
-        refresh_summary.get("candidate_universe_rows") or 0
-    )
-    recoverable_rows = int(refresh_summary.get("recoverable_candidate_rows") or 0)
-    attempted_rows = int(refresh_summary.get("attempted_rows") or 0)
-    empty_candidate_universe = candidate_universe_rows <= 0
-    zero_attempt_configuration_error = recoverable_rows > 0 and attempted_rows <= 0
-    configuration_error = (
-        empty_candidate_universe or zero_attempt_configuration_error
-    )
-    if configuration_error:
-        progress_state = "configuration_error"
-    elif source_error_count:
-        progress_state = "source_error"
-    elif recovered_rows:
-        progress_state = "recovered"
-    elif recoverable_rows > 0:
-        progress_state = "no_fields_available"
-    else:
-        progress_state = "no_recoverable_candidates"
-    source_health_ok = (
-        not empty_candidate_universe
-        and not zero_attempt_configuration_error
-        and not (args.require_source_health and source_error_count > 0)
-    )
-    result = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "action": "configuration_error" if configuration_error else "refreshed",
-        "tapology_probe": probe,
-        "active_roster": roster_summary,
-        "candidate_priority": priority_summary,
-        "profile_supplement_refresh": refresh_summary,
-        "progress_state": progress_state,
-        "source_health_ok": source_health_ok,
-    }
-    if source_error_count:
-        result["failure_kind"] = _profile_refresh_failure_kind(refresh_summary)
-    if empty_candidate_universe:
-        result["error"] = (
-            "Tapology candidate source produced zero eligible fighter rows; "
-            "refusing to report a healthy no-op"
-        )
-    elif zero_attempt_configuration_error:
-        result["error"] = (
-            "Tapology candidate source had recoverable rows but selected zero "
-            "attempts; refusing to report a healthy no-op"
-        )
-    return result
 
 
 def parse_args() -> argparse.Namespace:
@@ -919,14 +788,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Deprecated compatibility flag retained for callers; hosted candidate "
-            "sync is always bounded to a live listing plus verified cached statuses."
+            "nomination requires a pinned accepted Roster Watch generation."
         ),
     )
     parser.add_argument("--probe-only", action="store_true")
     parser.add_argument("--probe-name", default=DEFAULT_PROBE_NAME)
     parser.add_argument("--probe-url", default=DEFAULT_PROBE_URL)
     parser.add_argument("--json", action="store_true")
-    return parser.parse_args()
+    parser.add_argument("--retained-provider-observations", type=Path)
+    parser.add_argument("--accepted-membership", type=Path)
+    parser.add_argument("--available-before")
+    parser.add_argument("--observation-history-root", type=Path)
+    parser.add_argument("--profile-integrity-decisions-path", type=Path)
+    args = parser.parse_args()
+    for key in ("retained_provider_observations", "accepted_membership"):
+        path = getattr(args, key)
+        if path is not None:
+            setattr(args, key, json.loads(path.read_text(encoding="utf-8")))
+    return args
 
 
 def main() -> int:
@@ -937,6 +816,8 @@ def main() -> int:
         print(json.dumps(summary, indent=2, default=_json_default))
     else:
         print(summary)
+    if summary.get("progress_state") == "processing_refused":
+        return 4
     if summary.get("action") == "access_probe_failed":
         logger.error(
             "Tapology hosted access probe failed (%s)",

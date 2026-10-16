@@ -1,0 +1,194 @@
+{
+  "schema": 1,
+  "kind": "reviewed_ufc_rankings_identity_v1",
+  "source": "ufc.com",
+  "rankings_url": "https://www.ufc.com/rankings",
+  "parser_revision": "ufc_rankings_explicit_athlete_rank_v1",
+  "availability_policy": "rankings_original_receipt_strict_prefight_v1",
+  "source_precedence": "official_ufc_only_v1",
+  "collection_id": "v9-rankings-context-7b48bf98522548ad877a29b7ed24689a",
+  "fighters": [
+    {
+      "fighter_id": "e1248941344b3288",
+      "athlete_url": "https://www.ufc.com/athlete/alexander-volkanovski",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "featherweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "76e2870ffafbe38f",
+      "athlete_url": "https://www.ufc.com/athlete/movsar-evloev",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "featherweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "a67d071163962af8",
+      "athlete_url": "https://www.ufc.com/athlete/michael-page",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "middleweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "b3cb9dfccff3be76",
+      "athlete_url": "https://www.ufc.com/athlete/salahdine-parnasse",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "lightweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "d3f5d33d61cd00c9",
+      "athlete_url": "https://www.ufc.com/athlete/norma-dumont",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "women's bantamweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "women"
+        }
+      ]
+    },
+    {
+      "fighter_id": "06e4245d16fc5315",
+      "athlete_url": "https://www.ufc.com/athlete/ailin-perez",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "women's bantamweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "women"
+        }
+      ]
+    },
+    {
+      "fighter_id": "9911989cf48b195d",
+      "athlete_url": "https://www.ufc.com/athlete/fabia-sintes",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "flyweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "d84033157714ee94",
+      "athlete_url": "https://www.ufc.com/athlete/cristian-perez-gonzalez",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "lightweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "2bbdbc925f4323ac",
+      "athlete_url": "https://www.ufc.com/athlete/mehemmedeli-osmanli",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "bantamweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "71758ab9f337716c",
+      "athlete_url": "https://www.ufc.com/athlete/melissa-amaya",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "women's strawweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "women"
+        }
+      ]
+    },
+    {
+      "fighter_id": "22e3458965d5d08a",
+      "athlete_url": "https://www.ufc.com/athlete/michael-aljarouj",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "flyweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "130b65b53f30f33c",
+      "athlete_url": "https://www.ufc.com/athlete/ilimbek-akylbek-uulu",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "bantamweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "men"
+        }
+      ]
+    },
+    {
+      "fighter_id": "3138df4d117ebc12",
+      "athlete_url": "https://www.ufc.com/athlete/delphine-benouaich",
+      "scopes": [
+        {
+          "ranking_type": "division",
+          "division": "women's strawweight"
+        },
+        {
+          "ranking_type": "pfp",
+          "division": "women"
+        }
+      ]
+    }
+  ]
+}

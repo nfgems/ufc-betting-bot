@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "created_utc": "2026-09-20T23:48:52.740986+00:00",
+  "reviewer": "saved_seven, independent of root correction receipt and final writer",
+  "pass": true,
+  "fighter_name": "Javad Mahjoub",
+  "selected_id": "e9f9add1481fc11c",
+  "current_dob": "1992-05-26",
+  "dob_authority": "Owner correction, corroborated by exact retained embedded UFCStats profile",
+  "source_identity_excerpt": "Javad Mahjoub Record: 5-0-0 Height: -- Weight: -- Reach: -- STANCE: DOB: May 26, 1992 Career statistics: SLpM: 0.00 Str. Acc.: 0% SApM: 0.00 Str. Def: 0% TD Avg.: 0.00 TD Acc.: 0% TD Def.: 0% Sub. Avg.: 0.0 SLpM - Significant Stri",
+  "historical_official_dob": "1991-05-26",
+  "historical_official_discrepancy_preserved": true,
+  "selected_profile_absence_checks": [
+    {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+      "total_rows": 4555,
+      "matching_profile_rows": 0
+    },
+    {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\supplemental_profiles\\ufc_fighters_profile_supplement.csv",
+      "total_rows": 188,
+      "matching_profile_rows": 0
+    }
+  ],
+  "current_runtime_eligible": false,
+  "current_runtime_limit": "Selected primary and supplemental prediction profile remains absent; DOB correction does not supply a runtime profile or authorize data changes.",
+  "frozen_source_and_test_scope": "Frozen source02, all77 fixture, independent historical reviews and successful runtime02 predate the owner correction. Preserve their exact bytes and document the correction separately.",
+  "admission": "Admit current documentation attribution of May 26, 1992 to owner correction and retained UFCStats support. Preserve official 1991 source bytes and historical discrepancy; do not claim the correction updated or revalidated selected runtime data.",
+  "input_pins": [
+    {
+      "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\evidence\\owner-javad-dob-correction01.json",
+      "bytes": 1126,
+      "sha256": "de5587fc4077bba4be37cc85ae28d1f666f2c17366fcfe1346e3c7ae2accb89c"
+    },
+    {
+      "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\javad-embedded-conflict01.json",
+      "bytes": 4043,
+      "sha256": "cc1c9664be4ef25f095ad56f5fcaee8cb311ceb0dbf37684aea6b57f68f49dfc"
+    },
+    {
+      "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\saved-other\\javad-embedded-42323b152ad9.html",
+      "bytes": 12491,
+      "sha256": "42323b152ad9ee556f3caab1e3ec38074031b75917af117e1708df11baf4f5ad"
+    },
+    {
+      "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-023\\response.html",
+      "bytes": 76009,
+      "sha256": "d22027e7a539fc5c66807fc891cf620e946481d4147dcea19b36a74ea0ccb15d"
+    },
+    {
+      "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\review\\embedded-registry-independent01.json",
+      "bytes": 58932,
+      "sha256": "2a07fc8a8f2593b7ffbd1668431137c7f6ee82c996692473f126b8c6f9e67033"
+    },
+    {
+      "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\review\\javad-identity-only01.json",
+      "bytes": 9112,
+      "sha256": "5fa5d1c2555e645a652ea315e531463a31736e7cd61f2ac6fc0e9279a2c1e3bf"
+    },
+    {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+      "bytes": 673721,
+      "sha256": "9d054fb8c03209baedeb44d9e69ef577adef90d81cff38b0e10488c67c00b2eb"
+    },
+    {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\supplemental_profiles\\ufc_fighters_profile_supplement.csv",
+      "bytes": 26516,
+      "sha256": "acb0dea6194394dfc77741ffb2874a98491c599adef60b02ba7ba4736b54093b"
+    },
+    {
+      "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\frozen-source02\\tests\\fixtures\\runtime_fighter_bindings\\remaining77-outcomes.json",
+      "bytes": 82191,
+      "sha256": "8b0c08b13736e862664ea2ee146f5a8dc97eb35c59ee344517abd3562bb15006"
+    },
+    {
+      "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\linux-tests02\\results\\result.json",
+      "bytes": 413,
+      "sha256": "08ba9741614bd5945be3cbd1a1d60ff67c71d99d98031b56f97d4047336c833c"
+    }
+  ],
+  "candidate_execution": false,
+  "network_or_hosted_actions": 0
+}

@@ -46,6 +46,10 @@ from src.data.name_utils import (  # noqa: E402
 from src.data.io_utils import write_csv_atomically, write_json_atomically  # noqa: E402
 from src.data.pre_ufc_scraper import (  # noqa: E402
     OUTPUT_COLUMNS,
+    PROVENANCE_COLUMNS,
+    ProviderObservationError,
+    _bound_history_mask,
+    _dedupe_bound_history,
     _dedupe_supplement_rows,
     scrape_fighter_amateur_fights,
     scrape_fighter_pre_ufc_fights,
@@ -64,7 +68,7 @@ DEFAULT_FIGHTS_PATH = PROCESSED_DATA_DIR / "fights_cleaned.csv"
 MAX_RETRY_ATTEMPTS = 3
 _STABLE_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 _RETRYABLE_STATUSES = frozenset({"zero_rows", "transient_failure"})
-_EXHAUSTED_STATUSES = frozenset({"exhausted_zero_rows", "exhausted_transient_failure"})
+_EXHAUSTED_STATUSES = frozenset({"exhausted_zero_rows", "exhausted_transient_failure", "reference_write_refused"})
 
 
 def _find_best_features_csv() -> Path:
@@ -177,7 +181,7 @@ def identify_ufc_fighters(
     for column in ("fighter_a_id", "fighter_b_id"):
         if column in header:
             columns.append(column)
-    df = pd.read_csv(fights_path, usecols=columns)
+    df = pd.read_csv(fights_path, usecols=columns, dtype={"fighter_a_id": object, "fighter_b_id": object})
     logger.info("Loaded %d fights from %s", len(df), fights_path)
 
     appearances: list[dict[str, Any]] = []
@@ -264,13 +268,18 @@ def _dedupe_rows(rows: list[dict], *, dedupe_mirrors: bool = False) -> pd.DataFr
     if dedupe_mirrors:
         df = _dedupe_supplement_rows(df)
 
+    bound_mask = _bound_history_mask(df)
+    bound = _dedupe_bound_history(df.loc[bound_mask])
+    df = df.loc[~bound_mask].copy()
+
     df["_fighter_a_key"] = df["fighter_a"].map(normalize_person_name)
     df["_fighter_b_key"] = df["fighter_b"].map(normalize_person_name)
     df["_org_present"] = df["organization"].fillna("").astype(str).str.len()
     df = df.sort_values(["_org_present"], ascending=False)
     df = df.drop_duplicates(subset=["event_date", "_fighter_a_key", "_fighter_b_key"], keep="first")
     df = df.drop(columns=["_fighter_a_key", "_fighter_b_key", "_org_present"], errors="ignore")
-    return df.reindex(columns=OUTPUT_COLUMNS)
+    df = pd.concat([df, bound], ignore_index=True)
+    return df.reindex(columns=[*OUTPUT_COLUMNS, *(["provider_reference_schema"] if "provider_reference_schema" in df else [])])
 
 
 def _save_rows(
@@ -294,7 +303,7 @@ def _load_existing_rows(
     if not resolved_output_path.exists():
         return []
 
-    existing_df = pd.read_csv(resolved_output_path)
+    existing_df = pd.read_csv(resolved_output_path, dtype={column: object for column in PROVENANCE_COLUMNS})
     if replace_fighters:
         existing_df = existing_df[~existing_df["fighter_a"].isin(replace_fighters)]
     return existing_df.to_dict("records")
@@ -344,6 +353,9 @@ def load_candidate_file(path: Path) -> dict[str, dict[str, Any]]:
     errors: list[str] = []
     ids_by_name: dict[str, set[str]] = {}
     for index, record in enumerate(records, start=1):
+        membership_flag = _clean_text(record.get("current_member")).casefold()
+        if membership_flag in {"false", "0"}:
+            continue
         fighter_id = _normalize_stable_id(record.get("fighter_id"))
         fighter_name = _clean_text(record.get("fighter_name"))
         first_ufc_date = _normalize_boundary(record.get("first_ufc_date"))
@@ -397,7 +409,7 @@ def load_candidate_file(path: Path) -> dict[str, dict[str, Any]]:
             )
     if errors:
         raise CandidateFileError("; ".join(errors))
-    if not candidates:
+    if not candidates and not records:
         raise CandidateFileError("candidate file contains no valid candidates")
     return dict(sorted(candidates.items()))
 
@@ -539,6 +551,60 @@ def _state_should_scrape(state: dict[str, Any]) -> bool:
     return True
 
 
+def _record_processing_refusal(checkpoint: dict, key: str, candidate: dict, error: Exception) -> None:
+    """A retained-input processing refusal never spends a source retry."""
+    state, _ = _prepare_identity_state(checkpoint, key, candidate, allow_legacy_migration=False)
+    state.update({
+        "status": "processing_refused", "last_error": str(error),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "processing_refusals": int(state.get("processing_refusals") or 0) + 1,
+    })
+
+
+def _retained_scrape_inputs(args: argparse.Namespace) -> tuple[dict, dict]:
+    """Load explicit response references and a separate reviewed binding registry."""
+    ordinary = getattr(args, "ordinary_provider_sources", None)
+    if args.retained_observations is None and ordinary is None:
+        return {}, {}
+    if args.profile_integrity_decisions is None or args.provider_history_root is None or args.available_before is None:
+        raise ProviderObservationError("pre_ufc_retained_registry_history_and_cutoff_required")
+    if ordinary is not None and args.retained_observations is not None:
+        raise ProviderObservationError("pre_ufc_ordinary_and_retained_inputs_conflict")
+    payload = (json.loads(args.retained_observations.read_text(encoding="utf-8"))
+               if args.retained_observations is not None else {})
+    if not isinstance(payload, dict):
+        raise ProviderObservationError("pre_ufc_retained_manifest_must_map_stable_ids")
+    for identity, descriptors in payload.items():
+        if _normalize_stable_id(identity) != identity or not isinstance(descriptors, list) or not descriptors:
+            raise ProviderObservationError("pre_ufc_retained_manifest_invalid")
+    from src.data.profile_integrity import load_profile_decisions, verified_binding_keys
+    from scripts.build_profile_supplement_from_external_profiles import (
+        _reviewed_binding_name_keys, _verified_binding_metadata,
+    )
+    from src.data.provider_consumer_references import _pin
+    decision_input_pins = [_pin(args.profile_integrity_decisions)] if ordinary is not None else []
+    decisions = load_profile_decisions(args.profile_integrity_decisions)
+    bindings = verified_binding_keys(decisions)
+    common = {
+        "verified_bindings": bindings,
+        "verified_binding_metadata": _verified_binding_metadata(decisions, bindings),
+        "verified_binding_name_keys": _reviewed_binding_name_keys(decisions, bindings),
+        "history_root": args.provider_history_root,
+        "available_before": args.available_before,
+    }
+    if ordinary is not None:
+        if args.accepted_membership is None:
+            raise ProviderObservationError("pre_ufc_ordinary_accepted_membership_required")
+        accepted = json.loads(args.accepted_membership.read_text(encoding="utf-8"))
+        from src.data.provider_membership import load_accepted_rosterwatch_membership
+        load_accepted_rosterwatch_membership(Path(accepted["path"]),
+            expected_sha256=accepted["sha256"], expected_generation=accepted["generation"])
+        common.update(ordinary_provider_sources=ordinary, accepted_membership=accepted,
+                      decision_paths=[args.profile_integrity_decisions], provider_capture_cache={}, provider_capture_log={},
+                      expected_decision_pins=decision_input_pins)
+    return payload, common
+
+
 def _record_identity_attempt(
     checkpoint: dict,
     key: str,
@@ -579,6 +645,8 @@ def _record_identity_attempt(
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     )
+    if error is not None and hasattr(error, "captures"):
+        state["source_failure_captures"] = list(error.captures)
     checkpoint.setdefault("identity_state", {})[key] = state
     if error is None:
         checkpoint.setdefault("processed", {})[candidate["fighter_name"]] = int(row_count or 0)
@@ -615,7 +683,7 @@ def _finalize_output(
     existing_fighter_counts: dict[str, int] = {}
     existing_df = pd.DataFrame()
     if output_path.exists():
-        existing_df = pd.read_csv(output_path)
+        existing_df = pd.read_csv(output_path, dtype={column: object for column in PROVENANCE_COLUMNS})
         existing_row_count = len(existing_df)
         if "fighter_a" in existing_df.columns:
             existing_fighter_counts = existing_df.groupby("fighter_a").size().to_dict()
@@ -713,7 +781,7 @@ def _write_summary_json(path: Path | None, payload: dict[str, Any]) -> None:
     write_json_atomically(payload, path)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, provider_transport=None) -> int:
     parser = argparse.ArgumentParser(
         description="Build pro and amateur pre-UFC career supplements from Sherdog and Tapology"
     )
@@ -733,6 +801,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Explicit stable-ID candidate queue (.csv or .json)")
     parser.add_argument("--summary-json", type=Path, default=None,
                         help="Write a machine-readable orchestration summary")
+    parser.add_argument("--retained-observations", type=Path, help="JSON mapping stable IDs to retained response descriptors")
+    parser.add_argument("--profile-integrity-decisions", type=Path, help="Independent reviewed binding decisions")
+    parser.add_argument("--provider-history-root", type=Path, help="Explicit immutable retained provider history root")
+    parser.add_argument("--available-before", help="Original aware UTC eligibility cutoff; never inferred from processing time")
+    parser.add_argument("--ordinary-provider-sources", nargs="+", choices=("tapology", "sherdog"))
+    parser.add_argument("--accepted-membership", type=Path, help="Original independently pinned accepted membership manifest")
     args = parser.parse_args(argv)
 
     if args.candidate_file is not None and args.fighters:
@@ -791,6 +865,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    try:
+        retained_by_fighter, retained_common = _retained_scrape_inputs(args)
+        if args.ordinary_provider_sources is not None:
+            retained_common["provider_transport"] = provider_transport
+            from src.data.provider_consumer_references import verify_provider_consumer_artifact
+            for path in (OUTPUT_PATH, CHECKPOINT_PATH, AMATEUR_OUTPUT_PATH, AMATEUR_CHECKPOINT_PATH):
+                if path.exists():
+                    verify_provider_consumer_artifact(path)
+    except (OSError, ValueError) as exc:
+        _write_summary_json(args.summary_json, {
+            "status": "failed", "warning_codes": ["pre_ufc_retained_input_refused"],
+            "error": str(exc), "source_retries": 0,
+        })
+        return 2
+
     def _new_checkpoint() -> dict[str, Any]:
         return {"schema_version": 2, "processed": {}, "failed": [], "identity_state": {}}
 
@@ -800,6 +889,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.resume
         else _new_checkpoint()
     )
+    if args.ordinary_provider_sources is not None:
+        checkpoint["provider_reference_schema"] = 1
+        amateur_checkpoint["provider_reference_schema"] = 1
 
     explicit_fighters: list[str] = []
     if args.fighters:
@@ -921,6 +1013,7 @@ def main(argv: list[str] | None = None) -> int:
     # current, uncommitted batch.
     committed_checkpoint = copy.deepcopy(checkpoint)
     committed_amateur_checkpoint = copy.deepcopy(amateur_checkpoint)
+    attempted_identity_keys: set[str] = set()
 
     def _commit_current_outputs() -> tuple[dict[str, object] | None, dict[str, object] | None, str | None]:
         nonlocal checkpoint
@@ -929,22 +1022,34 @@ def main(argv: list[str] | None = None) -> int:
         nonlocal committed_amateur_checkpoint
 
         try:
+            pro_prior = _snapshot_track_references(OUTPUT_PATH, CHECKPOINT_PATH)
             pro_result = _finalize_output(
                 pro_rows,
                 output_path=OUTPUT_PATH,
                 label="pre-UFC",
                 allow_fighter_row_reduction=pro_successful_replacements,
             )
-        except RuntimeError:
+        except (RuntimeError, OSError, ValueError) as exc:
+            if args.ordinary_provider_sources is not None:
+                _preserve_reference_failure(checkpoint, CHECKPOINT_PATH, exc)
+                _preserve_reference_failure(amateur_checkpoint, AMATEUR_CHECKPOINT_PATH, exc)
+                return None, None, "pre-UFC output or references"
             checkpoint = copy.deepcopy(committed_checkpoint)
             amateur_checkpoint = copy.deepcopy(committed_amateur_checkpoint)
             save_checkpoint(checkpoint, CHECKPOINT_PATH)
             save_checkpoint(amateur_checkpoint, AMATEUR_CHECKPOINT_PATH)
             return None, None, "pre-UFC"
+        try:
+            _record_track_references(OUTPUT_PATH, CHECKPOINT_PATH, checkpoint, pro_rows, pro_prior)
+        except (RuntimeError, OSError, ValueError) as exc:
+            _preserve_reference_failure(checkpoint, CHECKPOINT_PATH, exc)
+            _preserve_reference_failure(amateur_checkpoint, AMATEUR_CHECKPOINT_PATH, exc)
+            return pro_result, None, "pre-UFC references"
         save_checkpoint(checkpoint, CHECKPOINT_PATH)
         committed_checkpoint = copy.deepcopy(checkpoint)
 
         try:
+            amateur_prior = _snapshot_track_references(AMATEUR_OUTPUT_PATH, AMATEUR_CHECKPOINT_PATH)
             amateur_result = _finalize_output(
                 amateur_rows,
                 output_path=AMATEUR_OUTPUT_PATH,
@@ -952,13 +1057,67 @@ def main(argv: list[str] | None = None) -> int:
                 dedupe_mirrors=True,
                 allow_fighter_row_reduction=amateur_successful_replacements,
             )
-        except RuntimeError:
+        except (RuntimeError, OSError, ValueError) as exc:
+            if args.ordinary_provider_sources is not None:
+                _preserve_reference_failure(amateur_checkpoint, AMATEUR_CHECKPOINT_PATH, exc)
+                return pro_result, None, "amateur output or references"
             amateur_checkpoint = copy.deepcopy(committed_amateur_checkpoint)
             save_checkpoint(amateur_checkpoint, AMATEUR_CHECKPOINT_PATH)
             return pro_result, None, "amateur"
+        try:
+            _record_track_references(AMATEUR_OUTPUT_PATH, AMATEUR_CHECKPOINT_PATH, amateur_checkpoint, amateur_rows, amateur_prior)
+        except (RuntimeError, OSError, ValueError) as exc:
+            _preserve_reference_failure(amateur_checkpoint, AMATEUR_CHECKPOINT_PATH, exc)
+            return pro_result, amateur_result, "amateur references"
         save_checkpoint(amateur_checkpoint, AMATEUR_CHECKPOINT_PATH)
         committed_amateur_checkpoint = copy.deepcopy(amateur_checkpoint)
         return pro_result, amateur_result, None
+
+    def _preserve_reference_failure(current_checkpoint, checkpoint_path, error):
+        # The source work already happened. Keep its accounting and evidence;
+        # an incomplete reference write cannot refund or silently retry it.
+        for identity_key, state in current_checkpoint.get("identity_state", {}).items():
+            if identity_key not in attempted_identity_keys:
+                continue
+            state["status_before_reference_failure"] = state.get("status")
+            state["status"] = "reference_write_refused"
+        current_checkpoint["reference_write_error"] = str(error)
+        save_checkpoint(current_checkpoint, checkpoint_path)
+        from src.data.method_observation_history import _json_bytes, _write_immutable
+        body = _json_bytes(current_checkpoint)
+        _write_immutable(checkpoint_path.parent / "provider-reference-failures" / f"{hashlib.sha256(body).hexdigest()}.json", body)
+
+    def _snapshot_track_references(*paths):
+        if args.ordinary_provider_sources is None:
+            return []
+        from src.data.provider_consumer_references import snapshot_provider_references
+        return [reference for path in paths if path.exists()
+                if (reference := snapshot_provider_references(path)) is not None]
+
+    def _record_track_references(output_path, checkpoint_path, current_checkpoint, rows, prior):
+        if args.ordinary_provider_sources is None:
+            return
+        from src.data.provider_consumer_references import record_provider_consumer_artifact
+        common = dict(accepted_membership=retained_common["accepted_membership"],
+                      decision_paths=retained_common["decision_paths"], history_root=retained_common["history_root"],
+                      expected_decision_pins=retained_common["expected_decision_pins"])
+        evidence = [Path(row["source_attachment_path"]) for row in rows if row.get("source_attachment_path")]
+        parents = []
+        if output_path.exists():
+            # Read the actual durable selection; discarded later duplicates are
+            # not a substitute for the earlier evidence the CSV still uses.
+            saved = pd.read_csv(output_path, dtype=str, keep_default_na=False)
+            evidence = [Path(value) for value in saved.get("source_attachment_path", []) if value]
+            record_provider_consumer_artifact(output_path, evidence_paths=evidence, parent_references=prior,
+                                             kind="career_csv", **common)
+            parents = [output_path]
+        save_checkpoint(current_checkpoint, checkpoint_path)
+        captures = [descriptor for state in current_checkpoint.get("identity_state", {}).values()
+                    for descriptor in state.get("provider_response_captures", state.get("source_failure_captures", []))]
+        record_provider_consumer_artifact(checkpoint_path, evidence_paths=evidence,
+                                         parent_artifacts=parents, capture_descriptors=captures,
+                                         parent_references=prior,
+                                         kind="career_checkpoint", **common)
 
     def _return_integrity_guard_failure(failed_track: str) -> int:
         _write_summary_json(
@@ -967,7 +1126,8 @@ def main(argv: list[str] | None = None) -> int:
                 "status": "integrity_guard_failed",
                 "candidate_source": candidate_source,
                 "failed_track": failed_track,
-                "checkpoint_success_rolled_back": True,
+                "checkpoint_success_rolled_back": not failed_track.endswith("references"),
+                "source_accounting_preserved": failed_track.endswith("references"),
             },
         )
         return 1
@@ -981,15 +1141,19 @@ def main(argv: list[str] | None = None) -> int:
                 return _return_integrity_guard_failure(failed_track)
 
         pro_should_scrape, amateur_should_scrape = scrape_decisions[identity_key]
+        attempted_identity_keys.add(identity_key)
 
         if pro_should_scrape:
             try:
-                rows = scrape_fighter_pre_ufc_fights(name, info["first_ufc_date"])
+                rows = scrape_fighter_pre_ufc_fights(
+                    name, info["first_ufc_date"], fighter_id=info.get("fighter_id"),
+                    retained_observations=retained_by_fighter.get(info.get("fighter_id")),
+                    **retained_common,
+                )
                 scraped_count += 1
                 if rows:
-                    pro_rows = [
-                        row for row in pro_rows if row.get("fighter_a") != name
-                    ]
+                    # Keep earlier observations and legacy provenance; the stable
+                    # history deduplicator selects original evidence per bout.
                     pro_rows.extend(rows)
                     pro_successful_replacements.add(name)
                     found_count += 1
@@ -1004,24 +1168,23 @@ def main(argv: list[str] | None = None) -> int:
                     row_count=len(rows),
                 )
             except Exception as e:
+                from src.data.provider_response_capture import ProviderAcquisitionError
                 pro_transient_count += 1
-                logger.warning("  %s: pre-UFC transient scrape error: %s", name, e)
-                _record_identity_attempt(
-                    checkpoint,
-                    identity_key,
-                    info,
-                    row_count=None,
-                    error=e,
-                )
+                if isinstance(e, ProviderAcquisitionError):
+                    _record_identity_attempt(checkpoint, identity_key, info, row_count=None, error=e)
+                else:
+                    _record_processing_refusal(checkpoint, identity_key, info, e)
+                logger.warning("  %s: pre-UFC collection refused: %s", name, e)
 
         if amateur_should_scrape:
             try:
-                rows = scrape_fighter_amateur_fights(name, info["first_ufc_date"])
+                rows = scrape_fighter_amateur_fights(
+                    name, info["first_ufc_date"], fighter_id=info.get("fighter_id"),
+                    retained_observations=retained_by_fighter.get(info.get("fighter_id")),
+                    **retained_common,
+                )
                 amateur_scraped_count += 1
                 if rows:
-                    amateur_rows = [
-                        row for row in amateur_rows if row.get("fighter_a") != name
-                    ]
                     amateur_rows.extend(rows)
                     amateur_successful_replacements.add(name)
                     amateur_found_count += 1
@@ -1036,15 +1199,23 @@ def main(argv: list[str] | None = None) -> int:
                     row_count=len(rows),
                 )
             except Exception as e:
+                from src.data.provider_response_capture import ProviderAcquisitionError
                 amateur_transient_count += 1
-                logger.warning("  %s: amateur transient scrape error: %s", name, e)
-                _record_identity_attempt(
-                    amateur_checkpoint,
-                    identity_key,
-                    info,
-                    row_count=None,
-                    error=e,
-                )
+                if isinstance(e, ProviderAcquisitionError):
+                    _record_identity_attempt(amateur_checkpoint, identity_key, info, row_count=None, error=e)
+                else:
+                    _record_processing_refusal(amateur_checkpoint, identity_key, info, e)
+                logger.warning("  %s: amateur collection refused: %s", name, e)
+
+        if args.ordinary_provider_sources is not None:
+            captures = []
+            for cache_key, descriptors in retained_common["provider_capture_log"].items():
+                if cache_key[0] == info.get("fighter_id"):
+                    captures.extend(descriptors)
+            for current in (checkpoint, amateur_checkpoint):
+                state = current.setdefault("identity_state", {}).get(identity_key)
+                if state is not None:
+                    state["provider_response_captures"] = captures
 
         # _get_soup() already enforces per-request pacing, so no extra
         # per-fighter delay is needed here.

@@ -137,6 +137,7 @@ WAYBACK_HEADERS = {"User-Agent": "ufc-betting-bot/1.0 (Sherdog Wayback fallback)
 
 # Session caches
 _sherdog_url_cache: dict[str, str] = {}
+_sherdog_profile_response_identity_cache: dict[str, dict[str, object]] = {}
 # Sherdog Cloudflare block state: `_sherdog_blocked_until` is a monotonic
 # deadline for failing fast; `_sherdog_block_active` stays True from the first
 # challenge until a fetch succeeds again (drives the recovery log/alert reset).
@@ -147,6 +148,7 @@ _tapology_url_cache: dict[str, str] = {}
 _martialbot_url_cache: dict[str, str] = {}
 _fightdx_url_cache: dict[str, str] = {}
 _fightdx_profile_html_cache: dict[str, str] = {}
+_fightdx_profile_response_identity_cache: dict[str, dict[str, object]] = {}
 _espn_url_cache: dict[str, str] = {}
 _fightdx_person_urls_cache: list[str] | None = None
 _fightdx_unavailable_until = 0.0
@@ -169,7 +171,9 @@ _tapology_search_blocked = False
 _tapology_browser_unavailable = False
 _tapology_browser_cloudflare_blocked = False
 _tapology_browser_html_cache: dict[str, str] = {}
+_tapology_profile_response_identity_cache: dict[str, dict[str, object]] = {}
 _tapology_reader_markdown_cache: dict[str, str] = {}
+_tapology_reader_response_identity_cache: dict[str, dict[str, object]] = {}
 # Reader 401/403/451 responses are often transient egress/service failures. The
 # bool records an active incident (and remains for compatibility with existing
 # diagnostics); the monotonic deadline determines when a guarded recovery probe
@@ -221,6 +225,75 @@ _PROFILE_MERGE_GROUPS = {
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _http_response_requested_url(response: object, issued_url: str) -> str:
+    """Return the URL the HTTP client actually prepared, with an honest fallback."""
+
+    request = getattr(response, "request", None)
+    return str(getattr(request, "url", "") or issued_url or "").strip()
+
+
+def _http_response_effective_url(response: object, issued_url: str) -> str:
+    """Return the final response URL rather than the discovery/search candidate."""
+
+    return str(getattr(response, "url", "") or issued_url or "").strip()
+
+
+def _http_response_redirect_chain(
+    response: object,
+    *,
+    effective_url: str,
+) -> list[str]:
+    """Capture every observed redirect response and the final URL.
+
+    An empty list positively records that the HTTP client exposed no redirects.
+    When redirects exist, the final item is always the effective response URL.
+    """
+
+    history = list(getattr(response, "history", None) or [])
+    if not history:
+        return []
+    chain = [str(getattr(item, "url", "") or "").strip() for item in history]
+    if effective_url and (not chain or chain[-1] != effective_url):
+        chain.append(effective_url)
+    return chain
+
+
+def _html_canonical_url(soup: BeautifulSoup, effective_url: str) -> str:
+    """Extract a response-declared canonical URL, falling back to its final URL."""
+
+    canonical = soup.select_one('link[rel~="canonical"][href]')
+    href = str(canonical.get("href") or "").strip() if canonical else ""
+    if not href:
+        open_graph = soup.select_one('meta[property="og:url"][content]')
+        href = str(open_graph.get("content") or "").strip() if open_graph else ""
+    return urljoin(effective_url, href) if href else effective_url
+
+
+def _html_response_identity_metadata(
+    response: object,
+    *,
+    issued_url: str,
+    soup: BeautifulSoup,
+) -> dict[str, object]:
+    """Capture response identity from the actual fetch and returned document."""
+
+    requested_url = _http_response_requested_url(response, issued_url)
+    effective_url = _http_response_effective_url(response, requested_url)
+    canonical_url = _html_canonical_url(soup, effective_url)
+    return {
+        "requested_url": requested_url,
+        "effective_url": effective_url,
+        "canonical_url": canonical_url,
+        "redirect_chain": _http_response_redirect_chain(
+            response,
+            effective_url=effective_url,
+        ),
+        # Non-ESPN supported sources currently bind the complete canonical URL
+        # as their stable source entity in profile_integrity.source_entity_id.
+        "source_entity_id": canonical_url.rstrip("/").casefold(),
+    }
 
 
 def _proxy_target(proxy_url: str) -> str:
@@ -710,6 +783,49 @@ def _tapology_reader_url(target_url: str) -> str:
     return f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/{target}"
 
 
+def _tapology_reader_target_url(target_url: str) -> str:
+    return _tapology_reader_url(target_url).removeprefix(
+        f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/"
+    )
+
+
+def _tapology_reader_markdown_source_url(markdown: str) -> str:
+    match = re.search(
+        r"^\s*URL Source:\s*(\S+)\s*$",
+        str(markdown or ""),
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    return _clean_text(match.group(1)) if match else ""
+
+
+def _tapology_reader_response_identity_metadata(
+    response: object,
+    *,
+    reader_url: str,
+    target_url: str,
+    markdown: str,
+) -> dict[str, object]:
+    """Capture wrapper transport separately from the origin identity in its body."""
+
+    requested_url = _http_response_requested_url(response, reader_url)
+    effective_url = _http_response_effective_url(response, requested_url)
+    canonical_url = _tapology_reader_markdown_source_url(markdown)
+    return {
+        "requested_url": requested_url,
+        "effective_url": effective_url,
+        "redirect_chain": _http_response_redirect_chain(
+            response,
+            effective_url=effective_url,
+        ),
+        "canonical_url": canonical_url,
+        "source_entity_id": canonical_url.rstrip("/").casefold(),
+        "transport_kind": "jina_reader",
+        "reader_target_url": target_url,
+        # Jina exposes its own response history, not Tapology origin redirects.
+        "origin_redirect_chain_captured": False,
+    }
+
+
 def _sleep_before_tapology_reader_request() -> None:
     global _last_tapology_reader_request_at
     delay_seconds = max(float(TAPOLOGY_READER_REQUEST_DELAY_SECONDS or 0), 0.0)
@@ -792,17 +908,25 @@ def _tapology_reader_markdown_is_profile(markdown: str) -> bool:
     )
 
 
-def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
+def _get_tapology_markdown_with_reader(fighter_url: str, *, response_capture=None, request_get=None) -> str:
     """Fetch a Tapology fighter page through a markdown reader service."""
     if not _tapology_reader_available():
         raise TapologyRequestError(fighter_url, detail=_tapology_reader_unavailable_reason())
 
-    normalized_url = _tapology_reader_url(fighter_url).removeprefix(
-        f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/"
-    )
+    normalized_url = _tapology_reader_target_url(fighter_url)
     cached = _tapology_reader_markdown_cache.get(normalized_url)
     if cached and not _tapology_reader_unavailable:
+        if response_capture is not None:
+            from src.data.provider_response_capture import ProviderCaptureRefusal
+            raise ProviderCaptureRefusal("legacy reader cache has no original response capture")
+        if normalized_url not in _tapology_reader_response_identity_cache:
+            raise TapologyRequestError(
+                fighter_url,
+                detail="reader cached response lacks transport identity metadata",
+            )
         return cached
+
+    _tapology_reader_response_identity_cache.pop(normalized_url, None)
 
     retry_statuses = {429, 451, 500, 502, 503, 504}
     last_error: TapologyRequestError | None = None
@@ -819,7 +943,7 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
                 if headers:
                     request_kwargs["headers"] = headers
                 _sleep_before_tapology_reader_request()
-                response = requests.get(reader_url, **request_kwargs)
+                response = (request_get or requests.get)(reader_url, **request_kwargs)
             except Exception as exc:
                 last_error = TapologyRequestError(
                     fighter_url,
@@ -829,6 +953,9 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
                     time.sleep(min(REQUEST_DELAY * attempt, 5.0))
                     continue
                 break
+
+            if response_capture is not None:
+                response_capture(response, requested_url=reader_url, format="tapology_reader")
 
             try:
                 response.raise_for_status()
@@ -886,6 +1013,9 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
                 invalid_detail = "reader fallback returned non-profile Tapology content"
 
             if invalid_detail:
+                if response_capture is not None and invalid_status is None:
+                    from src.data.provider_response_capture import ProviderCaptureRefusal
+                    raise ProviderCaptureRefusal(invalid_detail)
                 last_error = TapologyRequestError(
                     fighter_url,
                     status_code=invalid_status,
@@ -924,6 +1054,14 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
 
             logger.info("Tapology reader fallback fetched %s (variant %s)", normalized_url, variant_label)
             _mark_tapology_reader_recovered()
+            _tapology_reader_response_identity_cache[normalized_url] = (
+                _tapology_reader_response_identity_metadata(
+                    response,
+                    reader_url=reader_url,
+                    target_url=normalized_url,
+                    markdown=markdown,
+                )
+            )
             _tapology_reader_markdown_cache[normalized_url] = markdown
             return markdown
 
@@ -1817,9 +1955,13 @@ def _sherdog_wayback_candidates(fighter_name: str) -> list[str]:
     return candidates
 
 
-def _get_sherdog_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
+def _get_sherdog_soup(url: str, *, max_retries: int = 2, response_capture=None, request_get=None) -> BeautifulSoup:
     """Fetch Sherdog and classify Cloudflare blocks explicitly."""
+    _sherdog_profile_response_identity_cache.pop(url, None)
     if _sherdog_temporarily_blocked():
+        if response_capture is not None:
+            from src.data.provider_response_capture import ProviderCaptureRefusal
+            raise ProviderCaptureRefusal("Sherdog cooldown/Wayback route has no supported original capture")
         soup = _sherdog_wayback_rescue(url)
         if soup is not None:
             return soup
@@ -1835,7 +1977,7 @@ def _get_sherdog_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
     last_exc: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
-            resp = requests.get(
+            resp = (request_get or requests.get)(
                 url,
                 headers=HEADERS,
                 timeout=30,
@@ -1859,8 +2001,14 @@ def _get_sherdog_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
             _log_external_source_error_once("Sherdog", "request failed", f"{url}: {exc}")
             raise SherdogRequestError(url, detail=str(exc)) from exc
 
+        if response_capture is not None:
+            response_capture(resp, requested_url=url, format="html")
+
         if _is_cloudflare_challenge(resp):
             _mark_sherdog_cloudflare_blocked(url)
+            if response_capture is not None:
+                raise SherdogRequestError(url, status_code=resp.status_code,
+                                          detail="Cloudflare challenge; unsupported Wayback fallback refused")
             soup = _sherdog_wayback_rescue(url)
             if soup is not None:
                 return soup
@@ -1909,7 +2057,15 @@ def _get_sherdog_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
         # Jittered delay: uniform request spacing is an easy crawler signature
         # for Cloudflare's bot scoring, which is what blocked this egress.
         time.sleep(REQUEST_DELAY + random.uniform(0.0, REQUEST_DELAY))
-        return BeautifulSoup(resp.text, "lxml")
+        soup = BeautifulSoup(resp.text, "lxml")
+        _sherdog_profile_response_identity_cache[url] = (
+            _html_response_identity_metadata(
+                resp,
+                issued_url=url,
+                soup=soup,
+            )
+        )
+        return soup
 
     _log_external_source_error_once("Sherdog", "request timed out", f"{url}: {last_exc}")
     raise SherdogRequestError(url, detail=str(last_exc or "request failed"))
@@ -1995,11 +2151,21 @@ def _get_tapology_soup(
     params: dict | None = None,
     max_retries: int | None = None,
     retry_statuses: set[int] | None = None,
+    response_capture=None,
+    request_get=None,
 ) -> BeautifulSoup:
     """Fetch a Tapology page with challenge-aware retries."""
     global _tapology_scraper, _last_tapology_request_at, _tapology_blocked
+    fetch_url = _tapology_fetch_url(url, params)
+    _tapology_profile_response_identity_cache.pop(fetch_url, None)
 
     def _try_browser_fallback(reason: str) -> BeautifulSoup | None:
+        if response_capture is not None:
+            from src.data.provider_response_capture import ProviderCaptureRefusal
+            if getattr(response_capture, "captures", None):
+                raise TapologyRequestError(url, status_code=response_capture.last_status,
+                    detail="source response refused; unsupported browser DOM fallback")
+            raise ProviderCaptureRefusal("Tapology browser DOM route has no original response body/context")
         if not _tapology_browser_fallback_available():
             return None
         try:
@@ -2039,7 +2205,7 @@ def _get_tapology_soup(
     attempt = 0
     while attempt < max_attempts:
         attempt += 1
-        if _tapology_scraper is None:
+        if _tapology_scraper is None and request_get is None:
             try:
                 _tapology_scraper = _build_tapology_scraper()
             except Exception as exc:
@@ -2053,7 +2219,7 @@ def _get_tapology_soup(
             time.sleep(sleep_for)
 
         try:
-            resp = _tapology_scraper.get(
+            resp = (request_get or _tapology_scraper.get)(
                 url,
                 params=params,
                 timeout=TAPOLOGY_TIMEOUT_SECONDS,
@@ -2074,6 +2240,9 @@ def _get_tapology_soup(
             _tapology_scraper = _build_tapology_scraper() if cloudscraper is not None else None
             time.sleep(backoff)
             continue
+
+        if response_capture is not None:
+            response_capture(resp, requested_url=fetch_url, format="html")
 
         if resp.status_code == 200 and resp.text:
             if _is_cloudflare_challenge(resp):
@@ -2112,7 +2281,15 @@ def _get_tapology_soup(
                 _tapology_scraper = _build_tapology_scraper()
                 time.sleep(backoff)
                 continue
-            return BeautifulSoup(resp.text, "lxml")
+            soup = BeautifulSoup(resp.text, "lxml")
+            _tapology_profile_response_identity_cache[fetch_url] = (
+                _html_response_identity_metadata(
+                    resp,
+                    issued_url=fetch_url,
+                    soup=soup,
+                )
+            )
+            return soup
 
         last_status = int(resp.status_code)
         if resp.status_code in retry_statuses:
@@ -2888,12 +3065,17 @@ def _parse_sherdog_profile(soup: BeautifulSoup, fighter_url: str) -> dict:
     name_el = soup.find("h1")
     name = _clean_text(name_el.text) if name_el else ""
 
-    wins, losses, draws = 0, 0, 0
+    wins, losses, draws = np.nan, np.nan, np.nan
     for div in soup.find_all("div", class_="winloses"):
         spans = div.find_all("span")
         if len(spans) >= 2:
             label = spans[0].text.strip().lower()
-            count = _safe_float(spans[1].text.strip(), default=0)
+            count_text = spans[1].text.strip()
+            # A missing/malformed widget is unknown. Zero is an observation
+            # only when an actual numeric zero is present in the response.
+            if not re.fullmatch(r"\d+", count_text):
+                continue
+            count = int(count_text)
             if label == "wins":
                 wins = int(count)
             elif label == "losses":
@@ -2939,7 +3121,10 @@ def _parse_sherdog_profile(soup: BeautifulSoup, fighter_url: str) -> dict:
     return {
         "name": name,
         "fighter_url": fighter_url,
-        "record": f"{wins}-{losses}-{draws}",
+        "record": (
+            f"{wins}-{losses}-{draws}"
+            if all(np.isfinite(value) for value in (wins, losses, draws)) else ""
+        ),
         "wins": wins,
         "losses": losses,
         "draws": draws,
@@ -3000,8 +3185,12 @@ def _parse_sherdog_fight_table(table: Tag, fighter_name: str) -> list[dict]:
 
             event_link = tds[2].find("a")
             event_name = _clean_text(event_link.text) if event_link else _clean_text(event_text)
-            event_name_lower = event_name.lower()
-            is_title = "title" in event_name_lower or "championship" in event_name_lower
+            # Sherdog's fight table carries no title-bout marker. The former
+            # keyword test ("title" / "championship" in the event name) flagged
+            # promotion names such as "Fury Fighting Championship" and yielded
+            # no verified title bout on the measurable rows (391 of 391 on
+            # 2026-09-17), so the flag stays unobserved: None becomes NaN.
+            is_title = None
 
             fights.append(
                 {
@@ -3058,6 +3247,7 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
     """
     soup = _get_sherdog_soup(fighter_url)
     profile = _parse_sherdog_profile(soup, fighter_url)
+    profile.update(_sherdog_profile_response_identity_cache.pop(fighter_url, {}))
 
     fight_tables = soup.find_all("table", class_="fighter")
     if not fight_tables:
@@ -3070,6 +3260,7 @@ def scrape_sherdog_amateur_fights(fighter_url: str, fighter_name: str) -> tuple[
     """Scrape the amateur Sherdog fight table when the page exposes one."""
     soup = _get_sherdog_soup(fighter_url)
     profile = _parse_sherdog_profile(soup, fighter_url)
+    profile.update(_sherdog_profile_response_identity_cache.pop(fighter_url, {}))
     fight_tables = soup.find_all("table", class_="fighter")
     amateur_table = _find_sherdog_amateur_table(fight_tables)
     if amateur_table is None:
@@ -3574,11 +3765,23 @@ def _parse_tapology_profile_soup(fighter_url: str, soup: BeautifulSoup) -> dict:
 
 def scrape_tapology_profile(fighter_url: str) -> dict:
     """Scrape a Tapology fighter page for static profile attributes."""
+    _tapology_profile_response_identity_cache.pop(fighter_url, None)
+
+    def _reader_profile(markdown: str) -> dict:
+        profile = _parse_tapology_reader_profile(fighter_url, markdown)
+        profile.update(
+            _tapology_reader_response_identity_cache.get(
+                _tapology_reader_target_url(fighter_url),
+                {},
+            )
+        )
+        return profile
+
     reader_error: TapologyRequestError | None = None
     if _tapology_prefer_reader():
         try:
             markdown = _get_tapology_markdown_with_reader(fighter_url)
-            return _parse_tapology_reader_profile(fighter_url, markdown)
+            return _reader_profile(markdown)
         except TapologyRequestError as exc:
             reader_error = exc
 
@@ -3593,7 +3796,11 @@ def scrape_tapology_profile(fighter_url: str) -> dict:
 
     try:
         soup = _get_tapology_soup(fighter_url)
-        return _parse_tapology_profile_soup(fighter_url, soup)
+        profile = _parse_tapology_profile_soup(fighter_url, soup)
+        profile.update(
+            _tapology_profile_response_identity_cache.pop(fighter_url, {})
+        )
+        return profile
     except TapologyRequestError as exc:
         if not _tapology_reader_available():
             if reader_error is not None:
@@ -3601,7 +3808,7 @@ def scrape_tapology_profile(fighter_url: str) -> dict:
             raise
         try:
             markdown = _get_tapology_markdown_with_reader(fighter_url)
-            return _parse_tapology_reader_profile(fighter_url, markdown)
+            return _reader_profile(markdown)
         except TapologyRequestError as reader_exc:
             raise reader_exc from exc
 
@@ -3764,6 +3971,27 @@ def _fetch_martialbot_fighter(fighter_url: str) -> dict:
             "profile data missing fighter node",
             data_url,
         )
+        return fighter
+
+    fighter_id = _clean_text(fighter.get("id"))
+    canonical_url = (
+        f"{MARTIALBOT_BASE_URL.rstrip('/')}/mma/fighters/{fighter_id}"
+        if fighter_id
+        else ""
+    )
+    requested_url = _http_response_requested_url(response, data_url)
+    effective_url = _http_response_effective_url(response, requested_url)
+    fighter = dict(fighter)
+    fighter["_profile_response_identity"] = {
+        "requested_url": requested_url,
+        "effective_url": effective_url,
+        "canonical_url": canonical_url,
+        "redirect_chain": _http_response_redirect_chain(
+            response,
+            effective_url=effective_url,
+        ),
+        "source_entity_id": canonical_url.rstrip("/").casefold(),
+    }
     return fighter
 
 
@@ -3957,9 +4185,23 @@ def _request_fightdx(
     raise last_exc
 
 
-def _cache_fightdx_profile_html(url: str, html: str) -> None:
+def _cache_fightdx_profile_html(
+    url: str,
+    html: str,
+    *,
+    response: object | None = None,
+) -> None:
     if "/person/" in urlparse(str(url or "")).path and str(html or "").strip():
         _fightdx_profile_html_cache[url] = html
+        if response is not None:
+            soup = BeautifulSoup(html, "lxml")
+            _fightdx_profile_response_identity_cache[url] = (
+                _html_response_identity_metadata(
+                    response,
+                    issued_url=url,
+                    soup=soup,
+                )
+            )
 
 
 def _get_fightdx_soup(url: str) -> BeautifulSoup:
@@ -3981,7 +4223,15 @@ def _get_fightdx_soup(url: str) -> BeautifulSoup:
         if _response_text_is_empty(response):
             raise RuntimeError(f"FightDX returned an empty response for {url}")
         _sleep_after_request(REQUEST_DELAY)
-        return BeautifulSoup(response.text, "lxml")
+        soup = BeautifulSoup(response.text, "lxml")
+        _fightdx_profile_response_identity_cache[url] = (
+            _html_response_identity_metadata(
+                response,
+                issued_url=url,
+                soup=soup,
+            )
+        )
+        return soup
     except Exception as exc:
         _mark_fightdx_transient_failure(exc)
         if getattr(exc, "external_source_alert_reported", False):
@@ -4273,7 +4523,11 @@ def _resolve_fightdx_candidate_url(
         if verified_score < 8:
             return None
         _fightdx_url_cache[fighter_name] = candidate_url
-        _cache_fightdx_profile_html(candidate_url, response.text)
+        _cache_fightdx_profile_html(
+            candidate_url,
+            response.text,
+            response=response,
+        )
         _sleep_after_request(REQUEST_DELAY)
         return candidate_url
     except Exception as exc:
@@ -4329,7 +4583,11 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 score = _best_name_score(fighter_name, candidate_name)
                 if score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
                     _fightdx_url_cache[fighter_name] = url
-                    _cache_fightdx_profile_html(url, response.text)
+                    _cache_fightdx_profile_html(
+                        url,
+                        response.text,
+                        response=response,
+                    )
                     _sleep_after_request(REQUEST_DELAY)
                     return url
         elif response.status_code not in {404}:
@@ -4380,6 +4638,8 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
 
 def scrape_fightdx_profile(fighter_url: str) -> dict:
     """Scrape a FightDX fighter page for static profile attributes."""
+    if fighter_url not in _fightdx_profile_html_cache:
+        _fightdx_profile_response_identity_cache.pop(fighter_url, None)
     soup = _get_fightdx_soup(fighter_url)
     name = _parse_fightdx_heading_name(soup)
 
@@ -4406,7 +4666,7 @@ def scrape_fightdx_profile(fighter_url: str) -> dict:
     # Compute age: prefer DOB, fall back to raw age string
     age = _parse_dob_to_age(dob) if dob else _parse_age_from_raw(age_raw)
 
-    return {
+    profile = {
         "name": name,
         "fighter_url": fighter_url,
         "record": record,
@@ -4425,6 +4685,8 @@ def scrape_fightdx_profile(fighter_url: str) -> dict:
         "dob": dob,
         **_empty_profile_stats(),
     }
+    profile.update(_fightdx_profile_response_identity_cache.pop(fighter_url, {}))
+    return profile
 
 
 def _extract_espn_fighter_url(item: dict) -> str:
@@ -4538,7 +4800,8 @@ def _get_espn_json(
     params: dict | None = None,
     require_non_empty: bool = False,
     empty_response_detail: str = "",
-) -> dict:
+    include_response_metadata: bool = False,
+) -> dict | tuple[dict, dict[str, object]]:
     if _espn_temporarily_unavailable(origin):
         raise _espn_unavailable_error(
             origin,
@@ -4627,6 +4890,20 @@ def _get_espn_json(
                 )
             _sleep_after_request(REQUEST_DELAY)
             _mark_espn_recovered(origin)
+            if include_response_metadata:
+                requested_url = _http_response_requested_url(response, url)
+                effective_url = _http_response_effective_url(
+                    response,
+                    requested_url,
+                )
+                return payload, {
+                    "requested_url": requested_url,
+                    "effective_url": effective_url,
+                    "redirect_chain": _http_response_redirect_chain(
+                        response,
+                        effective_url=effective_url,
+                    ),
+                }
             return payload
         except ESPNSourceUnavailableError:
             raise
@@ -4759,14 +5036,27 @@ def _espn_weight_raw(display_value: object, numeric_value: object) -> str:
     return f"{value:g} lbs"
 
 
+def _espn_payload_sport(payload: dict, api_effective_url: str) -> str:
+    observed = payload.get("sport")
+    if isinstance(observed, dict):
+        observed = observed.get("slug") or observed.get("name") or observed.get("id")
+    text = _clean_text(observed).casefold()
+    if text:
+        return text
+    match = re.search(r"/sports/([^/]+)/", urlparse(api_effective_url).path)
+    return match.group(1).casefold() if match else ""
+
+
 def scrape_espn_profile(fighter_url: str) -> dict:
     """Fetch structured ESPN MMA athlete profile data."""
+    api_url = _espn_athlete_api_url(fighter_url)
     try:
-        payload = _get_espn_json(
-            _espn_athlete_api_url(fighter_url),
+        payload, api_response = _get_espn_json(
+            api_url,
             origin=_ESPN_PROFILE_ORIGIN,
             require_non_empty=True,
             empty_response_detail=fighter_url,
+            include_response_metadata=True,
         )
     except ESPNSourceUnavailableError:
         raise
@@ -4793,10 +5083,29 @@ def scrape_espn_profile(fighter_url: str) -> dict:
     dob_raw = _clean_text(payload.get("dateOfBirth"))
     dob = dob_raw.split("T", 1)[0] if "T" in dob_raw else dob_raw
     age = _parse_dob_to_age(dob) if dob else np.nan
+    canonical_url = _extract_espn_fighter_url(payload)
+    api_athlete_id = _clean_text(payload.get("id"))
+    api_requested_url = _clean_text(api_response.get("requested_url"))
+    api_effective_url = _clean_text(api_response.get("effective_url"))
+    api_redirect_chain = api_response.get("redirect_chain")
+    sport = _espn_payload_sport(payload, api_effective_url)
 
     return {
         "name": name,
         "fighter_url": fighter_url,
+        # The real profile fetch is ESPN's athlete API. The web fighter URL is
+        # only a discovery candidate until the returned payload links back to
+        # the same numeric entity.
+        "requested_url": api_requested_url,
+        "effective_url": api_effective_url,
+        "canonical_url": canonical_url,
+        "redirect_chain": api_redirect_chain,
+        "source_entity_id": api_athlete_id,
+        "api_athlete_id": api_athlete_id,
+        "api_requested_url": api_requested_url,
+        "api_effective_url": api_effective_url,
+        "api_redirect_chain": api_redirect_chain,
+        "sport": sport,
         "height_raw": height_raw,
         "height": _parse_height_cm(height_raw),
         "reach_raw": reach_raw,
@@ -4813,6 +5122,10 @@ def scrape_espn_profile(fighter_url: str) -> dict:
 def scrape_martialbot_profile(fighter_url: str) -> dict:
     """Scrape a MartialBot fighter page for static profile attributes."""
     fighter = _fetch_martialbot_fighter(fighter_url)
+    response_identity = fighter.get("_profile_response_identity")
+    response_identity = (
+        dict(response_identity) if isinstance(response_identity, dict) else {}
+    )
 
     name = _clean_text(fighter.get("name", ""))
     record_data = fighter.get("record") if isinstance(fighter.get("record"), dict) else {}
@@ -4852,6 +5165,7 @@ def scrape_martialbot_profile(fighter_url: str) -> dict:
         "age": age,
         "dob": dob,
         **_empty_profile_stats(),
+        **response_identity,
     }
 
 
@@ -5376,12 +5690,16 @@ def clear_fallback_cache(*, preserve_environment_blocks: bool = False):
     a data cache, such as Tapology Cloudflare blocks for the current runtime.
     """
     _sherdog_url_cache.clear()
+    _sherdog_profile_response_identity_cache.clear()
     _tapology_url_cache.clear()
     _tapology_browser_html_cache.clear()
+    _tapology_profile_response_identity_cache.clear()
     _tapology_reader_markdown_cache.clear()
+    _tapology_reader_response_identity_cache.clear()
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
     _fightdx_profile_html_cache.clear()
+    _fightdx_profile_response_identity_cache.clear()
     _espn_url_cache.clear()
     if not preserve_environment_blocks:
         _external_source_alert_keys.clear()

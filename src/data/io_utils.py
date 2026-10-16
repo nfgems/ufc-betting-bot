@@ -422,10 +422,19 @@ def write_bytes_atomically(content: bytes, path: Path | str) -> Path:
     fd, tmp_name = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
+        try:
+            # Keep the exact descriptor created for this named temp file. This
+            # also works in contained roster workers that forbid unscoped
+            # descriptor reopens; short writes must finish before replacement.
+            remaining = memoryview(content)
+            while remaining:
+                written = os.write(fd, remaining)
+                if written <= 0:
+                    raise OSError("Atomic byte write made no progress")
+                remaining = remaining[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         _replace_with_retry(tmp_path, target)
         if os.name != "nt":
             directory_fd = os.open(target.parent, os.O_RDONLY)

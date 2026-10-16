@@ -45,8 +45,10 @@ LINE_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 OPENING_LINES_PATH = LINE_HISTORY_DIR / "opening_lines.json"
 ALERT_LOG_STATE_FILENAME = "alert_log_state.json"
 
-# Per-file snapshot cache: path -> (mtime, prepared DataFrame)
-_snapshot_file_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+# Per-file snapshot cache: path -> (mtime, prepared DataFrame, actual pair keys).
+# Retain the existing per-call directory/stat refresh, but avoid constructing a
+# boolean-filtered DataFrame for every unrelated historical snapshot per fight.
+_snapshot_file_cache: dict[str, tuple[float, pd.DataFrame, frozenset[str]]] = {}
 _line_history_prune_lock = threading.Lock()
 _last_line_history_prune_monotonic = 0.0
 
@@ -508,25 +510,36 @@ def load_line_history(
     requested_commence = _parse_datetime_like(commence_time)
     as_of_cutoff = _as_of_cutoff_timestamp(as_of_date)
 
-    for csv_path in sorted(LINE_HISTORY_DIR.glob("odds_*.csv")):
+    from src.data.selected_source_inputs import selected_path, active_sources
+    for csv_path in sorted(selected_path("line_history", LINE_HISTORY_DIR).glob("odds_*.csv")):
         cache_key = str(csv_path)
         try:
             file_mtime = csv_path.stat().st_mtime
         except OSError:
+            if active_sources() is not None:
+                raise
             continue
 
         cached_entry = _snapshot_file_cache.get(cache_key)
         if cached_entry is not None and cached_entry[0] == file_mtime:
             prepared = cached_entry[1]
+            pair_keys = cached_entry[2]
         else:
             try:
                 df = pd.read_csv(csv_path)
             except Exception:
+                if active_sources() is not None:
+                    raise
                 continue
             if "fighter_a" not in df.columns or "fighter_b" not in df.columns:
+                if active_sources() is not None:
+                    raise ValueError(f"Selected line history lacks fighter sides: {csv_path}")
                 continue
             prepared = _prepare_snapshot_frame(df)
-            _snapshot_file_cache[cache_key] = (file_mtime, prepared)
+            pair_keys = frozenset(prepared["pair_key"])
+            _snapshot_file_cache[cache_key] = (file_mtime, prepared, pair_keys)
+        if pair_key not in pair_keys:
+            continue
         matched = prepared[prepared["pair_key"] == pair_key].copy()
         if matched.empty:
             continue
@@ -615,6 +628,10 @@ def analyze_line_movement(
         consensus["a_prob"].tolist(),
         timestamps=consensus["snapshot_time"].tolist(),
     )
+
+    from src.data.selected_source_inputs import active_sources
+    if active_sources() is not None:
+        return result
 
     if "fight_key" in history.columns:
         fight_scope = str(history["fight_key"].iloc[-1])

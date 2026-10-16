@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "kind": "independent_corrected_profile_draft_evidence_review",
+  "completed_utc": "2026-09-21T00:30:44.815978+00:00",
+  "pass": true,
+  "verdict": "CORRECTED_DRAFTS_AND_SCOPED_LOCAL_BEHAVIOR_VERIFIED_UNINSTALLED",
+  "verifier_pin": {
+    "path": "C:\\Temp\\v9-profile-eligibility-20260920-01\\review\\verify_profile_drafts01.py",
+    "bytes": 9912,
+    "sha256": "7873ef69d5870e24cf70bb340f8f3807455b88cdc19ceb9648aa8bc91331fa4e"
+  },
+  "profile_rows_pin": {
+    "path": "C:\\Temp\\v9-profile-eligibility-20260920-01\\draft\\primary-profile-rows01.csv",
+    "bytes": 391,
+    "sha256": "c0dd2e09df90c0aac8acf1dea03f2a027377add02b9f65d7b1a4f5522d5e9505"
+  },
+  "decisions02_pin": {
+    "path": "C:\\Temp\\v9-profile-eligibility-20260920-01\\draft\\profile-decisions02.csv",
+    "bytes": 5340,
+    "sha256": "bd7b31671b7485411a01af0df07719126ef28176cffb43378702e0ffd95ce819"
+  },
+  "prerequisites02_pin": {
+    "path": "C:\\Temp\\v9-profile-eligibility-20260920-01\\evidence\\profile-prerequisites02.json",
+    "bytes": 16252,
+    "sha256": "b11bdcee1dda3b92836e005141c4754ee4f52e37fde4e9266c04025fc5948326"
+  },
+  "runtime_review_pin": {
+    "path": "C:\\Temp\\v9-profile-eligibility-20260920-01\\review\\profile-test-runtime01.json",
+    "bytes": 4075,
+    "sha256": "381ff3f34337dac4223eacccb33494d178a135d334ed34fc4547d12c0c24e17d"
+  },
+  "javad_transport_review_pin": {
+    "path": "C:\\Temp\\v9-profile-eligibility-20260920-01\\review\\profile-receipt01.json",
+    "bytes": 5935,
+    "sha256": "69490832d89ced70b03293c4835a6c14abafe9d3313797179dbcddfe6532c3db"
+  },
+  "nested_input_pins_checked": 40,
+  "primary_schema_columns": 16,
+  "profile_rows": 2,
+  "decision_rows": 2,
+  "selected_baseline_profile_rows": 4555,
+  "selected_primary_matches_before_draft": 0,
+  "selected_alias_matches_before_draft": 0,
+  "lucia_model_safe_dob": null,
+  "javad_model_safe_dob": "1992-05-26",
+  "physical_and_performance_values_remain_unknown": true,
+  "external_identity_anchor_not_fabricated": true,
+  "lucia_owner_adjudication_not_fabricated": true,
+  "owner_original_timestamp_and_discrepancy_preserved": true,
+  "both_drafts_refused_by_automatic_publication": true,
+  "selected_roster_rows": {
+    "184f6ec4ee712e9f": {
+      "official_name": "Lucia Szabova",
+      "ufcstats_name": "Lucia Szabova",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/184f6ec4ee712e9f",
+      "official_athlete_url": "",
+      "official_url_identity_valid": ""
+    },
+    "e9f9add1481fc11c": {
+      "official_name": "Javad Mahjoub",
+      "ufcstats_name": "Javad Mahjoub",
+      "ufcstats_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+      "official_athlete_url": "",
+      "official_url_identity_valid": ""
+    }
+  },
+  "existing_runtime_binding_records": 96,
+  "lucia_javad_new_route_records_present": false,
+  "runtime_binding_or_prediction_eligibility_established": false,
+  "reviewed_bound_side_count_remains": 98,
+  "selected_revision_created": false,
+  "selected_model_or_features_changed": false,
+  "reviewer_application_imports": 0,
+  "reviewer_test_executions": 0,
+  "reviewer_source_requests": 0,
+  "reviewer_hosted_actions": 0,
+  "remaining_gates": [
+    "Reviewed successor selected-source provenance/admission and matching runtime pins.",
+    "Exact official-route records anchored to the unique selected owners; blank selected roster routes remain explicit.",
+    "Real history/features/prediction and complete binding refusal checks before any runtime eligibility claim.",
+    "Any desired Lucia model-safe immutable value requires reviewed field evidence/authority under existing strict policy."
+  ],
+  "historical_defects_preserved": [
+    "Rejected decisions01 timezone coercion retained; corrected02 uses exact receipt/authority strings.",
+    "Proposal01 incorrectly states17 primary columns; actual header is16 and root is preparing a separately retained corrected proposal."
+  ],
+  "limits": "This independently admits local uninstalled drafts and their scoped test evidence only. It does not authorize selected-source publication, source acquisition, coverage policy change, deployment, activation or hosted tests."
+}

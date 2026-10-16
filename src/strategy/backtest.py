@@ -135,12 +135,68 @@ COMPARISON_STRATEGIES = (
 )
 
 
+def _verified_prefight_mask(frame: pd.DataFrame, column: str) -> pd.Series:
+    """Return True only for explicit boolean provenance, never truthy strings."""
+    if column not in frame.columns:
+        return pd.Series(False, index=frame.index, dtype=bool)
+    return frame[column].map(
+        lambda value: isinstance(value, (bool, np.bool_)) and bool(value)
+    )
+
+
+def _verified_entry_mask(
+    frame: pd.DataFrame,
+    *,
+    minimum_hours: float,
+) -> pd.Series:
+    """Validate the complete row-level evidence used for model input and fill."""
+    source_kind = frame.get(
+        "entry_source_kind", pd.Series("", index=frame.index, dtype=object)
+    ).fillna("").astype(str).str.strip()
+    source_file = frame.get(
+        "entry_source_file", pd.Series("", index=frame.index, dtype=object)
+    ).fillna("").astype(str).str.strip()
+    observed = pd.to_datetime(
+        frame.get("entry_observed_at", pd.Series(pd.NaT, index=frame.index)),
+        errors="coerce",
+        utc=True,
+    )
+    hours = pd.to_numeric(
+        frame.get("entry_hours_to_start", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    offset = pd.to_numeric(
+        frame.get("entry_offset_actual", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    prob_a = pd.to_numeric(
+        frame.get("entry_prob_a", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    prob_b = pd.to_numeric(
+        frame.get("entry_prob_b", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    return (
+        _verified_prefight_mask(frame, "entry_verified_prefight")
+        & source_kind.isin({"odds_api", "line_history"})
+        & source_file.ne("")
+        & observed.notna()
+        & hours.ge(minimum_hours)
+        & offset.ge(minimum_hours / 24.0)
+        & prob_a.between(0.0, 1.0, inclusive="both")
+        & prob_b.between(0.0, 1.0, inclusive="both")
+    )
+
+
 def _resolve_market_odds(
     predictions: pd.DataFrame,
     market_prob_col_a: str,
     market_prob_col_b: str,
     *,
     allow_closing_odds: bool = False,
+    require_verified_entry: bool = False,
+    minimum_entry_hours: float = 0.0,
 ) -> tuple[pd.DataFrame, str]:
     """
     Resolve market odds columns for backtesting — row-by-row fallback.
@@ -153,8 +209,9 @@ def _resolve_market_odds(
     has_opening = "opening_prob_a" in predictions.columns
     has_requested = market_prob_col_a in predictions.columns
     has_closing = "a_implied_prob" in predictions.columns
+    has_entry = {"entry_prob_a", "entry_prob_b"}.issubset(predictions.columns)
 
-    if not has_opening and not has_requested and not has_closing:
+    if not require_verified_entry and not has_opening and not has_requested and not has_closing:
         raise ValueError(
             "No market odds found. Need historical backfill data, "
             "requested market columns, or Kaggle implied probabilities."
@@ -163,6 +220,46 @@ def _resolve_market_odds(
     # Start with NaN, then layer sources from lowest to highest priority.
     predictions["a_market_prob"] = np.nan
     predictions["b_market_prob"] = np.nan
+    predictions["market_source_kind"] = ""
+    predictions["market_source_file"] = ""
+    predictions["market_observed_at"] = pd.Series(
+        pd.NaT, index=predictions.index, dtype="datetime64[ns, UTC]"
+    )
+    predictions["market_hours_to_start"] = np.nan
+    predictions["market_verified_prefight"] = False
+
+    if require_verified_entry:
+        mask = _verified_entry_mask(
+            predictions,
+            minimum_hours=minimum_entry_hours,
+        )
+        if has_entry:
+            predictions.loc[mask, "a_market_prob"] = predictions.loc[mask, "entry_prob_a"]
+            predictions.loc[mask, "b_market_prob"] = predictions.loc[mask, "entry_prob_b"]
+        else:
+            mask &= False
+        for output, source in (
+            ("market_source_kind", "entry_source_kind"),
+            ("market_source_file", "entry_source_file"),
+            ("market_observed_at", "entry_observed_at"),
+            ("market_hours_to_start", "entry_hours_to_start"),
+            ("market_verified_prefight", "entry_verified_prefight"),
+        ):
+            if source in predictions.columns:
+                values = predictions.loc[mask, source]
+                if output == "market_observed_at":
+                    values = pd.to_datetime(values, errors="coerce", utc=True)
+                predictions.loc[mask, output] = values.array
+        predictions["odds_source"] = np.where(mask, "verified_entry", "")
+        missing = int((~mask).sum())
+        if missing:
+            logger.warning(
+                "Verified T-1 market odds available for %d/%d rows; %d rows remain ineligible",
+                int(mask.sum()),
+                len(predictions),
+                missing,
+            )
+        return predictions, "verified_entry_only"
 
     # Layer 3 (lowest): Kaggle closing odds
     if has_closing:
@@ -193,9 +290,8 @@ def _resolve_market_odds(
 
     # Layer 0 (above opening): explicit time-to-event entry snapshot, present
     # only when the caller requested entry_offset_days pricing.
-    has_entry = "entry_prob_a" in predictions.columns
     if has_entry:
-        mask = predictions["entry_prob_a"].notna()
+        mask = predictions["entry_prob_a"].notna() & predictions["entry_prob_b"].notna()
         predictions.loc[mask, "a_market_prob"] = predictions.loc[mask, "entry_prob_a"]
         predictions.loc[mask, "b_market_prob"] = predictions.loc[mask, "entry_prob_b"]
 
@@ -226,6 +322,8 @@ def _resolve_market_odds(
 def _merge_historical_odds(
     predictions: pd.DataFrame,
     entry_offset_days: float | None = None,
+    *,
+    require_verified_entry: bool = False,
 ) -> pd.DataFrame:
     """Merge historical opening/closing odds and line-movement metadata.
 
@@ -245,6 +343,34 @@ def _merge_historical_odds(
         return predictions
 
     logger.info(f"Found {len(hist)} historical odds records for backtest enrichment")
+    hist = hist.copy()
+    offsets = pd.to_numeric(hist.get("offset_days"), errors="coerce")
+    if "source_kind" not in hist.columns:
+        hist["source_kind"] = ""
+    if "source_file" not in hist.columns:
+        hist["source_file"] = ""
+    if "observed_at" not in hist.columns:
+        hist["observed_at"] = pd.to_datetime(
+            hist.get("query_date", pd.Series(pd.NaT, index=hist.index)),
+            errors="coerce",
+            utc=True,
+        )
+    if "hours_to_start" not in hist.columns:
+        hist["hours_to_start"] = offsets * 24.0
+    else:
+        hist["hours_to_start"] = pd.to_numeric(hist["hours_to_start"], errors="coerce")
+    hist["observed_at"] = pd.to_datetime(hist["observed_at"], errors="coerce", utc=True)
+    hist["source_kind"] = hist["source_kind"].fillna("").astype(str).str.strip()
+    hist["source_file"] = hist["source_file"].fillna("").astype(str).str.strip()
+    hist["verified_prefight"] = (
+        _verified_prefight_mask(hist, "verified_prefight")
+        & hist["source_kind"].isin({"odds_api", "line_history"})
+        & hist["source_file"].ne("")
+        & hist["observed_at"].notna()
+        & hist["hours_to_start"].gt(0.0)
+        & offsets.gt(0.0)
+    )
+    verified_hist = hist[hist["verified_prefight"]].copy()
 
     opening = hist.loc[
         hist.groupby(["event_date", "fighter_a", "fighter_b"])["offset_days"].idxmax()
@@ -284,7 +410,10 @@ def _merge_historical_odds(
 
     entry = None
     if entry_offset_days is not None:
-        eligible = hist[pd.to_numeric(hist["offset_days"], errors="coerce") >= entry_offset_days]
+        eligible = verified_hist[
+            pd.to_numeric(verified_hist["offset_days"], errors="coerce")
+            >= entry_offset_days
+        ]
         if not eligible.empty:
             entry = eligible.loc[
                 eligible.groupby(["event_date", "fighter_a", "fighter_b"])["offset_days"].idxmin()
@@ -295,6 +424,11 @@ def _merge_historical_odds(
                 "a_decimal_odds": "entry_odds_a",
                 "b_decimal_odds": "entry_odds_b",
                 "offset_days": "entry_offset_actual",
+                "source_kind": "entry_source_kind",
+                "source_file": "entry_source_file",
+                "observed_at": "entry_observed_at",
+                "hours_to_start": "entry_hours_to_start",
+                "verified_prefight": "entry_verified_prefight",
             })[[
                 "event_date",
                 "fighter_a",
@@ -304,9 +438,15 @@ def _merge_historical_odds(
                 "entry_odds_a",
                 "entry_odds_b",
                 "entry_offset_actual",
+                "entry_source_kind",
+                "entry_source_file",
+                "entry_observed_at",
+                "entry_hours_to_start",
+                "entry_verified_prefight",
             ]]
 
-    movement = compute_line_movement_from_backfill(hist)
+    movement_source = verified_hist if require_verified_entry else hist
+    movement = compute_line_movement_from_backfill(movement_source)
 
     predictions["event_date_str"] = pd.to_datetime(predictions["event_date"]).dt.strftime("%Y-%m-%d")
     opening["event_date_str"] = opening["event_date"].astype(str)
@@ -474,14 +614,34 @@ def _prepare_prediction_frame(
     model's implied_prob feature columns (full live-window parity arm).
     """
     predictions = test_df.copy()
+    require_verified_entry = bool(
+        entry_offset_for_features and entry_offset_days is not None
+    )
 
     # Merge historical odds BEFORE model predictions so opening odds can
     # replace closing odds in the model's implied_prob feature columns.
     # This prevents look-ahead bias: the model sees pre-fight opening odds
     # (matching live conditions) instead of post-fight closing odds.
     if use_historical_odds:
-        predictions = _merge_historical_odds(predictions, entry_offset_days=entry_offset_days)
-        if "opening_prob_a" in predictions.columns:
+        if require_verified_entry:
+            from src.data.line_movement import LINE_MOVEMENT_FEATURE_COLS
+
+            for column in (
+                *LINE_MOVEMENT_FEATURE_COLS,
+                "a_fair_prob_avg",
+                "b_fair_prob_avg",
+                "a_implied_prob",
+                "b_implied_prob",
+                "diff_implied_prob",
+            ):
+                if column in predictions.columns:
+                    predictions[column] = np.nan
+        predictions = _merge_historical_odds(
+            predictions,
+            entry_offset_days=entry_offset_days,
+            require_verified_entry=require_verified_entry,
+        )
+        if not require_verified_entry and "opening_prob_a" in predictions.columns:
             mask = predictions["opening_prob_a"].notna()
             n_swapped = mask.sum()
             if n_swapped:
@@ -496,7 +656,10 @@ def _prepare_prediction_frame(
                     f"for {n_swapped}/{len(predictions)} fights"
                 )
         if entry_offset_for_features and "entry_prob_a" in predictions.columns:
-            mask = predictions["entry_prob_a"].notna()
+            mask = _verified_entry_mask(
+                predictions,
+                minimum_hours=float(entry_offset_days or 0.0) * 24.0,
+            )
             n_swapped = mask.sum()
             if n_swapped:
                 predictions.loc[mask, "a_implied_prob"] = predictions.loc[mask, "entry_prob_a"]
@@ -510,6 +673,31 @@ def _prepare_prediction_frame(
                     f"for {n_swapped}/{len(predictions)} fights"
                 )
 
+    predictions["model_odds_source_kind"] = ""
+    predictions["model_odds_source_file"] = ""
+    predictions["model_odds_observed_at"] = pd.Series(
+        pd.NaT, index=predictions.index, dtype="datetime64[ns, UTC]"
+    )
+    predictions["model_odds_hours_to_start"] = np.nan
+    predictions["model_odds_verified_prefight"] = False
+    if require_verified_entry:
+        model_mask = _verified_entry_mask(
+            predictions,
+            minimum_hours=float(entry_offset_days or 0.0) * 24.0,
+        )
+        for output, source in (
+            ("model_odds_source_kind", "entry_source_kind"),
+            ("model_odds_source_file", "entry_source_file"),
+            ("model_odds_observed_at", "entry_observed_at"),
+            ("model_odds_hours_to_start", "entry_hours_to_start"),
+            ("model_odds_verified_prefight", "entry_verified_prefight"),
+        ):
+            if source in predictions.columns:
+                values = predictions.loc[model_mask, source]
+                if output == "model_odds_observed_at":
+                    values = pd.to_datetime(values, errors="coerce", utc=True)
+                predictions.loc[model_mask, output] = values.array
+
     for model_name, model_result in model_results.items():
         predictions = _append_model_predictions(predictions, model_name, model_result)
 
@@ -517,8 +705,19 @@ def _prepare_prediction_frame(
         predictions,
         market_prob_col_a,
         market_prob_col_b,
+        require_verified_entry=require_verified_entry,
+        minimum_entry_hours=float(entry_offset_days or 0.0) * 24.0,
     )
-    predictions["odds_source"] = odds_source
+    predictions["bet_eligible"] = (
+        predictions["a_market_prob"].notna()
+        & predictions["b_market_prob"].notna()
+    )
+    if require_verified_entry:
+        predictions["bet_eligible"] &= (
+            _verified_prefight_mask(predictions, "model_odds_verified_prefight")
+            & _verified_prefight_mask(predictions, "market_verified_prefight")
+        )
+    predictions["odds_source"] = predictions.get("odds_source", odds_source)
     predictions = predictions.sort_values("event_date").reset_index(drop=True)
     return predictions, odds_source
 
@@ -571,10 +770,27 @@ def _normalized_probability(value: float, *, floor: float = 0.01, ceiling: float
     return float(min(max(value, floor), ceiling))
 
 
+def _observed_best_ask(row: pd.Series, bet_side: Optional[str]) -> Optional[float]:
+    """Return an observed executable ask for the bet side, if the row carries one.
+
+    Rows without ``observed_best_ask_<side>`` keep the synthetic half-spread
+    estimate, so existing callers are unchanged.
+    """
+    if bet_side not in {"a", "b"}:
+        return None
+    value = _clean_optional_float(row.get(f"observed_best_ask_{bet_side}"))
+    if value is None or not (0.0 < value < 1.0):
+        return None
+    return float(value)
+
+
 def _estimated_best_ask(
     market_prob: float,
     execution_config: BacktestExecutionConfig,
+    observed_best_ask: Optional[float] = None,
 ) -> float:
+    if observed_best_ask is not None and 0.0 < observed_best_ask < 1.0:
+        return _normalized_probability(float(observed_best_ask))
     return _normalized_probability(market_prob + execution_config.assumed_half_spread)
 
 
@@ -582,7 +798,12 @@ def _assumed_book_liquidity(
     row: pd.Series,
     market_prob: float,
     execution_config: BacktestExecutionConfig,
+    bet_side: Optional[str] = None,
 ) -> float:
+    if bet_side in {"a", "b"}:
+        value = _clean_optional_float(row.get(f"observed_book_liquidity_{bet_side}"))
+        if value is not None and value > 0:
+            return float(value)
     for column in ("assumed_book_liquidity", "book_liquidity", "liquidity"):
         value = _clean_optional_float(row.get(column))
         if value is not None and value > 0:
@@ -630,9 +851,15 @@ def _simulate_realistic_fill(
     market_prob: float,
     requested_stake: float,
     execution_config: BacktestExecutionConfig,
+    bet_side: Optional[str] = None,
 ) -> dict[str, object]:
-    best_ask = _estimated_best_ask(market_prob, execution_config)
-    available_liquidity = _assumed_book_liquidity(row, market_prob, execution_config)
+    observed_ask = _observed_best_ask(row, bet_side)
+    best_ask = _estimated_best_ask(
+        market_prob, execution_config, observed_best_ask=observed_ask
+    )
+    available_liquidity = _assumed_book_liquidity(
+        row, market_prob, execution_config, bet_side=bet_side
+    )
     result: dict[str, object] = {
         "ok": True,
         "requested_stake": float(requested_stake),
@@ -643,6 +870,7 @@ def _simulate_realistic_fill(
         "slippage": 0.0,
         "partial_fill": False,
         "reason": "",
+        "observed_best_ask_used": observed_ask is not None,
     }
 
     if requested_stake <= 0:
@@ -1031,6 +1259,8 @@ def _simulate_backtest_predictions(
         event_date = pd.Timestamp(row.get("event_date"))
         if bet_start is not None and event_date < bet_start:
             continue
+        if "bet_eligible" in row.index and not bool(row.get("bet_eligible", False)):
+            continue
 
         if bankroll.is_stopped:
             logger.warning(f"Stop-loss triggered for strategy '{strategy_config.name}'.")
@@ -1054,7 +1284,11 @@ def _simulate_backtest_predictions(
             continue
 
         quoted_price = (
-            _estimated_best_ask(candidate["market_prob"], execution_config)
+            _estimated_best_ask(
+                candidate["market_prob"],
+                execution_config,
+                observed_best_ask=_observed_best_ask(row, candidate["bet_side"]),
+            )
             if execution_config.mode == "realistic"
             else float(candidate["market_prob"])
         )
@@ -1077,6 +1311,7 @@ def _simulate_backtest_predictions(
                 float(candidate["market_prob"]),
                 requested_stake,
                 execution_config,
+                bet_side=candidate["bet_side"],
             )
             if not fill["ok"]:
                 execution_metrics["skipped_for_liquidity_count"] = (
@@ -1165,6 +1400,7 @@ def _simulate_backtest_predictions(
             "market_prob": candidate["market_prob"],
             "edge": candidate["edge"],
             "won": candidate["won"],
+            "observed_best_ask_used": bool(fill.get("observed_best_ask_used", False)),
             "profit": np.nan,
             "bankroll_after": np.nan,
             "available_cash_before_bet": placed.get("available_cash_before", np.nan),

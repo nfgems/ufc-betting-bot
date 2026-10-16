@@ -174,6 +174,8 @@ class PositionMonitor:
         Returns list of position dicts with token_id, size, avg_price, etc.
         """
         if not self.wallet_address:
+            if strict:
+                raise PositionDataPartialError("Wallet address unavailable for positions")
             logger.warning("No wallet address — cannot fetch positions")
             return []
 
@@ -182,6 +184,7 @@ class PositionMonitor:
         page_cap = 50  # hard stop to avoid runaway loops
         completed = False
         last_page_size = 0
+        seen_tokens: set[str] = set()
 
         for _ in range(page_cap):
             try:
@@ -211,6 +214,13 @@ class PositionMonitor:
                         "Polymarket positions response contains a non-object row"
                     )
                 page = _validate_positions_page(payload)
+                for position in page:
+                    if float(position["size"]) <= 0:
+                        continue
+                    token = str(position.get("asset", position.get("token_id", "")))
+                    if token in seen_tokens:
+                        raise ValueError("Polymarket positions snapshot repeats an active token")
+                    seen_tokens.add(token)
             except Exception as e:
                 logger.warning(
                     "Failed to fetch positions (offset=%s) after retries: %s",
@@ -455,6 +465,8 @@ class PositionMonitor:
         history after a later page fails.
         """
         if not self.wallet_address:
+            if strict:
+                raise PositionDataPartialError("Wallet address unavailable for closed positions")
             return []
 
         page_size = min(

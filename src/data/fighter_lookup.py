@@ -6,6 +6,7 @@ Used during live predictions to populate the full feature set (rolling stats,
 physical attributes, etc.) instead of relying on median imputation.
 """
 
+import hashlib
 import logging
 import re
 import time
@@ -26,22 +27,47 @@ from src.config import (
     EWM_HALFLIFE,
     ELO_INITIAL,
     PROCESSED_DATA_DIR,
+    RAW_DATA_DIR,
 )
 from src.data.name_utils import (
+    KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS,
     REVIEWED_FIGHTER_IDENTITIES,
     _tokens_match,
+    derive_ambiguous_fighter_name_keys,
+    fighter_identity_is_ambiguous,
+    fighter_identity_key,
     normalize_cross_source_name,
     normalize_person_name,
+    normalize_ufcstats_id,
     person_name_tokens,
     reviewed_fighter_identity_id,
+    reviewed_spelling_binding_id,
+    reviewed_spelling_binding_name,
+    reviewed_spelling_bindings,
     same_person_name,
+)
+from src.data.event_context import coerce_nullable_bool, coerce_scheduled_rounds
+from src.data.profile_integrity import (
+    load_profile_decisions,
+    model_safe_values_by_ufcstats_id,
+)
+from src.data.reviewed_roster_recovery import (
+    REVIEWED_ROSTER_RECOVERY_REGISTRY_PATH,
+    load_reviewed_roster_recovery_registry,
+)
+from src.data.reviewed_roster_identity import (
+    REVIEWED_ROSTER_IDENTITY_REGISTRY_PATH,
+    load_reviewed_roster_identity_registry,
 )
 from src.data.ufcstats_http import (
     DEFAULT_UFCSTATS_HEADERS,
     normalize_ufcstats_url,
     request_ufcstats,
 )
-from src.features.stance_utils import encode_stance
+from src.features.stance_utils import STANCE_ENCODING_MAP, encode_stance
+
+
+from src.data.selected_source_inputs import active_sources, selected_path, selected_cache
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +90,7 @@ _pre_ufc_long_rows_cache: Optional[pd.DataFrame] = None
 _elo_state_cache: dict[str, dict[str, Any]] = {}
 _elo_state_cache_mtime: dict[str, float] = {}
 _amateur_summary_cache: dict[str, dict] | None = None
+_ambiguous_name_keys_cache: tuple[float, frozenset[str]] | None = None
 _REVIEWED_CROSS_SOURCE_NAME_KEYS = frozenset(
     normalize_cross_source_name(tracked_name)
     for identity in REVIEWED_FIGHTER_IDENTITIES.values()
@@ -80,8 +107,64 @@ def _same_fighter_identity(query: object, candidate: object) -> bool:
     return same_person_name(query, candidate)
 
 
-def _fighter_url_identity_cache_key(value: object) -> str:
-    """Keep reviewed identities and suffix-colliding negative controls separate."""
+class AmbiguousFighterIdentityError(ValueError):
+    """A name-only lookup can select more than one UFCStats fighter."""
+
+
+def _ambiguous_fighter_name_keys() -> frozenset[str]:
+    """Derive collision keys from the local inventory, with a safe fallback."""
+    global _ambiguous_name_keys_cache
+    inventory_path = selected_path("profiles", RAW_DATA_DIR / "ufc_fighters_scraped.csv")
+    if active_sources() is not None:
+        def selected_collisions():
+            inventory = pd.read_csv(inventory_path, usecols=['name', 'fighter_url'])
+            derived = derive_ambiguous_fighter_name_keys(
+                {'name': row.name, 'fighter_id': row.fighter_url}
+                for row in inventory.itertuples(index=False)
+            )
+            return frozenset(set(KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS) | set(derived))
+        return selected_cache('identity_collisions', selected_collisions)
+    try:
+        mtime = inventory_path.stat().st_mtime
+    except OSError:
+        if active_sources() is not None:
+            raise
+        return KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
+    if (
+        _ambiguous_name_keys_cache is not None
+        and _ambiguous_name_keys_cache[0] == mtime
+    ):
+        return _ambiguous_name_keys_cache[1]
+    try:
+        inventory = pd.read_csv(inventory_path, usecols=["name", "fighter_url"])
+        derived = derive_ambiguous_fighter_name_keys(
+            (
+                {"name": row.name, "fighter_id": row.fighter_url}
+                for row in inventory.itertuples(index=False)
+            )
+        )
+    except Exception as exc:
+        if active_sources() is not None:
+            raise
+        logger.warning(
+            "Failed to derive fighter identity collisions from %s: %s",
+            inventory_path,
+            exc,
+        )
+        derived = frozenset()
+    resolved = frozenset(set(KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS) | set(derived))
+    _ambiguous_name_keys_cache = (mtime, resolved)
+    return resolved
+
+
+def _fighter_url_identity_cache_key(
+    value: object,
+    fighter_id: object = None,
+) -> str:
+    """Share safe aliases while keeping collision identities scoped."""
+    normalized_id = normalize_ufcstats_id(fighter_id)
+    if normalized_id:
+        return f"ufcstats:{normalized_id}"
     reviewed_id = reviewed_fighter_identity_id(value)
     if reviewed_id is not None:
         return f"reviewed:{reviewed_id}"
@@ -95,6 +178,13 @@ def _fighter_url_identity_cache_key(value: object) -> str:
 def _load_amateur_summary_cache() -> dict[str, dict]:
     """Load and cache per-fighter amateur career summaries from the supplement CSV."""
     global _amateur_summary_cache
+    if active_sources() is not None:
+        from src.features.build_features import _compute_amateur_summary, _load_amateur_supplement, _retained_long_mask
+        def selected_summary():
+            rows = _load_amateur_supplement(selected_path("amateur_history", ""), include_reviewed=True)
+            summary = _compute_amateur_summary(rows.loc[~_retained_long_mask(rows)])
+            return {row["fighter"]: row.to_dict() for _, row in summary.iterrows()} if not summary.empty else {}
+        return selected_cache("amateur_summary", selected_summary)
     if _amateur_summary_cache is not None:
         return _amateur_summary_cache
 
@@ -102,6 +192,7 @@ def _load_amateur_summary_cache() -> dict[str, dict]:
         _compute_amateur_summary,
         _load_amateur_supplement,
         _resolve_amateur_supplement_path,
+        _retained_long_mask,
     )
 
     _amateur_summary_cache = {}
@@ -113,7 +204,7 @@ def _load_amateur_summary_cache() -> dict[str, dict]:
     if supplement.empty:
         return _amateur_summary_cache
 
-    summary_df = _compute_amateur_summary(supplement)
+    summary_df = _compute_amateur_summary(supplement.loc[~_retained_long_mask(supplement)])
     for _, row in summary_df.iterrows():
         fighter = row["fighter"]
         _amateur_summary_cache[fighter] = {
@@ -121,6 +212,16 @@ def _load_amateur_summary_cache() -> dict[str, dict]:
         }
     logger.info(f"Loaded amateur career summaries for {len(_amateur_summary_cache)} fighters")
     return _amateur_summary_cache
+
+
+def _amateur_summary_label(name: object, fighter_id: object) -> object:
+    """Return the training build's amateur-summary label for a live name (owner decision D10)."""
+    if reviewed_spelling_binding_id(name) is None:
+        return name
+    return reviewed_spelling_binding_name(
+        name,
+        fighter_identity_key(name, fighter_id, ambiguous_name_keys=_ambiguous_fighter_name_keys()),
+    )
 
 
 WEIGHT_CLASS_WEIGHT_MAP = {
@@ -348,6 +449,16 @@ def _build_lookup_provenance(
             if isinstance(fighter_b_result, dict)
             else None
         ),
+        "fighter_a_id": (
+            fighter_a_result.get("fighter_id")
+            if isinstance(fighter_a_result, dict)
+            else None
+        ),
+        "fighter_b_id": (
+            fighter_b_result.get("fighter_id")
+            if isinstance(fighter_b_result, dict)
+            else None
+        ),
         "processed_dir": str(Path(processed_data_dir)),
     }
 
@@ -433,9 +544,15 @@ def _fighter_cache_key(
     fighter_name: str,
     as_of_date: Optional[str] = None,
     *,
+    fighter_id: object = None,
     reference_date: Any = None,
     prefer_live_refresh: bool = False,
     processed_data_dir: Optional[Path] = None,
+    training_spec: Any = None,
+    strict_mode: bool = False,
+    allowed_profile_fields: Optional[set[str]] = None,
+    profile_integrity_decisions_path: Optional[Path] = None,
+    prior_profile_integrity_decisions_path: Optional[Path] = None,
 ) -> str:
     resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
     reference_token = ""
@@ -443,11 +560,53 @@ def _fighter_cache_key(
         reference_token = _reference_date_cache_token(reference_date)
     features_token = f"{_path_mtime(_features_path(resolved_dir)):.6f}"
     refresh_token = "live" if prefer_live_refresh else "processed"
+    spec = _coerce_training_spec(training_spec)
+    spec_payload = "|".join(
+        (
+            str(getattr(spec, "name", "") or ""),
+            str(getattr(spec, "dataset_variant", "") or ""),
+            "strict" if strict_mode else "non_strict",
+            (
+                "all_profile_fields"
+                if allowed_profile_fields is None
+                else ",".join(sorted(allowed_profile_fields))
+            ),
+        )
+    )
+    spec_token = hashlib.sha256(spec_payload.encode("utf-8")).hexdigest()[:16]
+    decision_payload_parts: list[str] = []
+    for path in (
+        profile_integrity_decisions_path,
+        prior_profile_integrity_decisions_path,
+        REVIEWED_ROSTER_RECOVERY_REGISTRY_PATH,
+        REVIEWED_ROSTER_IDENTITY_REGISTRY_PATH,
+    ):
+        if path is None:
+            decision_payload_parts.append("")
+            continue
+        resolved_path = Path(path).resolve(strict=False)
+        decision_payload_parts.append(
+            f"{resolved_path}:{_path_mtime(resolved_path):.6f}"
+        )
+    decision_token = hashlib.sha256(
+        "|".join(decision_payload_parts).encode("utf-8")
+    ).hexdigest()[:16]
+    normalized_id = normalize_ufcstats_id(fighter_id)
+    identity_token = (
+        f"ufcstats:{normalized_id}"
+        if normalized_id
+        else fighter_identity_key(
+            fighter_name,
+            ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+        ) or f"unresolved:{normalize_person_name(fighter_name)}"
+    )
     return (
-        f"{normalize_person_name(fighter_name)}::"
+        f"{identity_token}::"
         f"{str(as_of_date or '')}::"
         f"{reference_token}::"
         f"{refresh_token}::"
+        f"{spec_token}::"
+        f"{decision_token}::"
         f"{features_token}::"
         f"{_normalized_path_key(resolved_dir)}"
     )
@@ -493,11 +652,15 @@ def _load_processed_feature_history(*, processed_data_dir: Optional[Path] = None
         return df
 
     if not features_path.exists():
+        if active_sources() is not None:
+            raise FileNotFoundError(features_path)
         return _store(pd.DataFrame())
 
     try:
         history = pd.read_csv(features_path, parse_dates=["event_date"])
     except Exception as exc:
+        if active_sources() is not None:
+            raise
         logger.warning("Failed to read processed features for fighter lookup from %s: %s", features_path, exc)
         return _store(pd.DataFrame())
 
@@ -526,10 +689,14 @@ def _load_processed_fights_cleaned(*, processed_data_dir: Optional[Path] = None)
         return df
 
     if not fights_path.exists():
+        if active_sources() is not None:
+            raise FileNotFoundError(fights_path)
         return _store(pd.DataFrame())
     try:
-        fights = pd.read_csv(fights_path, parse_dates=["event_date"])
+        fights = pd.read_csv(fights_path, parse_dates=["event_date"], dtype={"fighter_a_id": object, "fighter_b_id": object})
     except Exception as exc:
+        if active_sources() is not None:
+            raise
         logger.warning("Failed to read cleaned fights for fighter lookup from %s: %s", fights_path, exc)
         return _store(pd.DataFrame())
     fights["event_date"] = pd.to_datetime(fights["event_date"], errors="coerce")
@@ -539,6 +706,10 @@ def _load_processed_fights_cleaned(*, processed_data_dir: Optional[Path] = None)
 def _load_pre_ufc_long_rows() -> pd.DataFrame:
     """Long-format pre-UFC supplement rows — training's rolling-stat seed input."""
     global _pre_ufc_long_rows_cache
+    if active_sources() is not None:
+        from src.features.build_features import _load_pre_ufc_supplement
+        return selected_cache("professional_history", lambda: _load_pre_ufc_supplement(
+            selected_path("professional_history", ""), include_reviewed=True))
     if _pre_ufc_long_rows_cache is not None:
         return _pre_ufc_long_rows_cache
 
@@ -555,11 +726,24 @@ def _load_pre_ufc_long_rows() -> pd.DataFrame:
     return _pre_ufc_long_rows_cache
 
 
+def _selected_reviewed_career_name(name: str, fighter_id: object) -> str | None:
+    """Reuse an existing reviewed spelling only for its selected exact owner."""
+    if active_sources() is None:
+        return None
+    reviewed_id = reviewed_fighter_identity_id(name)
+    if reviewed_id is None:
+        return None
+    if normalize_ufcstats_id(fighter_id) != reviewed_id:
+        raise ValueError('Selected reviewed career name and ID disagree')
+    return str(REVIEWED_FIGHTER_IDENTITIES[reviewed_id]['canonical_name'])
+
+
 def _point_in_time_pre_ufc_summary(
     *fighter_names: str,
     fighter_features: Optional[dict] = None,
     reference_date: Any = None,
     processed_data_dir: Optional[Path] = None,
+    fighter_id: object = None,
 ) -> dict:
     """Return a conservative live pre-UFC summary for one exact identity.
 
@@ -573,18 +757,50 @@ def _point_in_time_pre_ufc_summary(
     if rows.empty or not {"fighter", "event_date"}.issubset(rows.columns):
         return {}
 
+    retained_summary = _retained_career_summary(fighter_id=fighter_id, reference_date=reference_date, history=rows)
+    if retained_summary is not None:
+        return retained_summary
+    from src.features.build_features import _retained_long_mask
+
+    rows = rows.loc[~_retained_long_mask(rows)]
     candidates: list[str] = []
     for value in fighter_names:
         if value is None:
             continue
         candidate = str(value).strip()
+        candidate = _selected_reviewed_career_name(candidate, fighter_id) or candidate
         if candidate and candidate not in candidates:
             candidates.append(candidate)
-    available = set(rows["fighter"].dropna().astype(str))
-    exact_matches = [candidate for candidate in candidates if candidate in available]
-    if len(exact_matches) != 1:
-        return {}
-    fighter = exact_matches[0]
+    # Mirror training's identity keying: when the supplement rows carry the
+    # stateful ``fighter_key`` (the loader always attaches it), the fighter is
+    # selected by that key, so a card spelling that differs from the supplement
+    # only by case or accent is the same identity, and an ambiguous spelling
+    # resolves only through its UFCStats id (or not at all). A legacy unkeyed
+    # frame keeps the exact-spelling match.
+    keyed = "fighter_key" in rows.columns
+    expected_identity = None
+    if keyed:
+        ambiguous_keys = _ambiguous_fighter_name_keys()
+        candidate_keys: dict[str, str] = {}
+        for candidate in candidates:
+            key = fighter_identity_key(candidate, fighter_id, ambiguous_name_keys=ambiguous_keys)
+            if key is not None:
+                candidate_keys.setdefault(key, candidate)
+        available_keys = set(rows["fighter_key"].dropna().astype(str))
+        matched_keys = [key for key in candidate_keys if key in available_keys]
+        if len(matched_keys) != 1:
+            return {}
+        expected_identity = matched_keys[0]
+        fighter = candidate_keys[expected_identity]
+    else:
+        available = set(rows["fighter"].dropna().astype(str))
+        exact_matches = [candidate for candidate in candidates if candidate in available]
+        if len(exact_matches) != 1:
+            return {}
+        fighter = exact_matches[0]
+    reviewed_name = _selected_reviewed_career_name(fighter, fighter_id)
+    if reviewed_name is not None:
+        rows = rows.loc[rows['fighter_id'].map(normalize_ufcstats_id).eq(normalize_ufcstats_id(fighter_id))]
 
     try:
         reference_ts = _coerce_reference_timestamp(reference_date).normalize()
@@ -594,14 +810,62 @@ def _point_in_time_pre_ufc_summary(
     from src.features.build_features import (
         _compute_pre_ufc_summary,
         _filter_pre_ufc_rows_before_tracked_debut,
+        _is_non_ufc_tracked_event,
         _tracked_ufc_debut_dates,
     )
 
     tracked_fights = _load_processed_fights_cleaned(
         processed_data_dir=processed_data_dir
     )
-    debut_dates = _tracked_ufc_debut_dates(tracked_fights)
-    tracked_debut = debut_dates.get(fighter, pd.NaT)
+    if keyed:
+        tracked_fights = _tracked_fights_with_identity_keys(tracked_fights)
+    # The fighter's own tracked rows (debut and same-day rule) are selected by
+    # the identity key, as training's debut filter does. One restriction is
+    # kept from before: outside an active selection a reviewed spelling never
+    # connects to a differently spelled tracked row (the selected reviewed
+    # branch below serves reviewed owners).
+    spelling_gate = not keyed or (
+        reviewed_name is None and reviewed_fighter_identity_id(fighter) is not None
+    )
+    own_rows = []
+    if not tracked_fights.empty and "event_date" in tracked_fights.columns:
+        for side in ("a", "b"):
+            name_col = f"fighter_{side}"
+            key_col = f"__fighter_{side}_key"
+            if name_col in tracked_fights.columns:
+                own = tracked_fights
+                if spelling_gate:
+                    own = own[own[name_col] == fighter]
+                if keyed:
+                    own = own[own[key_col].eq(expected_identity)] if key_col in own.columns else own.iloc[0:0]
+                if not own.empty:
+                    frame = pd.DataFrame({"fighter": fighter, "event_date": own["event_date"].values})
+                    if keyed:
+                        frame["fighter_key"] = expected_identity
+                    frame["event_name"] = own["event_name"].values if "event_name" in own.columns else ""
+                    own_rows.append(frame)
+    if keyed:
+        tracked_debut = pd.NaT
+        if own_rows:
+            debut_dates = _tracked_ufc_debut_dates(pd.concat(own_rows, ignore_index=True), identity_column="fighter_key")
+            tracked_debut = debut_dates.get(expected_identity, pd.NaT)
+    else:
+        debut_dates = _tracked_ufc_debut_dates(tracked_fights)
+        tracked_debut = debut_dates.get(fighter, pd.NaT)
+    if reviewed_name is not None:
+        # The selected older UFC rows can use another already-reviewed spelling.
+        # Match their actual owner without rewriting names, IDs or multiplicities.
+        # Same debut rule as training: UFC-owned tracked bouts define the debut,
+        # falling back to the earliest tracked bout when none is UFC-owned.
+        owner_key = f'ufcstats:{normalize_ufcstats_id(fighter_id)}'
+        matched_rows = [row for row in tracked_fights.itertuples(index=False)
+                        if any(_history_side_matches_identity(row, side, owner_key, fighter_id)
+                               for side in ('a', 'b'))]
+        ufc_owned_rows = [row for row in matched_rows
+                          if not _is_non_ufc_tracked_event(getattr(row, 'event_name', None))]
+        matched_dates = [row.event_date for row in (ufc_owned_rows or matched_rows)]
+        dates = pd.to_datetime(pd.Series(matched_dates, dtype=object), errors='coerce', utc=True).dropna()
+        tracked_debut = dates.min().tz_localize(None) if not dates.empty else pd.NaT
     if pd.notna(tracked_debut):
         cutoff = min(pd.Timestamp(tracked_debut), reference_ts)
     else:
@@ -615,18 +879,32 @@ def _point_in_time_pre_ufc_summary(
             return {}
         cutoff = reference_ts
 
-    fighter_rows = rows[rows["fighter"] == fighter].copy()
-    synthetic_debut = pd.DataFrame(
-        [{"fighter": fighter, "event_date": cutoff}]
-    )
+    if keyed:
+        fighter_rows = rows[rows["fighter_key"].eq(expected_identity)].copy()
+        synthetic_debut = pd.DataFrame(
+            [{"fighter": fighter, "fighter_key": expected_identity, "event_date": cutoff}]
+        )
+    else:
+        fighter_rows = rows[rows["fighter"] == fighter].copy()
+        synthetic_debut = pd.DataFrame(
+            [{"fighter": fighter, "event_date": cutoff}]
+        )
+    # Mirror training: the filter also sees the fighter's own tracked bouts
+    # (with event names) so a supplement bout on the same day as a tracked bout
+    # is dropped exactly as build_features does. The synthetic row carries no
+    # event name and therefore keeps the cutoff as the effective debut.
+    tracked_for_filter = [synthetic_debut]
+    if own_rows:
+        tracked_for_filter = own_rows + [synthetic_debut.assign(event_name="")]
     bounded = _filter_pre_ufc_rows_before_tracked_debut(
         fighter_rows,
-        synthetic_debut,
+        pd.concat(tracked_for_filter, ignore_index=True),
     )
     if bounded.empty:
         return {}
     summary = _compute_pre_ufc_summary(bounded)
-    if len(summary) != 1 or summary.iloc[0].get("fighter") != fighter:
+    expected_label = expected_identity if keyed else fighter
+    if len(summary) != 1 or summary.iloc[0].get("fighter") != expected_label:
         return {}
     return {
         column: summary.iloc[0][column]
@@ -635,31 +913,86 @@ def _point_in_time_pre_ufc_summary(
     }
 
 
+def _retained_career_summary(*, fighter_id: object, reference_date: Any, history: pd.DataFrame | None = None,
+                             amateur: bool = False) -> dict | None:
+    """Return a stable owner's retained summary; empty means unknown at cutoff."""
+    from src.features.build_features import (
+        _compute_amateur_summary, _compute_pre_ufc_summary, _eligible_retained_history,
+        _load_amateur_supplement, _resolve_amateur_supplement_path, _retained_long_mask,
+    )
+    if history is None:
+        history = (_load_amateur_supplement(_resolve_amateur_supplement_path(), include_reviewed=True)
+                   if amateur else _load_pre_ufc_long_rows())
+    identity = normalize_ufcstats_id(fighter_id)
+    retained = history.loc[_retained_long_mask(history)]
+    if not identity or retained.empty or identity not in set(retained["fighter_id"]):
+        return None
+    try:
+        cutoff = _coerce_reference_timestamp(reference_date)
+    except (TypeError, ValueError):
+        return {}
+    rows = _eligible_retained_history(retained, fighter_id=identity, available_before=cutoff)
+    summary = (_compute_amateur_summary if amateur else _compute_pre_ufc_summary)(rows.assign(fighter=identity))
+    return {key: value for key, value in summary.iloc[0].to_dict().items() if key != "fighter"} if len(summary) == 1 else {}
+
+
+def _tracked_fights_with_identity_keys(tracked_fights: pd.DataFrame) -> pd.DataFrame:
+    """Attach ``__fighter_<side>_key`` columns to a wide tracked frame (training's keying)."""
+    if tracked_fights.empty:
+        return tracked_fights
+    frame = tracked_fights.copy()
+    ambiguous = _ambiguous_fighter_name_keys()
+    for side in ("a", "b"):
+        name_col, id_col, key_col = f"fighter_{side}", f"fighter_{side}_id", f"__fighter_{side}_key"
+        if name_col in frame.columns and key_col not in frame.columns:
+            ids = frame[id_col].values if id_col in frame.columns else [None] * len(frame)
+            frame[key_col] = [
+                fighter_identity_key(name, fighter_id, ambiguous_name_keys=ambiguous)
+                for name, fighter_id in zip(frame[name_col].values, ids)
+            ]
+    return frame
+
+
 def _pre_ufc_won_seed(
     canonical_name: str,
     *,
     debut_date: Any = None,
+    fighter_id: object = None,
 ) -> list[tuple[pd.Timestamp, float]]:
     """
     Chronological (event_date, won) tuples from the pre-UFC supplement for a
     fighter. Training seeds every fighter's rolling stats with these rows; the
     supplement only carries the ``won`` stat, so seeding only shifts roll_won
     (NaN stat columns don't change EWM weighted means at the same positions).
+    Rows are selected by the stateful identity key when the supplement carries
+    one, so an ambiguous spelling seeds only through its UFCStats id.
     """
     if not canonical_name:
         return []
     rows = _load_pre_ufc_long_rows()
     if rows.empty or "fighter" not in rows.columns:
         return []
-    rows = rows[rows["fighter"] == canonical_name]
+    from src.features.build_features import _retained_long_mask
+
+    identity = None
+    if "fighter_key" in rows.columns:
+        identity = fighter_identity_key(
+            canonical_name, fighter_id, ambiguous_name_keys=_ambiguous_fighter_name_keys()
+        )
+        if identity is None:
+            return []
+        rows = rows[rows["fighter_key"].eq(identity) & ~_retained_long_mask(rows)]
+    else:
+        rows = rows[(rows["fighter"] == canonical_name) & ~_retained_long_mask(rows)]
     if debut_date is not None:
         from src.features.build_features import _filter_pre_ufc_rows_before_tracked_debut
 
+        synthetic = {"fighter": canonical_name, "event_date": debut_date}
+        if identity is not None:
+            synthetic["fighter_key"] = identity
         rows = _filter_pre_ufc_rows_before_tracked_debut(
             rows,
-            pd.DataFrame(
-                [{"fighter": canonical_name, "event_date": debut_date}]
-            ),
+            pd.DataFrame([synthetic]),
         )
     if rows.empty:
         return []
@@ -678,6 +1011,7 @@ def _pre_ufc_won_seed(
 def _compute_processed_opp_strength(
     fighter_name: str,
     *,
+    fighter_id: object = None,
     cutoff: Optional[pd.Timestamp] = None,
     processed_data_dir: Optional[Path] = None,
     window: int = 5,
@@ -695,20 +1029,32 @@ def _compute_processed_opp_strength(
     if history.empty or "event_date" not in history.columns:
         return float("nan")
 
+    requested_identity = fighter_identity_key(
+        fighter_name,
+        fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+    if requested_identity is None:
+        return float("nan")
+
     # Chronological list of the fighter's fights with the exact dataset
     # spelling on each row. Training groups history by exact spelling, so
     # suffix collisions ("Lance Gibson" vs "Lance Gibson Jr.") must not merge:
     # when the requested name IS a dataset spelling, that spelling owns the
     # group (even if it has no prior fights yet); otherwise fall back to the
     # latest same-person spelling (caller-supplied name variants).
-    matched_rows: list[tuple[str, bool, float]] = []  # (spelling, before_cutoff, opp_roll_won)
+    matched_rows: list[tuple[str, bool, float]] = []
     for row in history.itertuples(index=False):
-        if _same_fighter_identity(fighter_name, getattr(row, "fighter_a", "")):
-            spelling = str(getattr(row, "fighter_a", ""))
+        if _history_side_matches_identity(
+            row, "a", requested_identity, fighter_id
+        ):
+            spelling = str(getattr(row, "fighter_a", fighter_name))
             opponent = getattr(row, "fighter_b", "")
             opp_roll_won = getattr(row, "b_roll_won", np.nan)
-        elif _same_fighter_identity(fighter_name, getattr(row, "fighter_b", "")):
-            spelling = str(getattr(row, "fighter_b", ""))
+        elif _history_side_matches_identity(
+            row, "b", requested_identity, fighter_id
+        ):
+            spelling = str(getattr(row, "fighter_b", fighter_name))
             opponent = getattr(row, "fighter_a", "")
             opp_roll_won = getattr(row, "a_roll_won", np.nan)
         else:
@@ -728,13 +1074,17 @@ def _compute_processed_opp_strength(
     if not matched_rows:
         return float("nan")
 
-    if any(spelling == fighter_name for spelling, _, _ in matched_rows):
-        group = fighter_name
-    else:
-        group = matched_rows[-1][0]
+    group_spelling = None
+    if requested_identity.startswith("name:"):
+        group_spelling = (
+            fighter_name
+            if any(spelling == fighter_name for spelling, _, _ in matched_rows)
+            else matched_rows[-1][0]
+        )
     past_opp_roll_won = [
-        wr for spelling, before_cutoff, wr in matched_rows
-        if spelling == group and before_cutoff
+        wr
+        for spelling, before_cutoff, wr in matched_rows
+        if before_cutoff and (group_spelling is None or spelling == group_spelling)
     ]
     if not past_opp_roll_won:
         return float("nan")
@@ -755,6 +1105,7 @@ def _compute_processed_opp_strength(
 def _roll_forward_processed_features(
     fighter_name: str,
     *,
+    fighter_id: object = None,
     cutoff_ts: pd.Timestamp,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
@@ -790,10 +1141,55 @@ def _roll_forward_processed_features(
     # keeping the full frame preserves the exact sort/tie behavior training
     # had (interleaved all-NaN supplement rows shift EWM positions, so tie
     # order is value-relevant).
+    requested_identity = fighter_identity_key(
+        fighter_name,
+        fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+    from src.features.build_features import _retained_long_mask, _scope_retained_history_owners
+
+    retained_history = _load_pre_ufc_long_rows()
+    retained_owners = retained_history.loc[_retained_long_mask(retained_history)]
+    stable_owner = normalize_ufcstats_id(fighter_id)
+    has_retained_owner = bool(stable_owner and not retained_owners.empty and stable_owner in set(retained_owners["fighter_id"]))
+    if has_retained_owner:
+        requested_identity = f"ufcstats:{stable_owner}"
+        fights_df = _scope_retained_history_owners(fights_df, retained_history)
+    if requested_identity is None:
+        return None
+    scoped_artifact = {"fighter_a_id", "fighter_b_id"}.issubset(
+        fights_df.columns
+    )
+    if has_retained_owner and not scoped_artifact:
+        return None
+    if not scoped_artifact and fighter_identity_is_ambiguous(
+        fighter_name,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    ):
+        return None
+
     mask = pd.Series(False, index=fights_df.index)
-    for col in ("fighter_a", "fighter_b"):
-        if col in fights_df.columns:
-            mask |= fights_df[col].fillna("").map(
+    for side in ("a", "b"):
+        name_col = f"fighter_{side}"
+        if name_col not in fights_df.columns:
+            continue
+        if scoped_artifact and has_retained_owner:
+            # The legacy helper deliberately returns a name key for ordinary
+            # names. This retained owner has an explicit independent stable
+            # binding, so require the observed chronology ID itself here.
+            mask |= fights_df[f"fighter_{side}_id"].map(normalize_ufcstats_id).eq(stable_owner)
+        elif scoped_artifact:
+            mask |= fights_df.apply(
+                lambda row: _history_side_matches_identity(
+                    row,
+                    side,
+                    requested_identity,
+                    fighter_id,
+                ),
+                axis=1,
+            )
+        else:
+            mask |= fights_df[name_col].fillna("").map(
                 lambda value: _same_fighter_identity(fighter_name, value)
             )
     matched = fights_df[mask]
@@ -803,11 +1199,18 @@ def _roll_forward_processed_features(
     long_rows = _compute_per_fight_stats(matched.sort_values("event_date"))
     if long_rows.empty:
         return None
-    long_rows = long_rows[
-        long_rows["fighter"].fillna("").map(
-            lambda value: _same_fighter_identity(fighter_name, value)
-        )
-    ]
+    if (
+        scoped_artifact
+        and requested_identity.startswith("ufcstats:")
+        and "fighter_key" in long_rows.columns
+    ):
+        long_rows = long_rows[long_rows["fighter_key"] == requested_identity]
+    else:
+        long_rows = long_rows[
+            long_rows["fighter"].fillna("").map(
+                lambda value: _same_fighter_identity(fighter_name, value)
+            )
+        ]
     if long_rows.empty:
         return None
 
@@ -819,16 +1222,20 @@ def _roll_forward_processed_features(
     if long_rows.empty:
         return None
     cutoff_norm = pd.Timestamp(cutoff_ts).normalize()
-    # Exact-spelling group discipline (see _lookup_processed_fighter): the
-    # requested name owns the group when it is a dataset spelling.
-    if (long_rows["fighter"] == fighter_name).any():
-        canonical = fighter_name
-    else:
+    if scoped_artifact and requested_identity.startswith("ufcstats:"):
         prior_rows = long_rows[long_rows["event_date"] <= cutoff_norm]
         if prior_rows.empty:
             return None
         canonical = str(prior_rows["fighter"].iloc[-1])
-    long_rows = long_rows[long_rows["fighter"] == canonical]
+    else:
+        if (long_rows["fighter"] == fighter_name).any():
+            canonical = fighter_name
+        else:
+            prior_rows = long_rows[long_rows["event_date"] <= cutoff_norm]
+            if prior_rows.empty:
+                return None
+            canonical = str(prior_rows["fighter"].iloc[-1])
+        long_rows = long_rows[long_rows["fighter"] == canonical]
     if long_rows[long_rows["event_date"] <= cutoff_norm].empty:
         return None
     marker = "__roll_forward_ufc_row"
@@ -836,11 +1243,43 @@ def _roll_forward_processed_features(
 
     pre_rows = _load_pre_ufc_long_rows()
     if not pre_rows.empty and "fighter" in pre_rows.columns:
-        pre_rows = pre_rows[pre_rows["fighter"] == canonical].copy()
+        from src.features.build_features import _retained_long_mask
+
+        bound = _retained_long_mask(pre_rows)
+        career_name = _selected_reviewed_career_name(canonical, fighter_id)
+        if career_name is not None:
+            legacy_match = pre_rows['fighter'].eq(career_name)
+            legacy_match &= pre_rows['fighter_id'].map(normalize_ufcstats_id).eq(stable_owner)
+        elif "fighter_key" in pre_rows.columns:
+            # Training seeds the rolling statistics by the stateful identity
+            # alone: an accent or case variant of the spelling is the same
+            # identity, and an ambiguous spelling contributes only rows bound
+            # to this id. One restriction is kept from before: outside a
+            # selection a reviewed spelling never connects to a differently
+            # spelled row (the selected branch above serves reviewed owners).
+            legacy_match = pre_rows["fighter_key"].eq(requested_identity)
+            if reviewed_fighter_identity_id(canonical) is not None:
+                legacy_match &= pre_rows['fighter'].eq(canonical)
+        else:
+            legacy_match = pre_rows['fighter'].eq(canonical)
+        pre_rows = pre_rows[((~bound) & legacy_match) |
+                            (bound & pre_rows["fighter_key"].eq(requested_identity)
+                             & requested_identity.startswith("ufcstats:"))].copy()
+        captures = pd.to_datetime(pre_rows.get("source_captured_at_utc", pd.Series(index=pre_rows.index, dtype=object)), errors="coerce", utc=True)
+        reference_cutoff = pd.to_datetime(cutoff_norm, utc=True)
+        pre_rows = pre_rows.loc[~_retained_long_mask(pre_rows) | (captures.notna() & (captures < reference_cutoff))]
         pre_rows = _filter_pre_ufc_rows_before_tracked_debut(
             pre_rows,
-            long_rows,
+            long_rows.assign(fighter=career_name) if career_name is not None else long_rows,
         )
+        if (
+            scoped_artifact
+            and requested_identity.startswith("ufcstats:")
+            and "fighter_key" in pre_rows.columns
+        ):
+            pre_rows = pre_rows[
+                pre_rows["fighter_key"] == requested_identity
+            ].copy()
 
     future_ufc = long_rows[long_rows["event_date"] > cutoff_norm]
     refreshed: dict[str, Any] = {}
@@ -870,6 +1309,7 @@ def _roll_forward_processed_features(
         virtual = {col: np.nan for col in long_rows.columns}
         virtual.update({
             "fighter": canonical,
+            "fighter_key": requested_identity,
             "opponent": "",
             "event_date": cutoff_norm,
             "result_label": "draw",  # placeholder; the virtual row is never counted
@@ -1018,6 +1458,7 @@ def _seeded_scrape_rolling(
     canonical_name: str,
     fight_rows: list[dict],
     reference_ts: pd.Timestamp,
+    *, fighter_id: object = None,
 ) -> Optional[dict]:
     """
     Training-parity rolling stats for the live-scrape path.
@@ -1051,9 +1492,27 @@ def _seeded_scrape_rolling(
 
     pre_rows = _load_pre_ufc_long_rows()
     if not pre_rows.empty and "fighter" in pre_rows.columns:
-        pre_rows = pre_rows[pre_rows["fighter"] == canonical_name].copy()
-        tracked_rows = scraped_long[["event_date"]].copy()
+        from src.features.build_features import _retained_long_mask
+
+        bound = _retained_long_mask(pre_rows)
+        identity = normalize_ufcstats_id(fighter_id)
+        legacy_match = pre_rows["fighter"].eq(canonical_name)
+        stateful_identity = None
+        if "fighter_key" in pre_rows.columns:
+            # Same identity keying as training's supplement seed: an ambiguous
+            # spelling seeds only through rows bound to this UFCStats id.
+            stateful_identity = fighter_identity_key(
+                canonical_name, fighter_id, ambiguous_name_keys=_ambiguous_fighter_name_keys()
+            )
+            legacy_match = pre_rows["fighter_key"].eq(stateful_identity) if stateful_identity is not None else pd.Series(False, index=pre_rows.index)
+        pre_rows = pre_rows[((~bound) & legacy_match) |
+                            (bound & pre_rows.get("fighter_id", pd.Series("", index=pre_rows.index)).eq(identity)
+                             & bool(identity))].copy()
+        tracked_columns = ["event_date"] + (["event_name"] if "event_name" in scraped_long.columns else [])
+        tracked_rows = scraped_long[tracked_columns].copy()
         tracked_rows["fighter"] = canonical_name
+        if stateful_identity is not None:
+            tracked_rows["fighter_key"] = stateful_identity
         pre_rows = _filter_pre_ufc_rows_before_tracked_debut(
             pre_rows,
             tracked_rows,
@@ -1333,9 +1792,47 @@ def _extract_prefixed_features(row: pd.Series, prefix: str) -> dict:
     return features
 
 
+def _row_value(row: object, field: str, default: object = None) -> object:
+    if isinstance(row, (pd.Series, dict)):
+        return row.get(field, default)
+    return getattr(row, field, default)
+
+
+def _history_side_identity_key(row: object, side: str) -> str | None:
+    return fighter_identity_key(
+        _row_value(row, f"fighter_{side}", ""),
+        _row_value(row, f"fighter_{side}_id"),
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+
+
+def _history_side_matches_identity(
+    row: object,
+    side: str,
+    requested_identity: str,
+    requested_fighter_id: object = None,
+) -> bool:
+    """Match a history side without accepting contradictory observed IDs."""
+    if requested_identity.startswith("name:"):
+        requested_name = requested_identity.removeprefix("name:")
+        if not _same_fighter_identity(
+            requested_name,
+            _row_value(row, f"fighter_{side}", ""),
+        ):
+            return False
+    elif _history_side_identity_key(row, side) != requested_identity:
+        return False
+    requested_id = normalize_ufcstats_id(requested_fighter_id)
+    observed_id = normalize_ufcstats_id(
+        _row_value(row, f"fighter_{side}_id")
+    )
+    return not requested_id or not observed_id or requested_id == observed_id
+
+
 def _lookup_processed_fighter(
     fighter_name: str,
     *,
+    fighter_id: object = None,
     as_of_date: Optional[str] = None,
     reference_date: Any = None,
     processed_data_dir: Optional[Path] = None,
@@ -1345,6 +1842,14 @@ def _lookup_processed_fighter(
     if history.empty:
         return None
 
+    requested_identity = fighter_identity_key(
+        fighter_name,
+        fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+    if requested_identity is None:
+        return None
+
     cutoff = pd.to_datetime(as_of_date, errors="coerce") if as_of_date is not None else None
     latest_features = None
     latest_fighter_name = fighter_name
@@ -1352,32 +1857,35 @@ def _lookup_processed_fighter(
     snapshot_exact = False
     prior_fights = []
 
-    # Pass 1: collect matched rows with their exact dataset spelling. Training
-    # groups fight history by exact spelling, so suffix collisions ("Lance
-    # Gibson" vs "Lance Gibson Jr.") must not merge histories: when the
-    # requested name IS a dataset spelling, that spelling owns the group;
-    # otherwise use the latest same-person spelling (caller name variants).
     matched_rows: list[tuple[Any, str, str]] = []  # (row, prefix, spelling)
     for row in history.itertuples(index=False):
-        if _same_fighter_identity(fighter_name, getattr(row, "fighter_a", "")):
+        if _history_side_matches_identity(
+            row, "a", requested_identity, fighter_id
+        ):
             matched_rows.append((row, "a_", str(getattr(row, "fighter_a", fighter_name))))
-        elif _same_fighter_identity(fighter_name, getattr(row, "fighter_b", "")):
+        elif _history_side_matches_identity(
+            row, "b", requested_identity, fighter_id
+        ):
             matched_rows.append((row, "b_", str(getattr(row, "fighter_b", fighter_name))))
 
     if not matched_rows:
         return None
 
-    if any(spelling == fighter_name for _, _, spelling in matched_rows):
-        group_spelling = fighter_name
-    else:
-        group_spelling = matched_rows[-1][2]
+    group_spelling = None
+    if requested_identity.startswith("name:"):
+        group_spelling = (
+            fighter_name
+            if any(spelling == fighter_name for _, _, spelling in matched_rows)
+            else matched_rows[-1][2]
+        )
 
     for row, prefix, spelling in matched_rows:
-        if spelling != group_spelling:
+        if group_spelling is not None and spelling != group_spelling:
             continue
         event_date = pd.to_datetime(getattr(row, "event_date", None), errors="coerce")
         fighter_value = spelling
-        opponent = getattr(row, "fighter_b" if prefix == "a_" else "fighter_a", "")
+        opponent_side = "b" if prefix == "a_" else "a"
+        opponent = getattr(row, f"fighter_{opponent_side}", "")
 
         result = _processed_fight_result(
             fighter_value,
@@ -1388,6 +1896,11 @@ def _lookup_processed_fighter(
             prior_fights.append(
                 {
                     "opponent": opponent,
+                    "opponent_id": getattr(
+                        row,
+                        f"fighter_{opponent_side}_id",
+                        None,
+                    ),
                     "won": 1 if result == "win" else 0,
                     "result": result,
                     "winner": getattr(row, "winner", ""),
@@ -1436,10 +1949,13 @@ def _lookup_processed_fighter(
         try:
             refreshed = _roll_forward_processed_features(
                 latest_fighter_name,
+                fighter_id=fighter_id,
                 cutoff_ts=effective_date,
                 processed_data_dir=processed_data_dir,
             )
         except Exception as exc:
+            if active_sources() is not None:
+                raise
             logger.warning(
                 "Roll-forward of processed features failed for %s: %s — "
                 "serving time-aged snapshot values",
@@ -1457,6 +1973,21 @@ def _lookup_processed_fighter(
             latest_features["age_over_35"] = float(float(aged) > 35)
             latest_features["age_under_25"] = float(float(aged) < 25)
 
+    if active_sources() is not None and cutoff is not None and reference_date is not None:
+        # Selected replay keeps history strictly at its original cutoff while
+        # measuring the upcoming fight's layoff on its official event day.
+        # Apply this after roll-forward, which reports time features at cutoff.
+        days = pd.to_numeric(
+            pd.Series([latest_features.get("days_since_last_fight")]), errors="coerce"
+        ).iloc[0]
+        if pd.notna(days):
+            reference_day = _coerce_reference_timestamp(reference_date).normalize()
+            elapsed = int((reference_day - cutoff.normalize()).days)
+            days = float(max(float(days) + elapsed, 0.0))
+            latest_features["days_since_last_fight"] = days
+            latest_features["layoff_log"] = float(np.log1p(days))
+            latest_features["cage_rust"] = int(days > 365)
+
     wins = pd.to_numeric(pd.Series([latest_features.get("wins")]), errors="coerce").iloc[0]
     losses = pd.to_numeric(pd.Series([latest_features.get("losses")]), errors="coerce").iloc[0]
     draws = pd.to_numeric(pd.Series([latest_features.get("draws")]), errors="coerce").iloc[0]
@@ -1472,6 +2003,7 @@ def _lookup_processed_fighter(
         "fights": prior_fights,
         "features": latest_features,
         "source": "processed",
+        "fighter_id": normalize_ufcstats_id(fighter_id),
         "snapshot_event_date": latest_event_date,
         "snapshot_exact": snapshot_exact,
     }
@@ -1480,14 +2012,19 @@ def _lookup_processed_fighter(
 def _call_lookup_fighter(
     fighter_name: str,
     *,
+    fighter_id: object = None,
     as_of_date: Optional[str] = None,
     reference_date: Any = None,
     prefer_live_refresh: bool = False,
     force_refresh: bool = False,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
+    profile_integrity_decisions_path: Optional[Path] = None,
+    prior_profile_integrity_decisions_path: Optional[Path] = None,
 ) -> Optional[dict]:
     kwargs = {}
+    if fighter_id is not None:
+        kwargs["fighter_id"] = fighter_id
     if as_of_date is not None:
         kwargs["as_of_date"] = as_of_date
     if reference_date is not None:
@@ -1500,6 +2037,12 @@ def _call_lookup_fighter(
         kwargs["training_spec"] = training_spec
     if processed_data_dir is not None:
         kwargs["processed_data_dir"] = processed_data_dir
+    if profile_integrity_decisions_path is not None:
+        kwargs["profile_integrity_decisions_path"] = profile_integrity_decisions_path
+    if prior_profile_integrity_decisions_path is not None:
+        kwargs["prior_profile_integrity_decisions_path"] = (
+            prior_profile_integrity_decisions_path
+        )
 
     while True:
         try:
@@ -1579,10 +2122,754 @@ def _parse_dob_to_age(dob_str: str, *, reference_date: Any = None) -> float:
         try:
             dob = datetime.strptime(dob_str.strip(), fmt)
             age = (reference_ts - pd.Timestamp(dob).normalize()).days / 365.25
-            return round(age, 1)
+            return age if active_sources() is not None else round(age, 1)
         except ValueError:
             continue
+    parsed = pd.to_datetime(dob_str, errors="coerce")
+    if pd.notna(parsed):
+        age = (reference_ts - pd.Timestamp(parsed).normalize()).days / 365.25
+        return age if active_sources() is not None else round(age, 1)
     return np.nan
+
+
+def _model_safe_length_cm(value: object) -> float:
+    text = str(value or "").strip().casefold().replace("′", "'").replace("″", '"')
+    if not text:
+        return np.nan
+    metric = re.search(r"([-+]?\d+(?:\.\d+)?)\s*cm\b", text)
+    if metric:
+        return float(metric.group(1))
+    imperial_height = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:ft|feet|foot|')\s*"
+        r"(\d+(?:\.\d+)?)?\s*(?:in|inch|inches|\")?",
+        text,
+    )
+    if imperial_height:
+        inches = (
+            float(imperial_height.group(1)) * 12.0
+            + float(imperial_height.group(2) or 0.0)
+        )
+        return inches * 2.54
+    imperial_inches = re.search(r"([-+]?\d+(?:\.\d+)?)\s*(?:in|inch|inches|\")", text)
+    if imperial_inches:
+        return float(imperial_inches.group(1)) * 2.54
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return float(numeric) if pd.notna(numeric) and float(numeric) >= 100.0 else np.nan
+
+
+def _model_safe_stance_label(value: object) -> str:
+    if value is None:
+        return ""
+    if pd.notna(encode_stance(value)):
+        return str(value)
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return ""
+    for label, encoded in STANCE_ENCODING_MAP.items():
+        if float(numeric) == float(encoded):
+            return label
+    return ""
+
+
+def _model_safe_profile_view(
+    profile: dict,
+    *,
+    fighter_id: object,
+    reference_date: Any,
+    decisions_path: Path,
+    prior_decisions_path: Optional[Path] = None,
+    baseline_profile: Optional[dict] = None,
+) -> dict:
+    """Keep display aggregates while applying decisions to an accepted baseline.
+
+    A partial decision registry is a delta, not a complete profile snapshot.  Fields
+    absent from it therefore retain the accepted stable-ID baseline when one is
+    available.  An audited rejected/unresolved field fails closed, and a fighter
+    without an accepted baseline receives only positively accepted decision values.
+    """
+
+    decisions = load_profile_decisions(
+        decisions_path,
+        prior_decisions_path=prior_decisions_path,
+    )
+    normalized_id = normalize_ufcstats_id(fighter_id) or ""
+    safe_values = model_safe_values_by_ufcstats_id(decisions).get(normalized_id, {})
+    fighter_decisions = decisions.loc[
+        decisions["stable_ufcstats_id"].map(normalize_ufcstats_id) == normalized_id
+    ]
+    audited_fields = {
+        str(field or "").strip().casefold()
+        for field in fighter_decisions["field"].tolist()
+    }
+    baseline = dict(baseline_profile or {})
+    safe_profile = dict(profile)
+    for field in ("height", "reach"):
+        if field in safe_values:
+            safe_profile[field] = _model_safe_length_cm(safe_values[field])
+        elif field in audited_fields or not baseline:
+            safe_profile[field] = np.nan
+        else:
+            safe_profile[field] = _model_safe_length_cm(baseline.get(field))
+    safe_profile["weight"] = np.nan
+    stance = (
+        safe_values.get("stance")
+        if "stance" in safe_values
+        else (
+            None
+            if "stance" in audited_fields or not baseline
+            else baseline.get("stance", baseline.get("stance_enc"))
+        )
+    )
+    safe_profile["stance"] = _model_safe_stance_label(stance)
+    dob_value = (
+        safe_values.get("dob")
+        if "dob" in safe_values
+        else (None if "dob" in audited_fields or not baseline else baseline.get("dob"))
+    )
+    dob = str(dob_value or "").strip()
+    safe_profile["dob"] = dob
+    if dob:
+        safe_profile["age"] = _parse_dob_to_age(dob, reference_date=reference_date)
+    elif "dob" in audited_fields or not baseline:
+        safe_profile["age"] = np.nan
+    else:
+        baseline_age = pd.to_numeric(
+            pd.Series([baseline.get("age")]), errors="coerce"
+        ).iloc[0]
+        safe_profile["age"] = (
+            float(baseline_age) if pd.notna(baseline_age) else np.nan
+        )
+    return safe_profile
+
+
+def _accepted_profile_baseline(result: Optional[dict]) -> Optional[dict]:
+    """Build the accepted physical baseline from a processed lookup result."""
+
+    if result is None:
+        return None
+    baseline = dict(result.get("profile") or {})
+    features = dict(result.get("features") or {})
+    for field in ("height", "reach", "age"):
+        if field in features:
+            baseline[field] = features[field]
+    if "stance_enc" in features:
+        baseline["stance_enc"] = features["stance_enc"]
+    return baseline
+
+
+def _model_safe_lookup_result(
+    result: dict,
+    *,
+    fighter_id: object,
+    reference_date: Any,
+    decisions_path: Path,
+    prior_decisions_path: Optional[Path] = None,
+) -> dict:
+    """Return a copy whose profile-backed feature cells come only from decisions."""
+
+    safe_result = dict(result)
+    features = dict(result.get("features") or {})
+    safe_profile = _model_safe_profile_view(
+        dict(result.get("profile") or {}),
+        fighter_id=fighter_id,
+        reference_date=reference_date,
+        decisions_path=decisions_path,
+        prior_decisions_path=prior_decisions_path,
+        baseline_profile=_accepted_profile_baseline(result),
+    )
+    safe_result["profile"] = safe_profile
+    age = safe_profile.get("age", np.nan)
+    features["height"] = safe_profile.get("height", np.nan)
+    features["reach"] = safe_profile.get("reach", np.nan)
+    features["weight"] = np.nan
+    stance_enc = encode_stance(safe_profile.get("stance", ""))
+    features["stance_enc"] = float(stance_enc) if pd.notna(stance_enc) else np.nan
+    features["age"] = age
+    features["age_squared"] = age**2 if pd.notna(age) else np.nan
+    features["age_over_35"] = float(age > 35) if pd.notna(age) else np.nan
+    features["age_under_25"] = float(age < 25) if pd.notna(age) else np.nan
+    safe_result["features"] = features
+    safe_result["profile_integrity_mode"] = "decision_artifact"
+    return safe_result
+
+
+def _reviewed_overlay_value_missing(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().casefold() in {"", "-", "--", "n/a", "nan", "none"}
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _reviewed_lookup_stable_id(result: dict, fighter_id: object) -> str:
+    """Return one consistent UFCStats ID or fail closed on bad carriers."""
+
+    profile = result.get("profile") or {}
+    carriers = {
+        "requested_fighter_id": fighter_id,
+        "result_fighter_id": result.get("fighter_id"),
+        "profile_fighter_url": profile.get("fighter_url"),
+        "profile_ufcstats_url": profile.get("ufcstats_url"),
+        "profile_stable_ufcstats_id": profile.get("stable_ufcstats_id"),
+    }
+    observed: dict[str, str] = {}
+    for label, value in carriers.items():
+        if _reviewed_overlay_value_missing(value):
+            continue
+        stable_id = normalize_ufcstats_id(value)
+        if stable_id is None:
+            raise ValueError(
+                "Reviewed profile overlay received an invalid UFCStats identity "
+                f"carrier: {label}={value!r}"
+            )
+        observed[label] = stable_id
+    identities = set(observed.values())
+    if len(identities) > 1:
+        raise ValueError(
+            "Reviewed profile overlay received conflicting UFCStats identities: "
+            f"{observed}"
+        )
+    return next(iter(identities)) if identities else ""
+
+
+def _reviewed_profile_names_for_id(
+    registry: dict[str, object],
+    stable_id: str,
+) -> set[str]:
+    names: set[str] = set()
+    for record in registry["mma_identity_bindings"]:
+        if record["stable_ufcstats_id"] != stable_id:
+            continue
+        names.update(
+            normalize_person_name(value)
+            for value in (
+                record["official_name"],
+                record["ufcstats_name"],
+                *record["reviewed_official_names"],
+            )
+        )
+    for section in (
+        "permanent_profile_locks",
+        "profile_field_holds",
+        "profile_recoveries",
+    ):
+        for record in registry[section]:
+            if record["stable_ufcstats_id"] == stable_id:
+                names.add(normalize_person_name(record["canonical_name"]))
+    return {name for name in names if name}
+
+
+def _reviewed_identity_binding_for_id(
+    registry: dict[str, object],
+    stable_id: str,
+) -> Optional[dict[str, object]]:
+    matches = [
+        record
+        for record in registry["identity_bindings"]
+        if record["stable_ufcstats_id"] == stable_id
+    ]
+    if len(matches) > 1:
+        raise ValueError(
+            "Reviewed roster identity registry contains duplicate UFCStats ID "
+            f"{stable_id}"
+        )
+    return dict(matches[0]) if matches else None
+
+
+def _reviewed_identity_names_for_id(
+    registry: dict[str, object],
+    stable_id: str,
+) -> set[str]:
+    """Return every name/alias explicitly reviewed for one stable identity."""
+
+    binding = _reviewed_identity_binding_for_id(registry, stable_id)
+    if binding is None:
+        return set()
+    names = {
+        normalize_person_name(value)
+        for value in (
+            binding["official_name"],
+            binding["ufcstats_name"],
+            *binding["reviewed_official_names"],
+            *binding["reviewed_nicknames"],
+            *binding["reviewed_route_aliases"],
+        )
+    }
+    return {name for name in names if name}
+
+
+def _reviewed_stance_values(profile: dict, features: dict) -> set[str]:
+    values: set[str] = set()
+    for value in (profile.get("stance"), features.get("stance_enc")):
+        if _reviewed_overlay_value_missing(value):
+            continue
+        label = _model_safe_stance_label(value)
+        if not label:
+            raise ValueError(
+                "Reviewed stance recovery encountered a nonblank invalid stance: "
+                f"{value!r}"
+            )
+        values.add(label.casefold())
+    return values
+
+
+def _profile_feature_is_enabled(
+    field: str,
+    *,
+    strict_mode: bool,
+    allowed_profile_fields: Optional[set[str]],
+) -> bool:
+    return (
+        not strict_mode
+        or allowed_profile_fields is None
+        or field in allowed_profile_fields
+    )
+
+
+def _reviewed_identity_numeric_value(
+    value: object,
+    *,
+    field: str,
+    cell_id: str,
+) -> float:
+    if field in {"height", "reach"}:
+        normalized = _model_safe_length_cm(value)
+    elif field == "weight":
+        numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        normalized = (
+            float(numeric)
+            if pd.notna(numeric)
+            else _parse_weight_lbs(str(value))
+        )
+    else:
+        raise ValueError(f"Unsupported reviewed numeric profile field: {field}")
+    if pd.isna(normalized) or not np.isfinite(float(normalized)):
+        raise ValueError(
+            "Reviewed roster identity decision encountered a nonblank invalid "
+            f"{field} value for {cell_id}: {value!r}"
+        )
+    return float(normalized)
+
+
+def _validate_reviewed_identity_numeric_observation(
+    *,
+    profile: dict,
+    features: dict,
+    field: str,
+    expected: float,
+    cell_id: str,
+) -> None:
+    carriers = [("profile", profile.get(field))]
+    # Current listed weight is display-only.  A model weight feature is an
+    # event-specific value and is deliberately not compared to body weight.
+    if field != "weight":
+        carriers.append(("features", features.get(field)))
+    for label, value in carriers:
+        if _reviewed_overlay_value_missing(value):
+            continue
+        observed = _reviewed_identity_numeric_value(
+            value,
+            field=field,
+            cell_id=cell_id,
+        )
+        if not np.isclose(observed, expected, rtol=0.0, atol=0.02):
+            raise ValueError(
+                "Reviewed roster identity decision conflicts with an observed "
+                f"value for {cell_id}: {label}.{field}={value!r}, "
+                f"expected={expected}"
+            )
+
+
+def _apply_reviewed_identity_accepted_value(
+    safe_result: dict,
+    decision: dict[str, object],
+    *,
+    reference_date: Any,
+    strict_mode: bool,
+    allowed_profile_fields: Optional[set[str]],
+) -> None:
+    profile = safe_result["profile"]
+    features = safe_result["features"]
+    field = str(decision["profile_field"])
+    cell_id = str(decision["cell_id"])
+    expected = decision["normalized_value"]
+
+    if field in {"height", "reach"}:
+        normalized = float(expected)
+        _validate_reviewed_identity_numeric_observation(
+            profile=profile,
+            features=features,
+            field=field,
+            expected=normalized,
+            cell_id=cell_id,
+        )
+        profile[field] = normalized
+        if _profile_feature_is_enabled(
+            field,
+            strict_mode=strict_mode,
+            allowed_profile_fields=allowed_profile_fields,
+        ):
+            features[field] = normalized
+        elif strict_mode:
+            features[field] = np.nan
+        return
+
+    if field == "weight":
+        normalized = float(expected)
+        _validate_reviewed_identity_numeric_observation(
+            profile=profile,
+            features=features,
+            field=field,
+            expected=normalized,
+            cell_id=cell_id,
+        )
+        profile[field] = normalized
+        # Listed/body weight is never an event-specific model feature.
+        features[field] = np.nan
+        return
+
+    if field == "stance":
+        normalized = str(expected)
+        observed = _reviewed_stance_values(profile, features)
+        if observed and observed != {normalized.casefold()}:
+            raise ValueError(
+                "Reviewed roster identity decision conflicts with an observed "
+                f"value for {cell_id}: stance={sorted(observed)}, "
+                f"expected={normalized!r}"
+            )
+        profile[field] = normalized
+        if _profile_feature_is_enabled(
+            field,
+            strict_mode=strict_mode,
+            allowed_profile_fields=allowed_profile_fields,
+        ):
+            encoded = encode_stance(normalized)
+            features["stance_enc"] = float(encoded)
+        elif strict_mode:
+            features["stance_enc"] = np.nan
+        return
+
+    if field == "dob":
+        normalized = str(expected)
+        observed_dob = profile.get("dob")
+        if not _reviewed_overlay_value_missing(observed_dob):
+            observed_ts = pd.to_datetime(observed_dob, errors="coerce")
+            expected_ts = pd.to_datetime(normalized, errors="raise")
+            if pd.isna(observed_ts) or observed_ts.normalize() != expected_ts.normalize():
+                raise ValueError(
+                    "Reviewed roster identity decision conflicts with an observed "
+                    f"value for {cell_id}: profile.dob={observed_dob!r}, "
+                    f"expected={normalized!r}"
+                )
+        profile[field] = normalized
+        age = _parse_dob_to_age(normalized, reference_date=reference_date)
+        profile["age"] = age
+        if _profile_feature_is_enabled(
+            "age",
+            strict_mode=strict_mode,
+            allowed_profile_fields=allowed_profile_fields,
+        ):
+            features["age"] = age
+            features["age_squared"] = age**2 if pd.notna(age) else np.nan
+            features["age_over_35"] = (
+                float(age > 35) if pd.notna(age) else np.nan
+            )
+            features["age_under_25"] = (
+                float(age < 25) if pd.notna(age) else np.nan
+            )
+        elif strict_mode:
+            for feature in (
+                "age",
+                "age_squared",
+                "age_over_35",
+                "age_under_25",
+            ):
+                features[feature] = np.nan
+        return
+
+    raise ValueError(f"Unsupported reviewed roster identity field: {field}")
+
+
+def _apply_reviewed_identity_field_hold(
+    safe_result: dict,
+    decision: dict[str, object],
+) -> None:
+    field = str(decision["profile_field"])
+    safe_result["profile"][field] = np.nan
+    if field in {"height", "reach", "weight"}:
+        safe_result["features"][field] = np.nan
+    elif field == "stance":
+        safe_result["features"]["stance_enc"] = np.nan
+    elif field == "dob":
+        safe_result["profile"]["age"] = np.nan
+        for feature in (
+            "age",
+            "age_squared",
+            "age_over_35",
+            "age_under_25",
+        ):
+            safe_result["features"][feature] = np.nan
+    else:
+        raise ValueError(f"Unsupported reviewed roster identity hold: {field}")
+
+
+def _apply_reviewed_lookup_profile_overlays(
+    result: dict,
+    *,
+    fighter_id: object,
+    reference_date: Any,
+    include_current_recoveries: bool,
+    strict_mode: bool,
+    allowed_profile_fields: Optional[set[str]],
+) -> dict:
+    """Apply only exact stable-ID owner pins to a lookup result copy.
+
+    The general profile-integrity policy remains unchanged.  This is a narrow
+    consumption path for both durable reviewed registries: permanent owner
+    locks always win, while stable-ID-bound current/future decisions validate
+    nonblank observations and fail closed on held fields.
+    """
+
+    safe_result = dict(result)
+    safe_result["profile"] = dict(result.get("profile") or {})
+    safe_result["features"] = dict(result.get("features") or {})
+    stable_id = _reviewed_lookup_stable_id(safe_result, fighter_id)
+    if not stable_id:
+        return safe_result
+
+    registry = load_reviewed_roster_recovery_registry(selected_path("roster_recovery_registry", REVIEWED_ROSTER_RECOVERY_REGISTRY_PATH))
+    identity_registry = load_reviewed_roster_identity_registry(selected_path("roster_identity_registry", REVIEWED_ROSTER_IDENTITY_REGISTRY_PATH))
+    locks = [
+        record
+        for record in registry["permanent_profile_locks"]
+        if record["stable_ufcstats_id"] == stable_id
+    ]
+    recoveries = [
+        record
+        for record in registry["profile_recoveries"]
+        if record["stable_ufcstats_id"] == stable_id
+    ]
+    holds = [
+        record
+        for record in registry["profile_field_holds"]
+        if record["stable_ufcstats_id"] == stable_id
+    ]
+    identity_binding = _reviewed_identity_binding_for_id(
+        identity_registry,
+        stable_id,
+    )
+    identity_decisions = (
+        [
+            record
+            for record in identity_registry["field_decisions"]
+            if record["official_source_entity_id"]
+            == identity_binding["official_source_entity_id"]
+        ]
+        if identity_binding is not None
+        else []
+    )
+    if (
+        not locks
+        and not holds
+        and not recoveries
+        and (not include_current_recoveries or not identity_decisions)
+    ):
+        return safe_result
+
+    allowed_names = _reviewed_profile_names_for_id(registry, stable_id)
+    # Owner decision D10: the reviewed spellings bound to this UFCStats ID.
+    allowed_names.update(reviewed_spelling_bindings().get(stable_id, frozenset()))
+    if include_current_recoveries:
+        allowed_names.update(
+            _reviewed_identity_names_for_id(identity_registry, stable_id)
+        )
+    observed_name = normalize_person_name(safe_result["profile"].get("name"))
+    if observed_name and observed_name not in allowed_names:
+        raise ValueError(
+            "Reviewed profile overlay identity name conflicts with its stable "
+            f"UFCStats ID {stable_id}: {safe_result['profile'].get('name')!r}"
+        )
+
+    provenance = dict(safe_result.get("profile_field_provenance") or {})
+    for lock in locks:
+        field = str(lock["field"])
+        if field != "dob":
+            raise ValueError(f"Unsupported permanent reviewed profile lock: {field}")
+        locked_dob = str(lock["artifact_value"])
+        safe_result["profile"][field] = locked_dob
+        if _profile_feature_is_enabled(
+            "age",
+            strict_mode=strict_mode,
+            allowed_profile_fields=allowed_profile_fields,
+        ):
+            age = _parse_dob_to_age(locked_dob, reference_date=reference_date)
+            safe_result["features"]["age"] = age
+            safe_result["features"]["age_squared"] = (
+                age**2 if pd.notna(age) else np.nan
+            )
+            safe_result["features"]["age_over_35"] = (
+                float(age > 35) if pd.notna(age) else np.nan
+            )
+            safe_result["features"]["age_under_25"] = (
+                float(age < 25) if pd.notna(age) else np.nan
+            )
+        elif strict_mode:
+            for feature in (
+                "age",
+                "age_squared",
+                "age_over_35",
+                "age_under_25",
+            ):
+                safe_result["features"][feature] = np.nan
+        provenance[field] = {
+            "source": "owner_lock",
+            "stable_ufcstats_id": stable_id,
+            "decision_status": lock["decision_status"],
+            "evidence_sha256": lock["evidence_sha256"],
+            "automatic_replacement_allowed": False,
+        }
+
+    if include_current_recoveries:
+        for recovery in recoveries:
+            if (
+                recovery["scope"] != "current_and_future"
+                or recovery["historical_backfill_allowed"] is not False
+            ):
+                raise ValueError(
+                    "Reviewed current profile recovery has an invalid temporal scope"
+                )
+            field = str(recovery["field"])
+            if field != "stance":
+                raise ValueError(f"Unsupported reviewed current profile recovery: {field}")
+            expected = str(recovery["value"])
+            observed = _reviewed_stance_values(
+                safe_result["profile"], safe_result["features"]
+            )
+            if observed and observed != {expected.casefold()}:
+                raise ValueError(
+                    "Reviewed current profile recovery conflicts with an observed "
+                    f"value: {recovery['canonical_name']} {field}={sorted(observed)}"
+                )
+            safe_result["profile"][field] = expected
+            if _profile_feature_is_enabled(
+                field,
+                strict_mode=strict_mode,
+                allowed_profile_fields=allowed_profile_fields,
+            ):
+                encoded = encode_stance(expected)
+                safe_result["features"]["stance_enc"] = float(encoded)
+            elif strict_mode:
+                safe_result["features"]["stance_enc"] = np.nan
+            provenance[field] = {
+                "source": recovery["source"],
+                "source_entity_id": recovery["source_entity_id"],
+                "source_url": recovery["source_url"],
+                "requested_url": recovery["requested_url"],
+                "effective_url": recovery["effective_url"],
+                "canonical_url": recovery["canonical_url"],
+                "observation_id": recovery["observation_id"],
+                "capture_sha256": recovery["capture_sha256"],
+                "stable_ufcstats_id": stable_id,
+                "decision_status": recovery["decision_status"],
+                "scope": recovery["scope"],
+                "historical_backfill_allowed": False,
+            }
+
+        for decision in identity_decisions:
+            if (
+                decision["scope"] != "current_and_future"
+                or decision["historical_backfill_allowed"] is not False
+                or decision["automatic_release_allowed"] is not False
+            ):
+                raise ValueError(
+                    "Reviewed roster identity decision has an invalid temporal scope"
+                )
+            status = str(decision["decision_status"])
+            if status == "accepted_current_future":
+                _apply_reviewed_identity_accepted_value(
+                    safe_result,
+                    decision,
+                    reference_date=reference_date,
+                    strict_mode=strict_mode,
+                    allowed_profile_fields=allowed_profile_fields,
+                )
+                selector = dict(decision["observation_selector"])
+                provenance[str(decision["profile_field"])] = {
+                    "source": selector["source"],
+                    "source_entity_id": selector["source_entity_id"],
+                    "source_url": selector["source_url"],
+                    "source_name": selector["source_name"],
+                    "raw_value": selector["raw_value"],
+                    "cell_id": decision["cell_id"],
+                    "stable_ufcstats_id": stable_id,
+                    "decision_status": status,
+                    "classification": decision["classification"],
+                    "scope": decision["scope"],
+                    "historical_backfill_allowed": False,
+                    "automatic_release_allowed": False,
+                    "decision_report_sha256": identity_registry["audit_scope"][
+                        "decision_report_sha256"
+                    ],
+                }
+            elif status in {"conflicting_field_hold", "owner_field_hold"}:
+                _apply_reviewed_identity_field_hold(safe_result, decision)
+                provenance[str(decision["profile_field"])] = {
+                    "source": "reviewed_identity_field_hold",
+                    "cell_id": decision["cell_id"],
+                    "stable_ufcstats_id": stable_id,
+                    "decision_status": status,
+                    "classification": decision["classification"],
+                    "scope": decision["scope"],
+                    "historical_backfill_allowed": False,
+                    "automatic_release_allowed": False,
+                    "decision_report_sha256": identity_registry["audit_scope"][
+                        "decision_report_sha256"
+                    ],
+                }
+            else:
+                raise ValueError(
+                    "Stable-ID-bound reviewed roster identity decision has an "
+                    f"unsupported status: {status}"
+                )
+
+    if include_current_recoveries:
+        for hold in holds:
+            if (
+                hold["scope"] != "current_and_future"
+                or hold["historical_backfill_allowed"] is not False
+            ):
+                raise ValueError(
+                    "Reviewed profile field hold has an invalid temporal scope"
+                )
+            field = str(hold["field"])
+            if field != "height":
+                raise ValueError(f"Unsupported reviewed profile field hold: {field}")
+            safe_result["profile"][field] = np.nan
+            safe_result["features"][field] = np.nan
+            provenance[field] = {
+                "source": "reviewed_field_hold",
+                "stable_ufcstats_id": stable_id,
+                "decision_status": hold["decision_status"],
+                "queue_index": hold["queue_index"],
+                "scope": hold["scope"],
+                "historical_backfill_allowed": False,
+                "reason": hold["reason"],
+                "conflicting_normalized_values": list(
+                    hold["conflicting_normalized_values"]
+                ),
+                "evidence_urls": list(hold["evidence_urls"]),
+                "evidence_sha256": hold["evidence_sha256"],
+                "automatic_release_allowed": False,
+            }
+
+    safe_result["fighter_id"] = stable_id
+    if provenance:
+        safe_result["profile_field_provenance"] = provenance
+        safe_result["reviewed_profile_overlay"] = True
+    return safe_result
 
 
 def _parse_event_date_text(event_text: str) -> Optional[datetime]:
@@ -1673,11 +2960,27 @@ _SEARCH_NAME_ALIASES: dict[str, str] = {
 }
 
 
-def search_fighter_url(fighter_name: str) -> Optional[str]:
+def search_fighter_url(
+    fighter_name: str,
+    fighter_id: object = None,
+) -> Optional[str]:
     """
     Search UFCStats.com for a fighter by name. Returns their profile URL.
     Uses the alphabetical fighter listing with last name initial.
     """
+    normalized_id = normalize_ufcstats_id(fighter_id)
+    if normalized_id:
+        return normalize_ufcstats_url(f"{UFCSTATS_FIGHTER_URL}{normalized_id}")
+    if fighter_identity_is_ambiguous(
+        fighter_name,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    ):
+        logger.warning(
+            "Refusing ambiguous UFCStats name-only search for %s",
+            fighter_name,
+        )
+        return None
+
     # Resolve known aliases (e.g. full legal name → ring name), while retaining
     # the requested spelling for UFCStats index selection. Cross-source
     # canonicalization can intentionally replace a surname (for example,
@@ -1686,7 +2989,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     _alias_key = normalize_person_name(fighter_name)
     if _alias_key in _SEARCH_NAME_ALIASES:
         fighter_name = _SEARCH_NAME_ALIASES[_alias_key]
-    cache_key = _fighter_url_identity_cache_key(fighter_name)
+    cache_key = _fighter_url_identity_cache_key(fighter_name, fighter_id)
     if cache_key in _fighter_url_cache:
         if _cache_is_fresh(_fighter_url_cache_cached_at, cache_key):
             return _fighter_url_cache[cache_key]
@@ -1892,7 +3195,7 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         "ctrl_seconds": np.nan,
         "opp_rev": np.nan,
         "opp_ctrl_seconds": np.nan,
-        "is_title_bout": False,
+        "is_title_bout": np.nan,
         "weight_class": "",
         # Totals from the detail page (sig str / TD in "X of Y" format)
         "sig_str_landed": np.nan,
@@ -2168,6 +3471,10 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             unparsed_data_row_count += 1
             continue
         opponent = _clean_text(fighter_ps[1].text)
+        opponent_link = fighter_ps[1].select_one("a[href*='fighter-details']")
+        opponent_id = normalize_ufcstats_id(
+            opponent_link.get("href") if opponent_link is not None else None
+        )
 
         # Method and round
         method = _clean_text(cols[7].text) if len(cols) > 7 else ""
@@ -2180,6 +3487,8 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
         # Event metadata
         event_text = _clean_text(cols[6].text) if len(cols) > 6 else ""
         event_date = _parse_event_date_text(event_text)
+        event_name_ps = cols[6].select("p") if len(cols) > 6 else []
+        event_name = _clean_text(event_name_ps[0].text) if event_name_ps else ""
         finish_time = _clean_text(cols[9].text) if len(cols) > 9 else ""
         total_fight_time_secs = _round_time_to_total_seconds(round_finished, finish_time)
         fight_minutes = (
@@ -2190,38 +3499,38 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
 
         # Per-fight stats from the table (sig str, td, sub, etc.)
         # The profile fight table has: Result, Fighter, KD, Str, TD, Sub, Weight Class, Method, Round, Time
-        kd = _safe_float(_clean_text(cols[2].select("p")[0].text)) if len(cols) > 2 and cols[2].select("p") else 0
-        opp_kd = _safe_float(_clean_text(cols[2].select("p")[1].text)) if len(cols) > 2 and len(cols[2].select("p")) > 1 else 0
+        kd = _safe_float(_clean_text(cols[2].select("p")[0].text), np.nan) if len(cols) > 2 and cols[2].select("p") else np.nan
+        opp_kd = _safe_float(_clean_text(cols[2].select("p")[1].text), np.nan) if len(cols) > 2 and len(cols[2].select("p")) > 1 else np.nan
 
         # Sig str — profile table shows only landed counts (no "of"),
         # so attempted stays NaN when the cell is a bare number.
         sig_str_text = cols[3].select("p")
-        sig_str_landed, sig_str_attempted = 0, np.nan
-        opp_sig_str_landed, opp_sig_str_attempted = 0, np.nan
+        sig_str_landed, sig_str_attempted = np.nan, np.nan
+        opp_sig_str_landed, opp_sig_str_attempted = np.nan, np.nan
         if sig_str_text and len(sig_str_text) >= 2:
             l, a = _parse_stat_cell(sig_str_text[0].text)
-            sig_str_landed = _safe_float(l, 0)
+            sig_str_landed = _safe_float(l, np.nan)
             sig_str_attempted = _safe_float(a) if a is not None else np.nan
             l2, a2 = _parse_stat_cell(sig_str_text[1].text)
-            opp_sig_str_landed = _safe_float(l2, 0)
+            opp_sig_str_landed = _safe_float(l2, np.nan)
             opp_sig_str_attempted = _safe_float(a2) if a2 is not None else np.nan
 
         # TD — same as sig str: profile table has only landed counts.
         td_text = cols[4].select("p") if len(cols) > 4 else []
-        td_landed, td_attempted = 0, np.nan
-        opp_td_landed, opp_td_attempted = 0, np.nan
+        td_landed, td_attempted = np.nan, np.nan
+        opp_td_landed, opp_td_attempted = np.nan, np.nan
         if td_text and len(td_text) >= 2:
             l, a = _parse_stat_cell(td_text[0].text)
-            td_landed = _safe_float(l, 0)
+            td_landed = _safe_float(l, np.nan)
             td_attempted = _safe_float(a) if a is not None else np.nan
             l2, a2 = _parse_stat_cell(td_text[1].text)
-            opp_td_landed = _safe_float(l2, 0)
+            opp_td_landed = _safe_float(l2, np.nan)
             opp_td_attempted = _safe_float(a2) if a2 is not None else np.nan
 
         # Sub attempts
         sub_text = cols[5].select("p") if len(cols) > 5 else []
-        sub_att = _safe_float(_clean_text(sub_text[0].text)) if sub_text else 0
-        opp_sub_att = _safe_float(_clean_text(sub_text[1].text)) if len(sub_text) > 1 else 0
+        sub_att = _safe_float(_clean_text(sub_text[0].text), np.nan) if sub_text else np.nan
+        opp_sub_att = _safe_float(_clean_text(sub_text[1].text), np.nan) if len(sub_text) > 1 else np.nan
 
         slpm = _rate_per_minute(sig_str_landed, fight_minutes)
         sapm = _rate_per_minute(opp_sig_str_landed, fight_minutes)
@@ -2234,8 +3543,10 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
 
         fight = {
             "event_date": event_date,
+            "event_name": event_name,
             "detail_url": detail_url,
             "opponent": opponent,
+            "opponent_id": opponent_id,
             "won": won,
             "result": result,
             "winner": fighter_name if result == "win" else opponent if result == "loss" else "",
@@ -2257,7 +3568,7 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             "sub_avg": sub_avg,
             "rev": np.nan,  # Will be filled from detail page
             "ctrl_seconds": np.nan,  # Will be filled from detail page
-            "is_title_bout": False,  # Will be filled from detail page
+            "is_title_bout": np.nan,  # Will be filled from detail page
             "weight_class": "",
             "finish_time": finish_time,
             "total_fight_time_secs": total_fight_time_secs,
@@ -2303,8 +3614,11 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
                 "opp_td_landed", "opp_td_attempted",
             ]:
                 detail_val = detail.get(totals_stat)
-                if detail_val is not None and not np.isnan(detail_val):
-                    fight[totals_stat] = detail_val
+                numeric = pd.to_numeric(
+                    pd.Series([detail_val]), errors="coerce"
+                ).iloc[0]
+                if pd.notna(numeric) and np.isfinite(float(numeric)):
+                    fight[totals_stat] = float(numeric)
             # Recompute rate stats from detail-page totals
             fight_minutes = fight.get("total_fight_time_secs", np.nan)
             if not pd.isna(fight_minutes) and fight_minutes > 0:
@@ -2355,6 +3669,7 @@ def _compute_rolling_for_fighter(
     strict_mode: bool = False,
     allowed_profile_fields: Optional[set[str]] = None,
     processed_data_dir: Optional[Path] = None,
+    fighter_id: object = None,
 ) -> dict:
     """
     Compute rolling stats and derived features for a fighter from their
@@ -2384,11 +3699,10 @@ def _compute_rolling_for_fighter(
         if (not strict_mode or _profile_field_enabled("reach"))
         else np.nan
     )
-    features["weight"] = (
-        profile.get("weight", np.nan)
-        if (not strict_mode or _profile_field_enabled("weight"))
-        else np.nan
-    )
+    # A fighter's current listed/body weight is not an event-specific weigh-in
+    # and must never be copied backward into a fight feature.  Exact historical
+    # weight evidence is joined in the pulled-data builder, not from profiles.
+    features["weight"] = np.nan
     features["age"] = (
         profile_age
         if (not strict_mode or _profile_field_enabled("age"))
@@ -2519,6 +3833,7 @@ def _compute_rolling_for_fighter(
         _debut_seed = _pre_ufc_won_seed(
             canonical_name,
             debut_date=reference_ts,
+            fighter_id=fighter_id,
         )
         if _debut_seed:
             _seed_won = pd.Series([w for _, w in _debut_seed], dtype=float)
@@ -2628,6 +3943,7 @@ def _compute_rolling_for_fighter(
         for stat in rate_stats_for_seed:
             row[stat] = fight.get(stat, np.nan)
         row["event_date"] = fight.get("event_date")
+        row["event_name"] = fight.get("event_name", "")
         count_rows.append(row)
     count_df = pd.DataFrame(count_rows)
 
@@ -2645,7 +3961,7 @@ def _compute_rolling_for_fighter(
     # shift every stat's EWM weights. Re-roll over the identical seeded frame
     # and overlay; the unseeded EWMs above remain the fallback.
     try:
-        _seeded = _seeded_scrape_rolling(canonical_name, count_rows, reference_ts)
+        _seeded = _seeded_scrape_rolling(canonical_name, count_rows, reference_ts, fighter_id=fighter_id)
     except Exception as exc:
         logger.warning(
             "Seeded rolling-stat computation failed for %s: %s — using unseeded EWMs",
@@ -2724,9 +4040,14 @@ def _compute_rolling_for_fighter(
     round_vals = [f.get("round_finished") for f in fights if f.get("round_finished") is not None]
     features["total_rounds"] = sum(round_vals) if round_vals else np.nan
 
-    # Title bouts — count from fight detail page scrape
-    title_count = sum(1 for f in fights if f.get("is_title_bout", False))
-    features["title_bouts"] = title_count
+    # Title bouts — a career total is knowable only when every past bout has
+    # observed metadata. Missing detail cells cannot be treated as non-title.
+    title_flags = [coerce_nullable_bool(f.get("is_title_bout")) for f in fights]
+    features["title_bouts"] = (
+        float(sum(flag is True for flag in title_flags))
+        if all(flag is not None for flag in title_flags)
+        else np.nan
+    )
 
     # Strike differential mirrors the training feature, but fight pace follows
     # experimental_features.add_fight_pace() and defaults missing inputs to 0.
@@ -2910,6 +4231,8 @@ def get_line_movement_live(
         )
         return analysis_to_line_movement_features(analysis)
     except Exception as e:
+        if active_sources() is not None:
+            raise
         logger.debug(f"line_tracker failed for {fighter_a} vs {fighter_b}: {e}")
 
     logger.warning(f"All line movement sources failed for {fighter_a} vs {fighter_b}")
@@ -2936,7 +4259,11 @@ def _compute_wc_move_from_history(
         if weight is not None
     ]
     if not prior_weights:
-        if fighter_data.get("source") == "processed":
+        if fighter_data.get("source") == "processed" or (
+            fighter_data.get("source") == "selected_saved_inputs"
+            and fighter_data.get("history_scope") == "selected_processed"
+            and fighter_data.get("fight_history_status") == "selected_history"
+        ):
             return 0.0
         return np.nan
 
@@ -2949,34 +4276,45 @@ def _h2h_summary(
     fighter_b: str,
     a_data: Optional[dict],
     b_data: Optional[dict],
+    *,
+    fighter_a_id: object = None,
+    fighter_b_id: object = None,
 ) -> tuple[int, int]:
     """Compute rematch and H2H record diff using a symmetric source of truth."""
     records: list[tuple[pd.Timestamp, str]] = []
     seen_keys: set[tuple[str, str, str]] = set()
+    ambiguous_name_keys = _ambiguous_fighter_name_keys()
+    fighter_a_key = fighter_identity_key(
+        fighter_a,
+        fighter_a_id,
+        ambiguous_name_keys=ambiguous_name_keys,
+    )
+    fighter_b_key = fighter_identity_key(
+        fighter_b,
+        fighter_b_id,
+        ambiguous_name_keys=ambiguous_name_keys,
+    )
 
-    for owner_name, data in ((fighter_a, a_data), (fighter_b, b_data)):
+    for owner_side, owner_key, opponent_key, data in (
+        ("a", fighter_a_key, fighter_b_key, a_data),
+        ("b", fighter_b_key, fighter_a_key, b_data),
+    ):
         if not data:
             continue
         for fight in data.get("fights", []):
             opponent = fight.get("opponent", "")
-            if not _same_fighter_identity(
+            observed_opponent_key = fighter_identity_key(
                 opponent,
-                fighter_b if _same_fighter_identity(owner_name, fighter_a) else fighter_a,
-            ):
+                fight.get("opponent_id"),
+                ambiguous_name_keys=ambiguous_name_keys,
+            )
+            if observed_opponent_key != opponent_key:
                 continue
 
             event_date = pd.to_datetime(fight.get("event_date"), errors="coerce")
             event_key = event_date.isoformat() if pd.notna(event_date) else ""
-            dedupe_key = (
-                normalize_person_name(owner_name),
-                normalize_person_name(opponent),
-                event_key,
-            )
-            mirror_key = (
-                normalize_person_name(opponent),
-                normalize_person_name(owner_name),
-                event_key,
-            )
+            dedupe_key = (str(owner_key or ""), str(opponent_key or ""), event_key)
+            mirror_key = (str(opponent_key or ""), str(owner_key or ""), event_key)
             if dedupe_key in seen_keys or mirror_key in seen_keys:
                 continue
             seen_keys.add(dedupe_key)
@@ -2987,19 +4325,25 @@ def _h2h_summary(
 
             winner = fight.get("winner", "")
             if result not in {"win", "loss"}:
-                if _same_fighter_identity(winner, owner_name):
+                winner_key = fighter_identity_key(
+                    winner,
+                    ambiguous_name_keys=ambiguous_name_keys,
+                )
+                if winner_key == owner_key:
                     result = "win"
-                elif _same_fighter_identity(winner, opponent):
+                elif winner_key == opponent_key:
                     result = "loss"
                 else:
                     continue
 
-            records.append((event_date, "a" if result == "win" and _same_fighter_identity(owner_name, fighter_a) else
-                            "b" if result == "loss" and _same_fighter_identity(owner_name, fighter_a) else
-                            "b" if result == "win" and _same_fighter_identity(owner_name, fighter_b) else
-                            "a"))
+            winner_side = owner_side if result == "win" else (
+                "b" if owner_side == "a" else "a"
+            )
+            records.append((event_date, winner_side))
 
-    if not records:
+    # Matching prior bouts include draws/no-contests; only decisive results
+    # contribute a winner to the H2H record differential above.
+    if not seen_keys:
         return 0, 0
 
     a_wins = sum(1 for _event_date, winner in records if winner == "a")
@@ -3011,15 +4355,93 @@ def _h2h_summary(
 # Main public API: build features for a fight
 # ---------------------------------------------------------------------------
 
+def _selected_saved_fighter(result, *, fighter_name, fighter_id, reference_date,
+                            as_of_date, processed_data_dir, strict_mode=False,
+                            allowed_profile_fields=None):
+    """Combine selected profiles with the existing dated history calculation."""
+    sources = active_sources()
+    sources.validate_fighter(fighter_name, fighter_id)
+    if not fighter_id:
+        raise AmbiguousFighterIdentityError('Selected-source lookup requires the bound fighter ID')
+    from src.data.ufc_refresh import _load_scraped_fighter_lookup
+    bank = selected_cache('profiles', lambda: _load_scraped_fighter_lookup(
+        sources.path('profiles'),
+        supplemental_profiles_path=sources.path('supplemental_profiles'),
+        official_active_roster_path=sources.path('active_roster'),
+        profile_integrity_decisions_path=sources.path('profile_decisions'),
+        prior_profile_integrity_decisions_path=sources.path('prior_profile_decisions'),
+    ))
+    profile = dict(bank.get(f'ufcstats:{fighter_id}') or {})
+    if not profile and result is None:
+        return None
+    profile['name'] = fighter_name
+    dob = profile.get('dob')
+    profile['dob'] = pd.Timestamp(dob).date().isoformat() if dob is not None and pd.notna(dob) else ''
+    profile['fighter_url'] = f'http://ufcstats.com/fighter-details/{fighter_id}'
+    if result is None:
+        # No dated UFC history for this ID: the existing career reader supplies
+        # observed pre-UFC records, with the ordinary missing-data semantics.
+        features = _compute_rolling_for_fighter(
+            [], profile, fighter_name=fighter_name, fighter_id=fighter_id,
+            as_of_date=as_of_date, reference_date=reference_date,
+            processed_data_dir=processed_data_dir,
+            strict_mode=strict_mode, allowed_profile_fields=allowed_profile_fields,
+        )
+        result = {'fights': [], 'features': features, 'source': 'selected_saved_inputs',
+                  'fighter_id': fighter_id, 'fight_history_status': 'selected_history',
+                  'profile': profile}
+    else:
+        result = {**result, 'profile': profile, 'features': dict(result['features'])}
+    age = _parse_dob_to_age(profile.get('dob', ''), reference_date=reference_date)
+    result['features'].update(
+        height=profile.get('height', np.nan), reach=profile.get('reach', np.nan),
+        weight=np.nan, stance_enc=encode_stance(profile.get('stance', '')),
+        age=age, age_squared=age ** 2,
+        age_over_35=float(age > 35) if pd.notna(age) else np.nan,
+        age_under_25=float(age < 25) if pd.notna(age) else np.nan,
+    )
+    result['source'] = 'selected_saved_inputs'
+    result = _apply_reviewed_lookup_profile_overlays(
+        result, fighter_id=fighter_id, reference_date=reference_date,
+        include_current_recoveries=as_of_date is None,
+        strict_mode=strict_mode, allowed_profile_fields=allowed_profile_fields,
+    )
+    # Explicit owner decisions are applied after source updates. The selected
+    # baseline above and registry locks preserve the other accepted fields.
+    result = _model_safe_lookup_result(
+        result, fighter_id=fighter_id, reference_date=reference_date,
+        decisions_path=sources.path('profile_decisions'),
+        prior_decisions_path=sources.path('prior_profile_decisions'),
+    )
+    # A rejected later observation must not erase a permanent owner lock.
+    result = _apply_reviewed_lookup_profile_overlays(
+        result, fighter_id=fighter_id, reference_date=reference_date,
+        include_current_recoveries=False,
+        strict_mode=strict_mode, allowed_profile_fields=allowed_profile_fields,
+    )
+    if strict_mode and allowed_profile_fields is not None:
+        for field, features in {
+            'height': ('height',), 'reach': ('reach',), 'stance': ('stance_enc',),
+            'age': ('age', 'age_squared', 'age_over_35', 'age_under_25'),
+        }.items():
+            if field not in allowed_profile_fields:
+                for feature in features:
+                    result['features'][feature] = np.nan
+    return result
+
+
 def lookup_fighter(
     fighter_name: str,
     as_of_date: Optional[str] = None,
     *,
+    fighter_id: object = None,
     reference_date: Any = None,
     prefer_live_refresh: bool = False,
     force_refresh: bool = False,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
+    profile_integrity_decisions_path: Optional[Path] = None,
+    prior_profile_integrity_decisions_path: Optional[Path] = None,
 ) -> Optional[dict]:
     """
     Look up a fighter's complete stats from UFCStats.com, with fallback
@@ -3031,6 +4453,30 @@ def lookup_fighter(
     Returns dict with profile info, fight history, and computed rolling stats.
     Caches results for the session to avoid redundant scraping.
     """
+    normalized_fighter_id = normalize_ufcstats_id(fighter_id)
+    identity_key = fighter_identity_key(
+        fighter_name,
+        normalized_fighter_id,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    )
+    if identity_key is None:
+        logger.warning(
+            "Refusing ambiguous name-only fighter lookup for %s",
+            fighter_name,
+        )
+        return None
+    if normalized_fighter_id is None and active_sources() is None:
+        # Owner decision D10 (review findings IS3-1, CT2-1, IS4-2): in a hosted
+        # lookup a reviewed bound spelling names exactly one UFCStats identity,
+        # so a lookup of it without an id is that identity's lookup: the same
+        # cache entry, the same reviewed profile overlays, and the id carried
+        # in the result. The binding applies only after the collision-checked
+        # identity key above resolved (a runtime collision on the spelling is
+        # refused first, exactly as for any row without an id) and never in a
+        # selected invocation, which keeps requiring an explicit card id.
+        # Every other id-less lookup is unchanged.
+        normalized_fighter_id = reviewed_spelling_binding_id(fighter_name)
+
     resolved_spec = _coerce_training_spec(training_spec)
     resolved_processed_data_dir = _resolve_processed_data_dir(
         training_spec=resolved_spec,
@@ -3041,10 +4487,19 @@ def lookup_fighter(
     cache_key = _fighter_cache_key(
         fighter_name,
         as_of_date,
+        fighter_id=normalized_fighter_id,
         reference_date=reference_date,
         prefer_live_refresh=prefer_live_refresh,
         processed_data_dir=resolved_processed_data_dir,
+        training_spec=resolved_spec,
+        strict_mode=strict_mode,
+        allowed_profile_fields=allowed_profile_fields,
+        profile_integrity_decisions_path=profile_integrity_decisions_path,
+        prior_profile_integrity_decisions_path=prior_profile_integrity_decisions_path,
     )
+    if active_sources() is not None:
+        # Selected invocations keep their own data and never reuse another selection.
+        force_refresh = True
     if force_refresh:
         _fighter_cache.pop(cache_key, None)
         _fighter_cache_cached_at.pop(cache_key, None)
@@ -3054,20 +4509,65 @@ def lookup_fighter(
         _fighter_cache.pop(cache_key, None)
         _fighter_cache_cached_at.pop(cache_key, None)
 
-    # Resolve known aliases (full legal name → ring name) so both the
-    # processed-history lookup and live scrape use the canonical name.
+    # Historical replay must retain the dataset spelling because name-only
+    # training history is grouped by that spelling. Current/live lookup keeps
+    # using the reviewed UFCStats search aliases.
     _alias_key = normalize_person_name(fighter_name)
-    if _alias_key in _SEARCH_NAME_ALIASES:
-        fighter_name = _SEARCH_NAME_ALIASES[_alias_key]
+    live_fighter_name = _SEARCH_NAME_ALIASES.get(_alias_key, fighter_name)
+    processed_fighter_name = (
+        fighter_name if as_of_date is not None else live_fighter_name
+    )
+    fighter_name = live_fighter_name
 
     logger.info(f"Looking up fighter stats: {fighter_name}")
 
+    profile_reference_date = (
+        reference_date
+        if reference_date is not None and str(reference_date).strip()
+        else as_of_date
+    )
+
     processed_result = _lookup_processed_fighter(
-        fighter_name,
+        processed_fighter_name,
+        fighter_id=normalized_fighter_id,
         as_of_date=as_of_date,
         reference_date=reference_date,
         processed_data_dir=resolved_processed_data_dir,
     )
+    if active_sources() is not None:
+        selected_result = _selected_saved_fighter(
+            processed_result, fighter_name=processed_fighter_name, fighter_id=normalized_fighter_id,
+            reference_date=profile_reference_date, as_of_date=as_of_date,
+            processed_data_dir=resolved_processed_data_dir, strict_mode=strict_mode,
+            allowed_profile_fields=allowed_profile_fields)
+        if selected_result is not None:
+            # The strict selected processed-history reader above succeeded.
+            # An empty prior mode is observed here, unlike unavailable provider
+            # history; keep that fact when selected profiles relabel the source.
+            selected_result["history_scope"] = "selected_processed"
+            selected_result["fight_history_status"] = "selected_history"
+        return selected_result
+    if processed_result is not None and profile_integrity_decisions_path is not None:
+        processed_result = _model_safe_lookup_result(
+            processed_result,
+            fighter_id=normalized_fighter_id,
+            reference_date=profile_reference_date,
+            decisions_path=Path(profile_integrity_decisions_path),
+            prior_decisions_path=(
+                Path(prior_profile_integrity_decisions_path)
+                if prior_profile_integrity_decisions_path is not None
+                else None
+            ),
+        )
+    if processed_result is not None:
+        processed_result = _apply_reviewed_lookup_profile_overlays(
+            processed_result,
+            fighter_id=normalized_fighter_id,
+            reference_date=profile_reference_date,
+            include_current_recoveries=as_of_date is None,
+            strict_mode=strict_mode,
+            allowed_profile_fields=allowed_profile_fields,
+        )
     processed_live_stale = (
         prefer_live_refresh
         and as_of_date is None
@@ -3106,16 +4606,50 @@ def lookup_fighter(
     fights = []
     source = "ufcstats"
     fight_history_status = "complete"
+    resolved_live_fighter_id = normalized_fighter_id
+    reviewed_profile_provenance: dict[str, object] = {}
 
     # Step 1: Try UFCStats
-    fighter_url = search_fighter_url(fighter_name)
+    fighter_url = search_fighter_url(
+        fighter_name,
+        fighter_id=normalized_fighter_id,
+    )
     if fighter_url:
+        searched_fighter_id = normalize_ufcstats_id(fighter_url)
+        if (
+            normalized_fighter_id
+            and searched_fighter_id
+            and searched_fighter_id != normalized_fighter_id
+        ):
+            raise ValueError(
+                "UFCStats search returned a conflicting stable fighter identity: "
+                f"requested={normalized_fighter_id}, returned={searched_fighter_id}"
+            )
+        resolved_live_fighter_id = normalized_fighter_id or searched_fighter_id
         try:
             profile = scrape_fighter_profile(fighter_url, reference_date=reference_date)
         except Exception as e:
             logger.warning(f"Failed to scrape profile for {fighter_name}: {e}")
 
         if profile:
+            if resolved_live_fighter_id:
+                reviewed_view = _apply_reviewed_lookup_profile_overlays(
+                    {
+                        "profile": profile,
+                        "features": {},
+                        "source": "ufcstats",
+                        "fighter_id": resolved_live_fighter_id,
+                    },
+                    fighter_id=resolved_live_fighter_id,
+                    reference_date=profile_reference_date,
+                    include_current_recoveries=True,
+                    strict_mode=strict_mode,
+                    allowed_profile_fields=allowed_profile_fields,
+                )
+                profile = reviewed_view["profile"]
+                reviewed_profile_provenance = dict(
+                    reviewed_view.get("profile_field_provenance") or {}
+                )
             try:
                 fights = scrape_fighter_fights(
                     fighter_url, fighter_name=profile.get("name", fighter_name)
@@ -3159,8 +4693,19 @@ def lookup_fighter(
                 )
                 fight_history_status = "unavailable"
 
-    # Step 2: Fallback to Sherdog/Tapology if UFCStats failed
-    if profile is None:
+    # Step 2: Fallback to Sherdog/Tapology if UFCStats failed.  A stable
+    # UFCStats request cannot be satisfied by an unbound name-search result:
+    # same-name pages at external sources may belong to another fighter.
+    if profile is None and normalized_fighter_id:
+        logger.warning(
+            "Skipping unbound external fallback for %s after exact UFCStats ID %s failed",
+            fighter_name,
+            normalized_fighter_id,
+        )
+    elif profile is None and not fighter_identity_is_ambiguous(
+        fighter_name,
+        ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+    ):
         from src.data.fallback_scrapers import fallback_lookup
 
         logger.info(f"  UFCStats miss for {fighter_name}, trying fallback sources...")
@@ -3194,6 +4739,12 @@ def lookup_fighter(
                     all_mma_fight_count,
                 )
 
+    elif profile is None:
+        logger.warning(
+            "Skipping name-only fallback sources for ambiguous fighter identity %s",
+            fighter_name,
+        )
+
     if profile is None:
         logger.warning(f"Could not find {fighter_name} on any source")
         if processed_result is not None:
@@ -3207,6 +4758,38 @@ def lookup_fighter(
         return None
 
     # Step 3: Compute rolling stats
+    if profile_integrity_decisions_path is not None:
+        profile = _model_safe_profile_view(
+            profile,
+            fighter_id=resolved_live_fighter_id,
+            reference_date=profile_reference_date,
+            decisions_path=Path(profile_integrity_decisions_path),
+            prior_decisions_path=(
+                Path(prior_profile_integrity_decisions_path)
+                if prior_profile_integrity_decisions_path is not None
+                else None
+            ),
+            baseline_profile=_accepted_profile_baseline(processed_result),
+        )
+    if resolved_live_fighter_id:
+        reviewed_view = _apply_reviewed_lookup_profile_overlays(
+            {
+                "profile": profile,
+                "features": {},
+                "source": source,
+                "fighter_id": resolved_live_fighter_id,
+                "profile_field_provenance": reviewed_profile_provenance,
+            },
+            fighter_id=resolved_live_fighter_id,
+            reference_date=profile_reference_date,
+            include_current_recoveries=True,
+            strict_mode=strict_mode,
+            allowed_profile_fields=allowed_profile_fields,
+        )
+        profile = reviewed_view["profile"]
+        reviewed_profile_provenance = dict(
+            reviewed_view.get("profile_field_provenance") or {}
+        )
     rolling = _compute_rolling_for_fighter(
         fights,
         profile,
@@ -3216,6 +4799,7 @@ def lookup_fighter(
         strict_mode=strict_mode,
         allowed_profile_fields=allowed_profile_fields,
         processed_data_dir=resolved_processed_data_dir,
+        fighter_id=resolved_live_fighter_id,
     )
 
     result = {
@@ -3224,7 +4808,11 @@ def lookup_fighter(
         "features": rolling,
         "source": source,
         "fight_history_status": fight_history_status,
+        "fighter_id": resolved_live_fighter_id,
     }
+    if reviewed_profile_provenance:
+        result["profile_field_provenance"] = reviewed_profile_provenance
+        result["reviewed_profile_overlay"] = True
     if source == "fallback":
         result["history_scope"] = "ufc_only"
         result["ufc_fight_count"] = len(fights)
@@ -3245,9 +4833,9 @@ def build_fight_features(
     fighter_b: str,
     odds_features: Optional[dict] = None,
     weight_class: Optional[str] = None,
-    is_title_bout: bool = False,
+    is_title_bout: Optional[bool] = None,
     is_empty_arena: Optional[float] = None,
-    num_rounds: int = 3,
+    num_rounds: Optional[int] = None,
     as_of_date: Optional[str] = None,
     event_id: Optional[str] = None,
     commence_time: Optional[str] = None,
@@ -3258,6 +4846,11 @@ def build_fight_features(
     fighter_a_lookup_name: Optional[str] = None,
     fighter_b_lookup_name: Optional[str] = None,
     force_fighter_refresh: bool = False,
+    fighter_a_id: object = None,
+    fighter_b_id: object = None,
+    profile_integrity_decisions_path: Optional[Path] = None,
+    prior_profile_integrity_decisions_path: Optional[Path] = None,
+    event_date: Optional[str] = None,
 ) -> dict | tuple[dict, dict[str, Any]]:
     """
     Build a complete feature dict for a fight, compatible with the trained model.
@@ -3282,6 +4875,22 @@ def build_fight_features(
         Dict of feature_name -> value, ready for predict_fight().
         When `include_provenance=True`, returns `(features, provenance)`.
     """
+    normalized_a_id = normalize_ufcstats_id(fighter_a_id)
+    normalized_b_id = normalize_ufcstats_id(fighter_b_id)
+    for name, fighter_id in (
+        (fighter_a, normalized_a_id),
+        (fighter_b, normalized_b_id),
+    ):
+        if fighter_identity_key(
+            name,
+            fighter_id,
+            ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+        ) is None:
+            raise AmbiguousFighterIdentityError(
+                "UFCStats fighter ID is required for ambiguous fighter name: "
+                f"{name}"
+            )
+
     features = {}
     resolved_spec = _coerce_training_spec(training_spec)
     requested_feature_cols = _requested_feature_columns(resolved_spec)
@@ -3296,27 +4905,66 @@ def build_fight_features(
     # canonical identities for UFCStats/processed fighter lookup.
     resolved_fighter_a_lookup = fighter_a_lookup_name or fighter_a
     resolved_fighter_b_lookup = fighter_b_lookup_name or fighter_b
+    for name, fighter_id in (
+        (resolved_fighter_a_lookup, normalized_a_id),
+        (resolved_fighter_b_lookup, normalized_b_id),
+    ):
+        if fighter_identity_key(
+            name,
+            fighter_id,
+            ambiguous_name_keys=_ambiguous_fighter_name_keys(),
+        ) is None:
+            raise AmbiguousFighterIdentityError(
+                "UFCStats fighter ID is required for ambiguous fighter name: "
+                f"{name}"
+            )
 
     # Look up both fighters
     lookup_kwargs = {
         "training_spec": resolved_spec,
         "processed_data_dir": resolved_processed_data_dir,
     }
+    if profile_integrity_decisions_path is not None:
+        lookup_kwargs["profile_integrity_decisions_path"] = (
+            profile_integrity_decisions_path
+        )
+    if prior_profile_integrity_decisions_path is not None:
+        lookup_kwargs["prior_profile_integrity_decisions_path"] = (
+            prior_profile_integrity_decisions_path
+        )
     if commence_time is not None and as_of_date is None:
         lookup_kwargs["reference_date"] = commence_time
+    if active_sources() is not None:
+        # The explicit official event day matches the historical age/layoff
+        # reference even when the broadcast starts on the next UTC day.
+        lookup_kwargs['reference_date'] = event_date or commence_time
     if prefer_live_refresh:
         lookup_kwargs["prefer_live_refresh"] = True
     if force_fighter_refresh:
         lookup_kwargs["force_refresh"] = True
     if as_of_date is None:
-        a_data = _call_lookup_fighter(resolved_fighter_a_lookup, **lookup_kwargs)
-        b_data = _call_lookup_fighter(resolved_fighter_b_lookup, **lookup_kwargs)
-    else:
         a_data = _call_lookup_fighter(
-            resolved_fighter_a_lookup, as_of_date=as_of_date, **lookup_kwargs
+            resolved_fighter_a_lookup,
+            fighter_id=normalized_a_id,
+            **lookup_kwargs,
         )
         b_data = _call_lookup_fighter(
-            resolved_fighter_b_lookup, as_of_date=as_of_date, **lookup_kwargs
+            resolved_fighter_b_lookup,
+            fighter_id=normalized_b_id,
+            **lookup_kwargs,
+        )
+    else:
+        a_data = _call_lookup_fighter(
+            resolved_fighter_a_lookup,
+            fighter_id=normalized_a_id,
+            as_of_date=as_of_date,
+            **lookup_kwargs,
+        )
+        b_data = _call_lookup_fighter(
+            resolved_fighter_b_lookup,
+            fighter_id=normalized_b_id,
+            as_of_date=as_of_date,
+            **lookup_kwargs,
         )
 
     provenance = (
@@ -3388,10 +5036,16 @@ def build_fight_features(
             if pd.isna(sos_cutoff):
                 sos_cutoff = None
         features["a_opp_strength"] = _compute_processed_opp_strength(
-            a_canonical, cutoff=sos_cutoff, processed_data_dir=resolved_processed_data_dir,
+            a_canonical,
+            fighter_id=normalized_a_id,
+            cutoff=sos_cutoff,
+            processed_data_dir=resolved_processed_data_dir,
         )
         features["b_opp_strength"] = _compute_processed_opp_strength(
-            b_canonical, cutoff=sos_cutoff, processed_data_dir=resolved_processed_data_dir,
+            b_canonical,
+            fighter_id=normalized_b_id,
+            cutoff=sos_cutoff,
+            processed_data_dir=resolved_processed_data_dir,
         )
         a_os = features["a_opp_strength"]
         b_os = features["b_opp_strength"]
@@ -3431,7 +5085,14 @@ def build_fight_features(
             ("a_", fighter_a, resolved_fighter_a_lookup, a_canonical, a_feats),
             ("b_", fighter_b, resolved_fighter_b_lookup, b_canonical, b_feats),
         ]:
-            if all(col in fighter_features for col in pre_ufc_columns):
+            stable_id = normalized_a_id if prefix == "a_" else normalized_b_id
+            retained_summary = _retained_career_summary(fighter_id=stable_id, reference_date=summary_reference)
+            if retained_summary is not None:
+                fighter_summary = retained_summary
+            elif all(col in fighter_features for col in pre_ufc_columns) and not (
+                _selected_reviewed_career_name(canonical, stable_id) is not None
+                and all(pd.isna(fighter_features[col]) for col in pre_ufc_columns)
+            ):
                 fighter_summary = {
                     col: fighter_features.get(col, np.nan)
                     for col in pre_ufc_columns
@@ -3444,6 +5105,7 @@ def build_fight_features(
                     fighter_features=fighter_features,
                     reference_date=summary_reference,
                     processed_data_dir=resolved_processed_data_dir,
+                    fighter_id=stable_id,
                 )
             for col in pre_ufc_columns:
                 features[f"{prefix}{col}"] = fighter_summary.get(col, np.nan)
@@ -3483,7 +5145,16 @@ def build_fight_features(
             ("a_", fighter_a, a_canonical),
             ("b_", fighter_b, b_canonical),
         ]:
-            fighter_summary = _amateur_summary.get(canonical) or _amateur_summary.get(fighter, {})
+            amateur_id = normalized_a_id if prefix == "a_" else normalized_b_id
+            fighter_summary = _amateur_summary.get(
+                _amateur_summary_label(canonical, amateur_id)
+            ) or _amateur_summary.get(_amateur_summary_label(fighter, amateur_id), {})
+            retained_summary = _retained_career_summary(
+                fighter_id=amateur_id,
+                reference_date=as_of_date or commence_time, amateur=True,
+            )
+            if retained_summary is not None:
+                fighter_summary = retained_summary
             for col in amateur_feature_roots:
                 features[f"{prefix}{col}"] = fighter_summary.get(col, np.nan)
 
@@ -3511,11 +5182,22 @@ def build_fight_features(
 
     # Meta features
     if _wants_feature(requested_feature_set, "is_title_bout"):
-        features["is_title_bout"] = int(is_title_bout)
+        observed_title = coerce_nullable_bool(is_title_bout)
+        features["is_title_bout"] = (
+            float(observed_title) if observed_title is not None else np.nan
+        )
     if _wants_feature(requested_feature_set, "num_rounds_feat"):
-        features["num_rounds_feat"] = float(num_rounds)
+        observed_rounds = coerce_scheduled_rounds(num_rounds)
+        features["num_rounds_feat"] = (
+            float(observed_rounds) if observed_rounds is not None else np.nan
+        )
     if _wants_feature(requested_feature_set, "is_empty_arena"):
-        features["is_empty_arena"] = float(is_empty_arena) if is_empty_arena is not None else np.nan
+        observed_empty_arena = coerce_nullable_bool(is_empty_arena)
+        features["is_empty_arena"] = (
+            float(observed_empty_arena)
+            if observed_empty_arena is not None
+            else np.nan
+        )
 
     # Style matchup interactions
     if _wants_feature(
@@ -3560,6 +5242,8 @@ def build_fight_features(
             fighter_b,
             a_data,
             b_data,
+            fighter_a_id=normalized_a_id,
+            fighter_b_id=normalized_b_id,
         )
 
     # ------------------------------------------------------------------
@@ -3611,11 +5295,15 @@ def build_fight_features(
                 fighter_a,
                 weight_class=weight_class,
                 as_of_date=as_of_date,
+                fighter_id=normalized_a_id,
+                strict=True,
             )
             b_ranks = get_fighter_rankings(
                 fighter_b,
                 weight_class=weight_class,
                 as_of_date=as_of_date,
+                fighter_id=normalized_b_id,
+                strict=True,
             )
             features["a_wc_rank_feat"] = a_ranks["wc_rank_feat"]
             features["b_wc_rank_feat"] = b_ranks["wc_rank_feat"]
@@ -3624,6 +5312,8 @@ def build_fight_features(
             features["b_pfp_rank_feat"] = b_ranks["pfp_rank_feat"]
             features["diff_pfp_rank"] = a_ranks["pfp_rank_feat"] - b_ranks["pfp_rank_feat"]
         except Exception as e:
+            if active_sources() is not None:
+                raise
             logger.warning(f"Rankings acquisition failed: {e}")
             for col in ["a_wc_rank_feat", "b_wc_rank_feat", "diff_wc_rank",
                          "a_pfp_rank_feat", "b_pfp_rank_feat", "diff_pfp_rank"]:
@@ -3644,19 +5334,55 @@ def build_fight_features(
             method_feats = get_method_odds(
                 fighter_a,
                 fighter_b,
+                fighter_a_id=normalized_a_id,
+                fighter_b_id=normalized_b_id,
+                strict=True,
                 event_id=event_id,
                 commence_time=commence_time,
                 as_of_date=as_of_date,
             )
             features.update(method_feats)
         except Exception as e:
+            if active_sources() is not None:
+                raise
             logger.warning(f"Method odds acquisition failed: {e}")
             for col in ["a_ko_odds_prob", "a_sub_odds_prob", "a_dec_odds_prob",
                          "b_ko_odds_prob", "b_sub_odds_prob", "b_dec_odds_prob"]:
                 features[col] = np.nan
 
-    # Add odds features last (these override if provided)
-    if odds_features:
+    # Accepted historical values bind the actual dated matchup, independently
+    # of the replay's information cutoff. They never certify a timed bet entry.
+    sources = active_sources()
+    if sources is not None and sources.historical_market_replay:
+        from src.data.accepted_historical_markets import MONEYLINE_FEATURES, merge_accepted_historical_features
+        market_date = event_date or (str(commence_time)[:10] if commence_time else None)
+        if market_date is None:
+            raise ValueError("Selected-source features require the fight's explicit event date")
+        accepted = sources.markets().for_fight(
+            event_date=market_date, fighter_a=fighter_a, fighter_b=fighter_b)
+        # Explicit odds are real observations too; a concrete disagreement fails.
+        observed = dict(features)
+        # Fighter snapshots may contain prices for earlier, different matchups.
+        # Only explicit current odds or the selected current-fight record can
+        # supply moneyline features; genuine current gaps must remain missing.
+        for field in MONEYLINE_FEATURES:
+            observed[field] = np.nan
+        if odds_features:
+            observed.update({key: value for key, value in odds_features.items()
+                             if value is not None and not pd.isna(value)})
+        features = merge_accepted_historical_features(observed, accepted)
+        if provenance is not None:
+            provenance['accepted_historical_markets'] = list(accepted.records)
+
+    if sources is not None and not sources.historical_market_replay:
+        # A saved fighter snapshot can contain an earlier matchup's prices.
+        # Live market values must come from this invocation's current inputs.
+        from src.data.accepted_historical_markets import MONEYLINE_FEATURES
+        for field in MONEYLINE_FEATURES:
+            features[field] = np.nan
+
+    # Live mode retains current explicit odds and never overlays historical prices.
+    if odds_features and (sources is None or not sources.historical_market_replay):
         if requested_feature_set is None:
             features.update(odds_features)
         else:

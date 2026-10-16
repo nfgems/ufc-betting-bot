@@ -153,7 +153,9 @@ def dynamic_blend_weight(
         t = confidence / max(0.01, (BLEND_CONFIDENCE_THRESHOLD - 0.5) * 2.0)
         weight = BLEND_WEIGHT_MIN + t * (base_weight - BLEND_WEIGHT_MIN)
 
-    # Boost if no-odds model strongly agrees (>5% edge same direction)
+    # Boost only when the no-odds probability is valid. In particular, NaN
+    # must not behave like a present value and bypass agreement checks.
+    no_odds_prob = _coerce_probability(no_odds_prob)
     if no_odds_prob is not None:
         model_direction = model_prob - market_prob
         no_odds_direction = no_odds_prob - market_prob
@@ -179,7 +181,7 @@ def _coerce_probability(value: object) -> Optional[float]:
         prob = float(value)
     except (TypeError, ValueError):
         return None
-    if np.isnan(prob):
+    if not np.isfinite(prob) or not 0.0 <= prob <= 1.0:
         return None
     return prob
 
@@ -198,7 +200,7 @@ def _coerce_optional_float(value: object) -> Optional[float]:
         result = float(value)
     except (TypeError, ValueError):
         return None
-    if np.isnan(result):
+    if not np.isfinite(result):
         return None
     return result
 
@@ -382,6 +384,8 @@ def compute_independent_blend_probs(
     base_weight: float = BLEND_WEIGHT,
 ) -> tuple[float, float]:
     """Blend both sides independently, then renormalize to a proper market pair."""
+    no_odds_a = _coerce_probability(no_odds_a)
+    no_odds_b = _coerce_probability(no_odds_b)
     dyn_weight_a = dynamic_blend_weight(model_a, market_a, no_odds_a, base_weight)
     dyn_weight_b = dynamic_blend_weight(model_b, market_b, no_odds_b, base_weight)
     raw_blend_a = blend_probability(model_a, market_a, dyn_weight_a)
@@ -427,6 +431,14 @@ def _passes_quality_filters(
     max_decimal_odds: Optional[float] = None,
 ) -> bool:
     """Check all quality filters EXCEPT the edge threshold."""
+    blended_prob = _coerce_probability(blended_prob)
+    market_prob = _coerce_probability(market_prob)
+    no_odds_prob = _coerce_probability(no_odds_prob)
+    edge = _coerce_optional_float(edge)
+    if blended_prob is None or market_prob is None or edge is None:
+        logger.debug("Skipping %s: invalid probability or edge", fighter_name)
+        return False
+
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
     max_decimal_odds = MAX_DECIMAL_ODDS if max_decimal_odds is None else max_decimal_odds
     require_model_agreement = (
@@ -469,10 +481,7 @@ def _passes_quality_filters(
     # Filter 4: Model agreement — no-odds model must independently agree
     if require_model_agreement:
         if no_odds_prob is None:
-            logger.debug(
-                f"Skipping {fighter_name}: no-odds model probability unavailable "
-                f"(require_model_agreement is enabled)"
-            )
+            logger.debug("Skipping %s: invalid no-odds probability", fighter_name)
             return False
         no_odds_edge = no_odds_prob - market_prob
         if no_odds_edge < model_agreement_min_edge:
@@ -597,6 +606,16 @@ def _filter_rejection_reason(
 ) -> Optional[dict]:
     """Return ``None`` if the bet passes all filters, otherwise a dict with
     ``reason`` (short label) and ``detail`` (one-liner with numbers)."""
+    blended_prob = _coerce_probability(blended_prob)
+    market_prob = _coerce_probability(market_prob)
+    no_odds_prob = _coerce_probability(no_odds_prob)
+    edge = _coerce_optional_float(edge)
+    if blended_prob is None or market_prob is None or edge is None:
+        return {
+            "reason": "Invalid probability",
+            "detail": "Model, market, or edge value is not finite and bounded",
+        }
+
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
     _max_decimal_odds = MAX_DECIMAL_ODDS if max_decimal_odds is None else max_decimal_odds
     _require = REQUIRE_MODEL_AGREEMENT if require_model_agreement is None else require_model_agreement
@@ -622,7 +641,10 @@ def _filter_rejection_reason(
         }
     if _require:
         if no_odds_prob is None:
-            return {"reason": "No-odds unavailable", "detail": "No-odds model probability missing"}
+            return {
+                "reason": "No-odds unavailable",
+                "detail": "No-odds model probability is missing or invalid",
+            }
         no_odds_edge = no_odds_prob - market_prob
         if no_odds_edge < _agree_edge:
             return {
@@ -741,8 +763,8 @@ def find_value_bets(
         if model_a is None or model_b is None or np.isnan(market_a) or np.isnan(market_b):
             skipped += 1
             continue
-        no_odds_a = row.get("no_odds_prob_a")
-        no_odds_b = row.get("no_odds_prob_b")
+        no_odds_a = _coerce_probability(row.get("no_odds_prob_a"))
+        no_odds_b = _coerce_probability(row.get("no_odds_prob_b"))
 
         # Line movement metadata (for sharp money filtering)
         line_movement = row.get("line_movement")
@@ -1001,20 +1023,12 @@ def find_conviction_bets(
         if model_a is None or model_b is None or np.isnan(market_a) or np.isnan(market_b):
             skipped += 1
             continue
-        no_odds_a = row.get("no_odds_prob_a")
-        no_odds_b = row.get("no_odds_prob_b")
+        no_odds_a = _coerce_probability(row.get("no_odds_prob_a"))
+        no_odds_b = _coerce_probability(row.get("no_odds_prob_b"))
 
         # Fighter experience — stricter bar for conviction bets
-        a_fights = row.get("a_num_fights")
-        b_fights = row.get("b_num_fights")
-        if isinstance(a_fights, float) and not np.isnan(a_fights):
-            a_fights = int(a_fights)
-        elif not isinstance(a_fights, int):
-            a_fights = None
-        if isinstance(b_fights, float) and not np.isnan(b_fights):
-            b_fights = int(b_fights)
-        elif not isinstance(b_fights, int):
-            b_fights = None
+        a_fights = _coerce_optional_int(row.get("a_num_fights"))
+        b_fights = _coerce_optional_int(row.get("b_num_fights"))
 
         # Check both sides for conviction
         for side, model_p, market_p, no_odds_p, fighter_name, opp_name, own_fights, opp_fights in [
@@ -1038,10 +1052,17 @@ def find_conviction_bets(
                 continue
 
             # Gate 3: Fighter experience — both fighters need minimum UFC fights
-            if own_fights is not None and own_fights < MIN_FIGHTER_FIGHTS:
+            if own_fights is None or opp_fights is None:
+                logger.debug(
+                    "Conviction skip %s: fighter experience unavailable",
+                    fighter_name,
+                )
                 skipped += 1
                 continue
-            if opp_fights is not None and opp_fights < MIN_FIGHTER_FIGHTS:
+            if own_fights < MIN_FIGHTER_FIGHTS:
+                skipped += 1
+                continue
+            if opp_fights < MIN_FIGHTER_FIGHTS:
                 skipped += 1
                 continue
 

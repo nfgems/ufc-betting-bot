@@ -595,6 +595,7 @@ class ClobClientWrapper:
             key=self.private_key,
             signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
             funder=funder or None,
+            retry_on_error=False,
         )
         self._api_creds = self._derive_or_create_api_key(client)
         client.set_api_creds(self._api_creds)
@@ -999,6 +1000,7 @@ class ClobClientWrapper:
         builder_code: str | None = None,
         metadata: str | None = None,
         pre_submit_check: Callable[[], None] | None = None,
+        on_order_prepared: Callable[[str], None] | None = None,
     ) -> dict:
         """
         Create and submit a GTC limit order.
@@ -1014,6 +1016,9 @@ class ClobClientWrapper:
             metadata: Optional V2 order metadata bytes32
             pre_submit_check: Optional local guard called immediately before
                 the CLOB order POST. Raise to abort before submission.
+            on_order_prepared: Persist the exact signed order hash before POST.
+                A failure aborts submission. The callback receives no credentials
+                or signed payload. This path never rebuilds/retries an order POST.
 
         Returns order response dict.
         """
@@ -1054,16 +1059,53 @@ class ClobClientWrapper:
             neg_risk=neg_risk,
         )
 
+        def _prepare():
+            if on_order_prepared is None:
+                return None
+
+            # Split the SDK convenience call so an interrupted POST still has
+            # its original exchange identity. Rebuilding would generate a new
+            # salt and could produce another independently executable order.
+            prepared_neg_risk = (
+                options.neg_risk
+                if options.neg_risk is not None
+                else self._client.get_neg_risk(token_id)
+            )
+            options.neg_risk = prepared_neg_risk
+            signed_order = self._client.create_order(order_args, options)
+            from py_clob_client_v2.order_builder.builder import (
+                ExchangeOrderBuilderV1,
+                ExchangeOrderBuilderV2,
+                get_contract_config,
+            )
+
+            signer = self._client.builder.signer
+            config = get_contract_config(signer.get_chain_id())
+            if hasattr(signed_order, "timestamp"):
+                exchange = config.neg_risk_exchange_v2 if prepared_neg_risk else config.exchange_v2
+                hash_builder = ExchangeOrderBuilderV2(exchange, signer.get_chain_id(), signer)
+            else:
+                exchange = config.neg_risk_exchange if prepared_neg_risk else config.exchange
+                hash_builder = ExchangeOrderBuilderV1(exchange, signer.get_chain_id(), signer)
+            order_id = hash_builder.build_order_hash(
+                hash_builder.build_order_typed_data(signed_order)
+            )
+            on_order_prepared(order_id)
+            return signed_order
+
         with _clob_transport_lock:
+            # Run local callbacks on the thread holding the reentrant transport
+            # lock, preserving guards which themselves perform wrapper reads.
+            signed_order = _prepare()
             if pre_submit_check is not None:
                 pre_submit_check()
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(
-                    self._client.create_and_post_order,
-                    order_args,
-                    options,
-                    OrderType.GTC,
-                )
+                if signed_order is None:
+                    future = pool.submit(
+                        self._client.create_and_post_order, order_args, options, OrderType.GTC
+                    )
+                else:
+                    future = pool.submit(self._client.post_order, signed_order, OrderType.GTC)
                 response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
 
         logger.info(

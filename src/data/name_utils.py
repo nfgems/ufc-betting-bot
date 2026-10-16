@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from types import MappingProxyType
 
 
 _UFCSTATS_ID_RE = re.compile(
@@ -307,6 +308,214 @@ def canonical_fighter_name_key(value: object) -> str:
     if legacy_key in _REVIEWED_LEGACY_BASE_KEYS:
         return normalize_person_name(value)
     return legacy_key
+
+
+# These are the collision groups present in the checked-in UFCStats fighter
+# inventory. The inventory loaders re-derive the set at runtime; this bounded
+# fallback keeps live and refresh paths fail-closed if that artifact is absent.
+_KNOWN_COLLIDING_FIGHTER_NAMES = (
+    "Anthony Johnson",
+    "Bruno Silva",
+    "Daniel Roberts",
+    "Jean Silva",
+    "Joey Gomez",
+    "Lance Gibson",
+    "Mike Davis",
+    "Michael McDonald",
+    "Bobby Sanchez",
+    "Tommy Petersen",
+    "Victor Valenzuela",
+)
+KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS = frozenset(
+    canonical_fighter_name_key(name) for name in _KNOWN_COLLIDING_FIGHTER_NAMES
+)
+
+# Current-roster identities that cannot be selected safely by name alone.
+# Historical identities are recovered from fight participant URLs/IDs instead
+# of being guessed from these current mappings.
+CURRENT_UFCSTATS_ID_OVERRIDES: dict[str, str] = {
+    # Bruno Silva is deliberately absent.  Two distinct UFCStats owners share
+    # that exact display name, so the current Bulldog identity is selected only
+    # by its reviewed UFC.com route in ``ufc_active_roster``.
+    normalize_person_name("Jean Silva"): "52ef95b5860fb28c",
+    normalize_person_name("Lance Gibson Jr."): "07bc580bdf3eb9c8",
+    normalize_person_name("Mike Davis"): "fb3e61720be4690c",
+    normalize_person_name("Thomas Petersen"): "764d39074a352e33",
+    normalize_person_name("Victor Valenzuela"): "078695e385ec2f57",
+}
+
+# Owner decisions D10 and D10-REDO (2026-09-24): reviewed spellings bound to
+# one UFCStats ID. The exact spellings listed here (compared after
+# normalize_person_name) share that fighter's stateful history key, so career
+# rows stored under a source spelling reach the same identity in the training
+# build and in live inference, and a live card may name him by any of them.
+# This is not a name rule: no other spelling is folded, display names are not
+# rewritten, and a different UFCStats ID on a bound spelling gets no key.
+# Unlike REVIEWED_FIGHTER_IDENTITIES, the rows under these spellings stay the
+# accepted history (nothing replaces or drops them).
+REVIEWED_ID_SPELLING_BINDINGS: dict[str, dict[str, object]] = {
+    "66d42e9503fa108e": {
+        # UFCStats spells him Windri; Tapology and UFC.com spell him Wendri;
+        # Wikipedia's Road to UFC Season 2 page spells him Wendris. UFCStats,
+        # UFC.com, Sherdog and ESPN give the same date of birth, and UFCStats,
+        # Sherdog, ESPN, Tapology and Wikipedia list the same 2023-05-28 Road to
+        # UFC bout against Shin Haraguchi (TKO, round 2, 1:25).
+        "ufcstats_name": "Windri Patilima",
+        "bound_names": ("Windri Patilima", "Wendri Patilima", "Wendris Patilima"),
+        "dob": "1993-07-19",
+        "ufcstats_url": "http://ufcstats.com/fighter-details/66d42e9503fa108e",
+        "official_athlete_url": "https://www.ufc.com/athlete/wendri-patilima",
+        "sherdog_url": "https://www.sherdog.com/fighter/Windri-Patilima-323519",
+        "espn_url": "https://www.espn.com/mma/fighter/_/id/5137017/windri-patilima",
+        "wikipedia_url": (
+            "https://en.wikipedia.org/w/index.php?title=Road_to_UFC_Season_2"
+            "&oldid=1258832758"
+        ),
+    },
+}
+
+
+def _id_spelling_binding_maps() -> tuple[
+    MappingProxyType[str, str], MappingProxyType[str, str]
+]:
+    """Check the registry once, at import, and return read-only views of it.
+
+    Every consumer reads these views, never the registry itself, so a later
+    edit of REVIEWED_ID_SPELLING_BINDINGS cannot bypass the check.
+    """
+    by_name_key: dict[str, str] = {}
+    ufcstats_names: dict[str, str] = {}
+    override_ids = set(CURRENT_UFCSTATS_ID_OVERRIDES.values())
+    for ufcstats_id, binding in REVIEWED_ID_SPELLING_BINDINGS.items():
+        names = tuple(binding["bound_names"])
+        if (
+            normalize_ufcstats_id(ufcstats_id) != ufcstats_id
+            or ufcstats_id in REVIEWED_FIGHTER_IDENTITIES
+            or ufcstats_id in override_ids
+            or binding["ufcstats_name"] not in names
+        ):
+            raise RuntimeError(f"invalid reviewed spelling binding: {ufcstats_id}")
+        for name in names:
+            key = normalize_person_name(name)
+            if (
+                not key
+                or key in by_name_key
+                or key in _REVIEWED_NORMALIZED_ID_MAP
+                or key in CURRENT_UFCSTATS_ID_OVERRIDES
+                or canonical_fighter_name_key(name) in KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
+            ):
+                raise RuntimeError(f"reviewed spelling binding overlaps: {name}")
+            by_name_key[key] = ufcstats_id
+        ufcstats_names[ufcstats_id] = str(binding["ufcstats_name"])
+    return MappingProxyType(by_name_key), MappingProxyType(ufcstats_names)
+
+
+_ID_SPELLING_BINDING_BY_NAME_KEY, _ID_SPELLING_BINDING_UFCSTATS_NAMES = (
+    _id_spelling_binding_maps()
+)
+
+
+def reviewed_spelling_binding_id(value: object) -> str | None:
+    """Return the UFCStats ID bound to an exact reviewed spelling, if any."""
+    if not isinstance(value, str):
+        return None
+    return _ID_SPELLING_BINDING_BY_NAME_KEY.get(normalize_person_name(value))
+
+
+def reviewed_spelling_bindings() -> dict[str, frozenset[str]]:
+    """Return each bound UFCStats ID with its normalized reviewed spellings."""
+    grouped: dict[str, set[str]] = {}
+    for key, bound_id in _ID_SPELLING_BINDING_BY_NAME_KEY.items():
+        grouped.setdefault(bound_id, set()).add(key)
+    return {bound_id: frozenset(keys) for bound_id, keys in grouped.items()}
+
+
+def reviewed_spelling_binding_name(value: object, identity_key: object) -> object:
+    """Label a name for the spelling-keyed amateur career summary.
+
+    A reviewed bound spelling whose stateful key (``fighter_identity_key``) is
+    its bound UFCStats identity is labelled with that fighter's UFCStats
+    spelling, so his rows under every bound spelling form one summary that the
+    training build and live inference both find. Under any other key (a
+    contradicting UFCStats ID) it gets no label (None). Every other value is
+    returned unchanged.
+    """
+    bound_id = reviewed_spelling_binding_id(value)
+    if bound_id is None:
+        return value
+    if identity_key != f"ufcstats:{bound_id}":
+        return None
+    return _ID_SPELLING_BINDING_UFCSTATS_NAMES[bound_id]
+
+
+def derive_ambiguous_fighter_name_keys(
+    rows,
+    *,
+    name_field: str = "name",
+    id_field: str = "fighter_id",
+) -> frozenset[str]:
+    """Derive canonical name keys that map to multiple UFCStats IDs."""
+    ids_by_name: dict[str, set[str]] = {}
+    for row in rows:
+        if isinstance(row, dict):
+            name = row.get(name_field)
+            raw_id = row.get(id_field)
+        else:
+            name = getattr(row, name_field, None)
+            raw_id = getattr(row, id_field, None)
+        fighter_id = normalize_ufcstats_id(raw_id)
+        name_key = canonical_fighter_name_key(name)
+        if name_key and fighter_id:
+            ids_by_name.setdefault(name_key, set()).add(fighter_id)
+    return frozenset(key for key, ids in ids_by_name.items() if len(ids) > 1)
+
+
+def fighter_identity_key(
+    fighter_name: object,
+    fighter_id: object = None,
+    *,
+    ambiguous_name_keys: frozenset[str] | set[str] | None = None,
+) -> str | None:
+    """Return the minimal safe stateful-history key for one fighter."""
+    normalized_id = normalize_ufcstats_id(fighter_id)
+    reviewed_id = reviewed_fighter_identity_id(fighter_name)
+    if reviewed_id is not None:
+        if normalized_id is not None and normalized_id != reviewed_id:
+            return None
+        return f"ufcstats:{reviewed_id}"
+
+    exact_key = normalize_person_name(fighter_name)
+    if not exact_key:
+        return None
+
+    collision_keys = (
+        KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
+        if ambiguous_name_keys is None
+        else ambiguous_name_keys
+    )
+    if canonical_fighter_name_key(fighter_name) in collision_keys:
+        return f"ufcstats:{normalized_id}" if normalized_id else None
+    bound_id = reviewed_spelling_binding_id(fighter_name)
+    if bound_id is not None:
+        # A reviewed spelling belongs to one UFCStats ID; another observed ID
+        # contradicts the binding and gets no key.
+        if normalized_id is not None and normalized_id != bound_id:
+            return None
+        return f"ufcstats:{bound_id}"
+    return f"name:{exact_key}"
+
+
+def fighter_identity_is_ambiguous(
+    fighter_name: object,
+    *,
+    ambiguous_name_keys: frozenset[str] | set[str] | None = None,
+) -> bool:
+    collision_keys = (
+        KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
+        if ambiguous_name_keys is None
+        else ambiguous_name_keys
+    )
+    return canonical_fighter_name_key(fighter_name) in collision_keys
 
 
 def canonical_fighter_display_name(value: object) -> str:

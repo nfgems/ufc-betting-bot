@@ -27,11 +27,13 @@ import requests
 from flask import Flask, jsonify, make_response, render_template, request
 
 from src.betting_window import bet_window_status
+from src.live_control import LIVE_MODE_OFF, resolve_live_mode_from_env
 from src.config import (
     ACTIVITY_ALERT_RETENTION_HOURS,
     LOGS_DIR,
     POLYMARKET_GAMMA_URL,
     PREDICTION_CACHE_SCHEMA_VERSION,
+    ROSTERWATCH_IDENTITY_REVIEW_PATH,
 )
 from src.web.alert_store import (
     ALERT_LEVELS,
@@ -813,6 +815,38 @@ def readyz():
     response = _json_no_store(payload)
     response.status_code = 200 if payload["ok"] else 503
     return response
+
+
+@app.route("/api/identity-review", methods=["GET"])
+def api_identity_review():
+    """Expose saved identity evidence without acquisition, mutation or binding."""
+    path = Path(ROSTERWATCH_IDENTITY_REVIEW_PATH)
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return _dashboard_read_response({"rows": [], "count": 0, "available": False,
+                                         "message": "Identity review has not been generated yet."})
+    except OSError:
+        return _dashboard_read_response({"rows": [], "count": 0, "available": False,
+                                         "error": "Identity review unavailable"}), 503
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+            raise ValueError("Invalid review schema")
+        if any(not isinstance(row, dict) or not isinstance(row.get("fighter"), str)
+               or not row["fighter"].strip() or type(row.get("identity_complete")) is not bool
+               for row in payload["rows"]):
+            raise ValueError("Invalid review rows")
+        from src.data.rosterwatch_identity import _resolved_owner_ids
+        _resolved_owner_ids(payload)
+    except (ValueError, UnicodeDecodeError):
+        return _dashboard_read_response({"rows": [], "count": 0, "available": False,
+                                         "error": "Identity review invalid"}), 503
+    current = (payload.get("membership_current") is not False
+               and payload.get("status") not in {"stale", "unavailable"})
+    return _dashboard_read_response({**payload, "available": current,
+                                     "count": len(payload["rows"]),
+                                     "sha256": hashlib.sha256(raw).hexdigest()})
 
 
 @app.route("/api/runtime-status")
@@ -1629,7 +1663,7 @@ def api_summary():
             summary["roi"] = live["total_pnl"] / total_deployed
         if live_source != "live":
             summary["_pnl_degraded"] = True
-            summary["_pnl_source"] = live_source
+        summary["_pnl_source"] = live_source
         summary["sport"] = sport
     except Exception as e:
         logger.warning("Live PnL merge failed — dashboard may show stale data: %s", e)
@@ -2750,12 +2784,17 @@ def _profile_trader_label(values) -> str | None:
     return " / ".join(labels)
 
 
-def _profile_position_status(realized_pnl: float) -> str:
+def _profile_position_status(realized_pnl: float | None, *, confirmed_result: str | None = None) -> str:
+    """A closed position's realized return is not its market resolution."""
+    if confirmed_result in {"won", "lost", "sold", "push"}:
+        return confirmed_result
+    if realized_pnl is None or not math.isfinite(realized_pnl):
+        return "closed"
     if realized_pnl > PROFILE_PNL_EPSILON:
-        return "won"
+        return "closed_profit"
     if realized_pnl < -PROFILE_PNL_EPSILON:
-        return "lost"
-    return "sold"
+        return "closed_loss"
+    return "closed_flat"
 
 
 def _profile_activity_loss_rows(
@@ -2813,7 +2852,8 @@ def _profile_activity_loss_rows(
             "status": "lost",
             "trade_side": "lost",
             "placed_at": _profile_trade_timestamp_iso(first_buy),
-            "settled_at": latest.get("endDate") or latest.get("end_date"),
+            "settled_at": None,
+            "market_end_date": latest.get("endDate") or latest.get("end_date"),
             "event_date": latest.get("endDate") or latest.get("end_date"),
             "token_id": token_id,
             "condition_id": str(latest.get("conditionId") or latest.get("condition_id") or "").strip() or None,
@@ -2937,7 +2977,8 @@ def _profile_closed_row(
     buy_shares = sum(_safe_float(trade.get("size"), 0.0) for trade in buy_trades)
     if buy_shares <= 0.0:
         buy_shares = total_bought
-    realized_pnl = _safe_float(pos.get("realizedPnl", pos.get("realized_pnl", pos.get("cashPnl"))), 0.0)
+    realized_pnl = _safe_float(pos.get("realizedPnl", pos.get("realized_pnl", pos.get("cashPnl"))), math.nan)
+    realized_pnl = realized_pnl if math.isfinite(realized_pnl) else None
     placed_at = _profile_trade_timestamp_iso(buy_trades[0]) if buy_trades else _first_present(*(bet.get("placed_at") for bet in earliest))
 
     settled_at = None
@@ -2949,9 +2990,26 @@ def _profile_closed_row(
         settled_at = _first_present(
             pos.get("closedAt"),
             pos.get("closed_at"),
-            pos.get("endDate"),
-            pos.get("end_date"),
+            _latest_value("settled_at"),
         )
+
+    # A terminal quote alone is not evidence of market resolution. Likewise,
+    # an account-level redemption may concern another outcome of this condition.
+    confirmed_result = None
+    resolution_source = None
+    if pos.get("resolved") is True:
+        resolution_price = _safe_float(pos.get("curPrice"), math.nan)
+        if resolution_price in (0.0, 1.0):
+            confirmed_result = "won" if resolution_price == 1.0 else "lost"
+            resolution_source = "explicit_position_resolution"
+    if confirmed_result is None and latest:
+        results = {bet.get("status") for bet in latest}
+        if len(results) == 1 and results <= {"won", "lost", "push"} and all(
+            bet.get("settled_at") for bet in latest
+        ):
+            confirmed_result = next(iter(results))
+            resolution_source = "matched_original_settlement"
+    position_status = _profile_position_status(realized_pnl, confirmed_result=confirmed_result)
 
     trader_labels = _unique_labels(
         bet.get("trader") or _trader_label_from_path(bet.get("_ledger_path", ""))
@@ -2970,10 +3028,13 @@ def _profile_closed_row(
         "amount": buy_amount,
         "shares": buy_shares,
         "result_pnl": realized_pnl,
-        "status": _profile_position_status(realized_pnl),
-        "trade_side": _profile_position_status(realized_pnl),
+        "status": position_status,
+        "trade_side": position_status,
+        "resolution_confirmed": confirmed_result in {"won", "lost", "push"},
+        "resolution_source": resolution_source,
         "placed_at": placed_at,
         "settled_at": settled_at,
+        "market_end_date": pos.get("endDate") or pos.get("end_date"),
         "event_date": _latest_value("event_date") or pos.get("endDate") or pos.get("end_date"),
         "reason": _latest_value("reason"),
         "token_id": str(pos.get("asset") or "").strip() or None,
@@ -3053,7 +3114,8 @@ def _build_profile_summary(
     degraded: bool,
 ) -> dict:
     open_rows = [row for row in rows if row.get("status") == "open"]
-    settled_rows = [row for row in rows if row.get("status") != "open"]
+    closed_rows = [row for row in rows if row.get("status") != "open"]
+    settled_rows = [row for row in closed_rows if row.get("status") in {"won", "lost", "push"}]
     wins = sum(1 for row in settled_rows if row.get("status") == "won")
     losses = sum(1 for row in settled_rows if row.get("status") == "lost")
     total_wagered = sum(_safe_float(row.get("amount"), 0.0) for row in rows if row.get("amount") not in (None, ""))
@@ -3076,9 +3138,13 @@ def _build_profile_summary(
         "total_bets": len(rows),
         "open_bets": len(open_rows),
         "settled_bets": len(settled_rows),
+        "closed_bets": len(closed_rows),
+        "closed_profit": sum(row.get("status") == "closed_profit" for row in closed_rows),
+        "closed_loss": sum(row.get("status") == "closed_loss" for row in closed_rows),
+        "closed_flat": sum(row.get("status") == "closed_flat" for row in closed_rows),
         "wins": wins,
         "losses": losses,
-        "win_rate": wins / (wins + losses) if (wins + losses) > 0 else 0.0,
+        "win_rate": wins / (wins + losses) if (wins + losses) > 0 else None,
         "total_wagered": total_wagered,
         "realized_pnl": realized_pnl,
         "unrealized_pnl": unrealized_pnl,
@@ -3256,10 +3322,11 @@ def _scope_profile_bets_payload(payload: dict, sport: str) -> dict:
     if not math.isfinite(profile_total_pnl) and base_summary.get("_canonical_profile"):
         profile_total_pnl = _safe_float(base_summary.get("total_pnl"), math.nan)
     open_rows = [row for row in rows if row.get("status") == "open"]
-    settled_rows = [row for row in rows if row.get("status") != "open"]
+    closed_rows = [row for row in rows if row.get("status") != "open"]
+    settled_rows = [row for row in closed_rows if row.get("status") in {"won", "lost", "push"}]
     wins = sum(1 for row in settled_rows if row.get("status") == "won")
     losses = sum(1 for row in settled_rows if row.get("status") == "lost")
-    realized = sum(_safe_float(row.get("result_pnl"), 0.0) for row in settled_rows)
+    realized = sum(_safe_float(row.get("result_pnl"), 0.0) for row in closed_rows)
     unrealized = sum(_safe_float(row.get("unrealized_pnl"), 0.0) for row in open_rows)
     open_invested = sum(
         _safe_float(row.get("invested", row.get("amount")), 0.0)
@@ -3282,9 +3349,13 @@ def _scope_profile_bets_payload(payload: dict, sport: str) -> dict:
         "total_bets": len(rows),
         "open_bets": len(open_rows),
         "settled_bets": len(settled_rows),
+        "closed_bets": len(closed_rows),
+        "closed_profit": sum(row.get("status") == "closed_profit" for row in closed_rows),
+        "closed_loss": sum(row.get("status") == "closed_loss" for row in closed_rows),
+        "closed_flat": sum(row.get("status") == "closed_flat" for row in closed_rows),
         "wins": wins,
         "losses": losses,
-        "win_rate": wins / (wins + losses) if (wins + losses) > 0 else 0.0,
+        "win_rate": wins / (wins + losses) if (wins + losses) > 0 else None,
         "total_wagered": total_wagered,
         "realized_pnl": realized,
         "unrealized_pnl": unrealized,
@@ -3340,6 +3411,9 @@ def api_pnl_history():
 @app.route("/api/refresh-prices", methods=["POST"])
 def api_refresh_prices():
     """Fetch latest prices from Polymarket for open bets."""
+    auth_error = _require_mutation_auth()
+    if auth_error is not None:
+        return auth_error
     if not _clob_client:
         return jsonify({"status": "offline", "updated": 0})
 
@@ -3390,6 +3464,8 @@ def api_positions():
         return auth_error
     sport = _normalize_sport_filter(request.args.get("sport", "all"))
     raw_pnl, live_source = _load_live_pnl_snapshot()
+    if live_source == "unavailable":
+        return jsonify({"error": "live_positions_unavailable", "_pnl_source": live_source, "_pnl_degraded": True}), 503
     pnl = _dashboard_live_pnl_from_raw(raw_pnl, sport=sport)
     pnl["_pnl_degraded"] = live_source != "live"
     pnl["_pnl_source"] = live_source
@@ -3473,7 +3549,7 @@ def api_settle_auto():
         if Path(path).exists():
             ledger = BetLedger(path=path)
             count += auto_settle_from_polymarket(ledger)
-    return jsonify({"settled": count})
+    return jsonify({"settled": count, "real_settlement_skipped": resolve_live_mode_from_env() == LIVE_MODE_OFF})
 
 
 @app.route("/api/redeem-auto", methods=["POST"])
@@ -3527,34 +3603,37 @@ def api_balance():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    payload, source = _cached_stale_while_revalidate(
-        f"balance:{id(_clob_client)}",
-        BALANCE_CACHE_TTL,
-        _compute_balance,
-    )
+    try:
+        payload, source = _cached_stale_while_revalidate(
+            f"balance:{id(_clob_client)}",
+            BALANCE_CACHE_TTL,
+            _compute_balance,
+        )
+    except RuntimeError as exc:
+        logger.info("Wallet balance unavailable: %s", exc)
+        return jsonify({"error": "wallet_balance_unavailable", "_source": "unavailable"}), 503
     payload = dict(payload or {})
     payload["_source"] = source
     return jsonify(payload)
 
 
 def _compute_balance():
-    balance = 0.0
-    portfolio_value = 0.0
+    from src.strategy.bankroll import _fetch_polymarket_account_state
 
-    if _clob_client:
-        try:
-            balance = _clob_client.get_cash_balance()
-        except Exception as e:
-            logger.warning("Failed to fetch cash balance: %s", e)
-        try:
-            portfolio_value = _clob_client.get_portfolio_value()
-        except Exception as e:
-            logger.warning("Failed to fetch portfolio value: %s", e)
+    if _clob_client is None:
+        raise RuntimeError("Connected account client is unavailable")
+    state = _fetch_polymarket_account_state(
+        clob_client=_clob_client,
+        require_confirmed_cash=True,
+        require_portfolio_value=True,
+    )
+    if not state["confirmed_cash"] or not state["confirmed_portfolio"]:
+        raise RuntimeError("Complete wallet cash and portfolio value could not be confirmed")
 
     return {
-        "cash_balance": balance,
-        "portfolio_value": portfolio_value,
-        "total_equity": balance + portfolio_value,
+        "cash_balance": state["cash_balance"],
+        "portfolio_value": state["portfolio_value"],
+        "total_equity": state["total_equity"],
     }
 
 
@@ -5338,6 +5417,8 @@ def api_reconcile_limit_orders():
         _endpoint_cache.pop("open-limit-orders-display", None)
     try:
         result = _reconcile_limit_orders_with_clob()
+        if result.get("skipped"):
+            return _json_no_store({"status": "skipped", "reason": result["skipped"], "reconciled": 0, "cancelled": 0})
         return _json_no_store({"status": "ok", "reconciled": result.get("reconciled", 0), "cancelled": result.get("cancelled", 0)})
     except Exception as e:
         logger.error("Manual limit order reconciliation failed: %s", e)
@@ -5358,6 +5439,8 @@ def _kickoff_limit_order_reconcile(
     ttl_seconds: int = 21600,
 ) -> None:
     """Start a best-effort reconcile in the background without blocking the UI."""
+    if resolve_live_mode_from_env() == LIVE_MODE_OFF:
+        return
     global _background_cache_refreshes
     key = "limit-order-clob-reconcile"
 
@@ -5978,6 +6061,9 @@ def _reconcile_limit_orders_with_clob(open_order_ids: set[str] | None = None):
     ledger entries for orders that have been cancelled/filled externally.
     Returns stats about what was reconciled.
     """
+    if resolve_live_mode_from_env() == LIVE_MODE_OFF:
+        return {"reconciled": 0, "cancelled": 0, "skipped": "trading_off"}
+
     # Collect open limit bets from ledger
     ledger_orders = {}  # order_id -> (bet, trader_label, ledger_path)
     for label, _, path, _ in _trader_breakdown_specs():
@@ -6607,15 +6693,136 @@ def _empty_prediction_payload(*, include_global_feature_importance: bool, cache_
 
 
 def _prediction_cache_schema_is_current(data: object) -> bool:
-    """Accept only the exact live prediction-cache contract."""
+    """Accept the cache contract and the current selected release identity."""
     if not isinstance(data, dict):
         return False
     raw_version = data.get("schema_version")
     if raw_version in (None, ""):
         return False
     try:
-        return int(raw_version) == int(PREDICTION_CACHE_SCHEMA_VERSION)
+        if int(raw_version) != int(PREDICTION_CACHE_SCHEMA_VERSION):
+            return False
     except (TypeError, ValueError):
+        return False
+
+    # Running hosted startup exports this manifest only after full bundle
+    # validation. Read its small identity records here; do not reload models or
+    # hash the historical dataset for every dashboard request.
+    raw_manifest = os.environ.get("UFC_PRODUCTION_BUNDLE_MANIFEST")
+    if raw_manifest is None:
+        return True
+    try:
+        manifest_path = Path(raw_manifest)
+        if not raw_manifest or not manifest_path.is_absolute() or ".." in manifest_path.parts:
+            return False
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            return False
+        selected_fields = {
+            "selected_candidate_schema_version", "selected_runtime_manifest_path",
+            "selected_runtime_manifest_sha256", "release_file_inventory",
+        }
+        if not selected_fields.intersection(manifest):
+            return True
+        if (type(manifest.get("selected_candidate_schema_version")) is not int
+                or manifest["selected_candidate_schema_version"] not in (1, 2)
+                or manifest.get("manifest_version") != 3
+                or manifest.get("staging_schema_version") != 1):
+            return False
+        release_id = manifest["bundle_id"]
+        if not isinstance(release_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,180}", release_id):
+            return False
+        hash_fields = (
+            "selected_runtime_manifest_sha256", "model_sha256", "no_odds_model_sha256",
+            "logistic_model_sha256", "processed_features_sha256", "processed_fights_sha256",
+        )
+        if any(not isinstance(manifest.get(field), str)
+               or not re.fullmatch(r"[0-9a-f]{64}", manifest[field]) for field in hash_fields):
+            return False
+        relative = manifest["selected_runtime_manifest_path"]
+        if (not isinstance(relative, str) or not relative or "\\" in relative or ":" in relative
+                or Path(relative).is_absolute() or ".." in Path(relative).parts):
+            return False
+        release_root = Path(manifest.get("rich_release_root") or manifest_path.parent)
+        if not release_root.is_absolute() or ".." in release_root.parts:
+            return False
+        release_root = release_root.resolve(strict=True)
+        if manifest["selected_candidate_schema_version"] == 2:
+            # A schema marker or cache-provided approval is not trust. Verify
+            # the revision against the operator's independent release-plan
+            # pins, including current evidence bytes, before showing scores.
+            from src.model.production_bundle import validate_selected_bundle_manifest
+
+            verified = validate_selected_bundle_manifest(
+                manifest, release_root, manifest_path=manifest_path,
+            )
+            if (verified.get("selected_candidate_schema_version") != 2
+                    or verified.get("selected_inference_revision_verified") is not True
+                    or verified.get("selected_release_id") != release_id
+                    or verified.get("selected_runtime_manifest_sha256")
+                    != manifest["selected_runtime_manifest_sha256"]):
+                return False
+        selected_path = (release_root / relative).resolve(strict=True)
+        if not selected_path.is_relative_to(release_root):
+            return False
+        selected_bytes = selected_path.read_bytes()
+        selected_hash = manifest["selected_runtime_manifest_sha256"]
+        if hashlib.sha256(selected_bytes).hexdigest() != selected_hash:
+            return False
+        selected = json.loads(selected_bytes)
+        model_hashes = {
+            "primary": manifest["model_sha256"], "no_odds": manifest["no_odds_model_sha256"],
+            "logistic": manifest["logistic_model_sha256"],
+        }
+        processed_hashes = {
+            "features.csv": manifest["processed_features_sha256"],
+            "fights_cleaned.csv": manifest["processed_fights_sha256"],
+        }
+        if (selected["schema_version"] != 1 or selected["release_id"] != release_id
+                or {role: item["sha256"] for role, item in selected["models"].items()} != model_hashes
+                or {name: item["sha256"] for name, item in selected["processed"]["files"].items()} != processed_hashes
+                or selected["approved_history_cutoff"] != manifest["snapshot_max_event_date"]):
+            return False
+        selection_hash = selected["selection"]["sha256"]
+        if not isinstance(selection_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", selection_hash):
+            return False
+        from src.config import DATA_DIR
+
+        observations = selected["observations"]
+        if set(observations) != {"method_observations", "rankings_observations", "line_history"}:
+            return False
+        observation_roots = {}
+        for name, value in observations.items():
+            expanded = str(value).replace("${DATA_DIR}", str(DATA_DIR))
+            if "${" in expanded or not Path(expanded).is_absolute():
+                return False
+            # Missing observation directories are valid absent observations.
+            # Match runtime's non-strict resolution without reading their data.
+            observation_path = Path(expanded).resolve()
+            if observation_path.is_relative_to(release_root):
+                return False
+            observation_roots[name] = str(observation_path)
+        expected_binding = {
+            "release_id": release_id, "manifest_sha256": selected_hash,
+            "selection_sha256": selection_hash, "model_sha256": model_hashes,
+            "processed_sha256": processed_hashes,
+            "approved_history_cutoff": selected["approved_history_cutoff"],
+            "observation_roots": observation_roots,
+        }
+        rows = data.get("predictions")
+        if not isinstance(rows, list):
+            return False
+        for row in rows:
+            signature = row["runtime_signature"]
+            binding = signature["selected_input_binding"]
+            if (signature["bundle_id"] != release_id or signature["selected_release_id"] != release_id
+                    or signature["selected_runtime_manifest_sha256"] != selected_hash
+                    or any(binding.get(key) != value for key, value in expected_binding.items())):
+                return False
+        # An empty cache displays no scores. Its normal freshness policy still
+        # applies; this does not claim a completed candidate prediction cycle.
+        return True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
 
 
@@ -7116,6 +7323,11 @@ def _recover_ledger_from_clob(clob_client):
 
     Only runs if all known trader ledgers are empty but CLOB has open orders.
     """
+    if resolve_live_mode_from_env() == LIVE_MODE_OFF:
+        # Shared-account open orders are not proof of bot ownership. Keep them
+        # visible through the live account view without importing them here.
+        return
+
     from src.strategy.duo_trader import CONVICTION_LEDGER, get_all_trader_ledgers
     from datetime import datetime, timezone
 

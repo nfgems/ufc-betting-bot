@@ -24,11 +24,144 @@ from src.config import (
     RAW_DATA_DIR,
 )
 from src.data.io_utils import write_csv_atomically
-from src.data.name_utils import REVIEWED_FIGHTER_IDENTITIES, same_person_name
-from src.data.pre_ufc_scraper import _dedupe_supplement_rows
+from src.data.name_utils import (
+    KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS,
+    REVIEWED_FIGHTER_IDENTITIES,
+    derive_ambiguous_fighter_name_keys,
+    fighter_identity_key,
+    canonical_fighter_name_key,
+    normalize_ufcstats_id,
+    reviewed_spelling_binding_name,
+    same_person_name,
+)
+from src.data.pre_ufc_scraper import PROVENANCE_COLUMNS, _bound_history_mask, _dedupe_supplement_rows, _has_observed_win_method
 from src.features.stance_utils import encode_stance
+from src.features.contract_transforms import (
+    _coerce_nullable_binary,
+    materialize_honest_context_features,
+)
+
+
+from src.data.selected_source_inputs import active_sources, selected_path, selected_cache
 
 logger = logging.getLogger(__name__)
+
+
+class UnresolvedTrainingFighterIdentityError(ValueError):
+    """A collision-prone training row is missing its stable fighter ID."""
+
+
+_training_ambiguous_name_keys_cache: tuple[
+    Path,
+    int,
+    frozenset[str],
+] | None = None
+
+
+def _training_ambiguous_name_keys(
+    raw_data_dir: Path | None = None,
+) -> frozenset[str]:
+    """Derive collision groups from the selected fighter inventory."""
+    global _training_ambiguous_name_keys_cache
+    raw_root = Path(raw_data_dir) if raw_data_dir is not None else RAW_DATA_DIR
+    inventory_path = selected_path("profiles", raw_root / "ufc_fighters_scraped.csv")
+    try:
+        inventory_mtime_ns = inventory_path.stat().st_mtime_ns
+    except OSError:
+        if active_sources() is not None:
+            raise
+        return KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS
+    inventory_cache_key = inventory_path.resolve(strict=False)
+    if (
+        _training_ambiguous_name_keys_cache is not None
+        and _training_ambiguous_name_keys_cache[0] == inventory_cache_key
+        and _training_ambiguous_name_keys_cache[1] == inventory_mtime_ns
+    ):
+        return _training_ambiguous_name_keys_cache[2]
+    try:
+        inventory = pd.read_csv(inventory_path, usecols=["name", "fighter_url"])
+        derived = derive_ambiguous_fighter_name_keys(
+            (
+                {"name": row.name, "fighter_id": row.fighter_url}
+                for row in inventory.itertuples(index=False)
+            )
+        )
+    except (OSError, ValueError) as exc:
+        if active_sources() is not None:
+            raise
+        logger.warning(
+            "Could not derive fighter identity collisions from %s: %s",
+            inventory_path,
+            exc,
+        )
+        derived = frozenset()
+    resolved = frozenset(set(KNOWN_AMBIGUOUS_FIGHTER_NAME_KEYS) | set(derived))
+    _training_ambiguous_name_keys_cache = (
+        inventory_cache_key,
+        inventory_mtime_ns,
+        resolved,
+    )
+    return resolved
+
+
+def _attach_fighter_identity_keys(
+    fights_df: pd.DataFrame,
+    *,
+    raw_data_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Attach temporary stateful keys while preserving display names and IDs."""
+    fights = fights_df.copy()
+    unresolved: list[str] = []
+    input_collision_rows = []
+    for side in ("a", "b"):
+        name_col = f"fighter_{side}"
+        id_col = f"fighter_{side}_id"
+        if name_col not in fights.columns or id_col not in fights.columns:
+            continue
+        input_collision_rows.extend(
+            {"name": name, "fighter_id": fighter_id}
+            for name, fighter_id in zip(fights[name_col], fights[id_col])
+        )
+    training_ambiguous_name_keys = (
+        _training_ambiguous_name_keys()
+        if raw_data_dir is None
+        else _training_ambiguous_name_keys(raw_data_dir)
+    )
+    ambiguous_name_keys = frozenset(
+        set(training_ambiguous_name_keys)
+        | set(derive_ambiguous_fighter_name_keys(input_collision_rows))
+    )
+    for side in ("a", "b"):
+        name_col = f"fighter_{side}"
+        id_col = f"fighter_{side}_id"
+        key_col = f"__fighter_{side}_key"
+        if id_col not in fights.columns:
+            fights[id_col] = None
+        fights[id_col] = fights[id_col].map(normalize_ufcstats_id)
+        fights[key_col] = fights.apply(
+            lambda row: fighter_identity_key(
+                row.get(name_col),
+                row.get(id_col),
+                ambiguous_name_keys=ambiguous_name_keys,
+            ),
+            axis=1,
+        )
+        bad = fights[name_col].notna() & fights[key_col].isna()
+        if bad.any():
+            unresolved.extend(
+                f"{row.get('event_date')}:{row.get(name_col)}"
+                for _, row in fights.loc[bad].head(5).iterrows()
+            )
+    if unresolved:
+        raise UnresolvedTrainingFighterIdentityError(
+            "ambiguous training fighter rows require UFCStats IDs: "
+            + ", ".join(unresolved)
+        )
+    return fights
+
+
+def _stateful_identity_column(frame: pd.DataFrame) -> str:
+    return "fighter_key" if "fighter_key" in frame.columns else "fighter"
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +263,21 @@ _PRE_UFC_REQUIRED_COLUMNS = frozenset(
 )
 _SUPPLEMENT_QUARANTINED_IDENTITIES = frozenset(
     {
+        "Bruno Silva",
+        "Jean Silva",
+        "Joey Gomez",
         "Kai Kamaka",
         "Kai Kamaka III",
+        "Michael Davis",
+        "Michael McDonald",
+        "Mike Davis",
         "Mizuki",
         "Gabriel Santos",
+        "Robert Sanchez",
+        "Tony Johnson",
     }
 )
+_AMATEUR_SUPPLEMENT_QUARANTINED_IDENTITIES = frozenset({"Anthony Johnson"})
 _AMATEUR_SUPPLEMENT_FILENAME = "amateur_career_supplement.csv"
 _REVIEWED_SUPPLEMENT_HISTORY_FILENAME = "reviewed_fighter_history.csv"
 _REVIEWED_SUPPLEMENT_HISTORY_CANONICAL_SHA256 = (
@@ -195,24 +337,71 @@ _TRACKED_UFC_ORGANIZATION_LABELS = frozenset(
     }
 )
 
+# The tracked UFCStats history also lists a small set of bouts from other
+# promotions (WEC, Strikeforce and PRIDE were Zuffa-owned for part of their
+# history, but their bouts are not UFC bouts and the tracked-organisation list
+# above does not treat them as such). Those rows must not define a fighter's
+# "UFC debut" for the pre-UFC supplement cutoff: Drew Dober's 2008 Strikeforce
+# bout otherwise discards his entire 2009-2013 regional record. Exact
+# lowercase event-name prefixes, deliberately narrow; the list covers every
+# non-UFC event name in the tracked history (79 rows, all dated 2012-08-18 or
+# earlier, none inside a modeled window).
+_NON_UFC_TRACKED_EVENT_PREFIXES = (
+    "strikeforce",
+    "wec ",
+    "pride",
+    "meca ",
+    "elitexc",
+    "cage rage",
+    "dream ",
+    "shooto",
+    "affliction",
+    "rotr ",
+    "gladiator fc",
+)
 
-def _resolve_pre_ufc_supplement_path() -> Path:
+
+def _is_non_ufc_tracked_event(value: object) -> bool:
+    """True when a tracked event name belongs to a promotion not treated as UFC-owned."""
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    label = " ".join(str(value).strip().casefold().split())
+    return bool(label) and label.startswith(_NON_UFC_TRACKED_EVENT_PREFIXES)
+
+
+def _resolve_pre_ufc_supplement_path(
+    raw_data_dir: Path | None = None,
+) -> Path:
     """Prefer the richer v2 pre-UFC supplement when it exists."""
+    if active_sources() is not None:
+        return selected_path("professional_history", "")
+    raw_root = Path(raw_data_dir) if raw_data_dir is not None else RAW_DATA_DIR
     for filename in _PRE_UFC_SUPPLEMENT_CANDIDATES:
-        candidate = RAW_DATA_DIR / filename
+        candidate = raw_root / filename
         if candidate.exists():
             return candidate
-    return RAW_DATA_DIR / _PRE_UFC_SUPPLEMENT_CANDIDATES[0]
+    return raw_root / _PRE_UFC_SUPPLEMENT_CANDIDATES[0]
 
 
-def _resolve_amateur_supplement_path() -> Path:
+def _resolve_amateur_supplement_path(
+    raw_data_dir: Path | None = None,
+) -> Path:
     """Return the amateur career supplement path."""
-    return RAW_DATA_DIR / _AMATEUR_SUPPLEMENT_FILENAME
+    raw_root = Path(raw_data_dir) if raw_data_dir is not None else RAW_DATA_DIR
+    return selected_path("amateur_history", raw_root / _AMATEUR_SUPPLEMENT_FILENAME)
 
 
-def _resolve_reviewed_supplement_history_path() -> Path:
+def _resolve_reviewed_supplement_history_path(
+    raw_data_dir: Path | None = None,
+) -> Path:
     """Return the small stable-ID-backed supplemental history artifact."""
-    return RAW_DATA_DIR / _REVIEWED_SUPPLEMENT_HISTORY_FILENAME
+    raw_root = Path(raw_data_dir) if raw_data_dir is not None else RAW_DATA_DIR
+    return selected_path("reviewed_history", raw_root / _REVIEWED_SUPPLEMENT_HISTORY_FILENAME)
 
 
 def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
@@ -236,10 +425,23 @@ def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
 
             opp_prefix = "b_" if prefix == "a_" else "a_"
             opp_col = "fighter_b" if prefix == "a_" else "fighter_a"
+            side = "a" if prefix == "a_" else "b"
+            opp_side = "b" if side == "a" else "a"
 
             record = {
+                "fight_row_id": row.get("__fight_row_id"),
                 "fighter": fighter,
+                "fighter_id": row.get(f"fighter_{side}_id"),
+                "fighter_key": (
+                    row[f"__fighter_{side}_key"] if f"__fighter_{side}_key" in row
+                    else fighter_identity_key(fighter, row.get(f"fighter_{side}_id"))
+                ),
                 "opponent": row.get(opp_col, ""),
+                "opponent_id": row.get(f"fighter_{opp_side}_id"),
+                "opponent_key": (
+                    row[f"__fighter_{opp_side}_key"] if f"__fighter_{opp_side}_key" in row
+                    else fighter_identity_key(row.get(opp_col, ""), row.get(f"fighter_{opp_side}_id"))
+                ),
                 "event_date": date,
                 "weight_class": weight_class,
                 "won": 1 if winner == fighter else 0,
@@ -247,6 +449,9 @@ def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
                 "method": row.get("method", ""),
                 "finish_round": finish_round,
                 "title_bout": title_bout,
+                # Carried so the pre-UFC debut cutoff can tell UFC-owned events
+                # from the few tracked non-UFC bouts; never a model feature.
+                "event_name": row.get("event_name", ""),
             }
 
             # Gather stats for this fighter in this fight
@@ -287,14 +492,36 @@ def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _compute_rolling_stats(
-    fighter_fights: pd.DataFrame, halflife: int = EWM_HALFLIFE
+    fighter_fights: pd.DataFrame, halflife: int = EWM_HALFLIFE, *, _apply_observation_cutoffs: bool = True,
 ) -> pd.DataFrame:
     """
     Compute exponentially weighted rolling averages for a single fighter's fight history.
     Recent fights are weighted more heavily (halflife=3 fights by default).
     Stats are computed from all fights BEFORE the current one (shift(1)).
     """
-    fighter_fights = fighter_fights.sort_values("event_date").copy()
+    retained = _retained_long_mask(fighter_fights)
+    if _apply_observation_cutoffs and retained.any():
+        # Recompute only the affected owner's timeline at each modeled cutoff.
+        # Original bout dates stay intact; capture dates govern availability.
+        indexed = fighter_fights.copy().reset_index(drop=True)
+        indexed["__availability_row"] = indexed.index
+        captures = pd.to_datetime(indexed.get("source_captured_at_utc"), errors="coerce", utc=True)
+        outputs = []
+        for index, row in indexed.loc[~retained.to_numpy()].iterrows():
+            cutoff = pd.to_datetime(row["event_date"], errors="coerce", utc=True)
+            available = ~retained.to_numpy() | (captures.notna() & (captures < cutoff))
+            rolled = _compute_rolling_stats(indexed.loc[available], halflife, _apply_observation_cutoffs=False)
+            outputs.append(rolled.loc[rolled["__availability_row"] == index])
+        if not outputs:
+            return _compute_rolling_stats(fighter_fights, halflife, _apply_observation_cutoffs=False)
+        return pd.concat(outputs, ignore_index=True).drop(columns="__availability_row")
+    sort_columns = ["event_date"]
+    if "fight_row_id" in fighter_fights.columns:
+        sort_columns.append("fight_row_id")
+    fighter_fights = fighter_fights.sort_values(
+        sort_columns,
+        kind="stable",
+    ).copy()
 
     all_base = STAT_COLUMNS + EXTENDED_STAT_COLUMNS
     stats_to_roll = all_base + [f"opp_{s}" for s in all_base] + ["won"]
@@ -347,12 +574,21 @@ def _compute_ufc_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
         "prior_wins_sub",
         "prior_wins_dec",
     ]
+    identity_col = _stateful_identity_column(per_fight_df)
+    row_id_columns = (
+        ["fight_row_id"] if "fight_row_id" in per_fight_df.columns else []
+    )
     if per_fight_df.empty:
-        return pd.DataFrame(columns=["fighter", "event_date", *history_cols])
+        return pd.DataFrame(
+            columns=[identity_col, *row_id_columns, "event_date", *history_cols]
+        )
 
     history_frames = []
-    for fighter, group in per_fight_df.groupby("fighter"):
-        group = group.sort_values("event_date").copy()
+    for _fighter, group in per_fight_df.groupby(identity_col):
+        group = group.sort_values(
+            ["event_date", *row_id_columns],
+            kind="stable",
+        ).copy()
         (
             group["current_win_streak"],
             group["prior_wins"],
@@ -367,7 +603,9 @@ def _compute_ufc_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
             group["prior_wins_dec"],
         ) = _career_history_columns(group)
         group["num_fights"] = range(len(group))
-        history_frames.append(group[["fighter", "event_date", *history_cols]])
+        history_frames.append(
+            group[[identity_col, *row_id_columns, "event_date", *history_cols]]
+        )
 
     return pd.concat(history_frames, ignore_index=True)
 
@@ -388,19 +626,41 @@ def _overlay_ufc_history_backed_fields(
     ]
 
     updated = features
-    for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+    history_identity_col = _stateful_identity_column(history_frame)
+    for prefix, side in [("a_", "a"), ("b_", "b")]:
+        fighter_col = f"fighter_{side}"
+        merge_key = (
+            f"__fighter_{side}_key"
+            if history_identity_col == "fighter_key"
+            else fighter_col
+        )
         existing_cols = [f"{prefix}{col}" for col in override_cols if f"{prefix}{col}" in updated.columns]
         if existing_cols:
             updated = updated.drop(columns=existing_cols)
 
         renamed = history_frame.rename(
             columns={
-                "fighter": fighter_col,
+                history_identity_col: merge_key,
+                "fight_row_id": "__fight_row_id",
                 **{col: f"{prefix}{col}" for col in override_cols},
             }
         )
-        merge_cols = [fighter_col, "event_date", *[f"{prefix}{col}" for col in override_cols]]
-        updated = updated.merge(renamed[merge_cols], on=[fighter_col, "event_date"], how="left")
+        row_merge_cols = (
+            ["__fight_row_id"]
+            if "__fight_row_id" in renamed.columns
+            else []
+        )
+        merge_cols = [
+            merge_key,
+            *row_merge_cols,
+            "event_date",
+            *[f"{prefix}{col}" for col in override_cols],
+        ]
+        updated = updated.merge(
+            renamed[merge_cols],
+            on=[merge_key, *row_merge_cols, "event_date"],
+            how="left",
+        )
 
     return updated
 
@@ -415,17 +675,24 @@ def _loss_method_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
     - prior_recent_ko_loss: 1.0 when either of the last two fights was a
       KO/TKO loss, 0.0 otherwise, NaN before the first fight
     """
+    identity_col = _stateful_identity_column(per_fight_df)
+    row_id_columns = (
+        ["fight_row_id"] if "fight_row_id" in per_fight_df.columns else []
+    )
     if per_fight_df.empty:
         return pd.DataFrame(
             columns=[
-                "fighter", "event_date",
+                identity_col, *row_id_columns, "event_date",
                 "prior_losses_ko", "prior_losses_sub", "prior_recent_ko_loss",
             ]
         )
 
     frames = []
-    for fighter, group in per_fight_df.groupby("fighter"):
-        group = group.sort_values("event_date")
+    for fighter, group in per_fight_df.groupby(identity_col):
+        group = group.sort_values(
+            ["event_date", *row_id_columns],
+            kind="stable",
+        )
         losses_ko = losses_sub = 0
         ko_loss_flags: list[bool] = []
         records = []
@@ -434,7 +701,11 @@ def _loss_method_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
                 float(any(ko_loss_flags[-2:])) if ko_loss_flags else np.nan
             )
             records.append({
-                "fighter": fighter,
+                identity_col: fighter,
+                **{
+                    column: row.get(column)
+                    for column in row_id_columns
+                },
                 "event_date": row["event_date"],
                 "prior_losses_ko": losses_ko,
                 "prior_losses_sub": losses_sub,
@@ -463,17 +734,33 @@ def _add_loss_method_features(
     if history.empty:
         return features
 
-    for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+    history_identity_col = _stateful_identity_column(history)
+    for prefix, side in [("a_", "a"), ("b_", "b")]:
+        fighter_col = f"fighter_{side}"
+        merge_key = (
+            f"__fighter_{side}_key"
+            if history_identity_col == "fighter_key"
+            else fighter_col
+        )
         renamed = history.rename(columns={
-            "fighter": fighter_col,
+            history_identity_col: merge_key,
+            "fight_row_id": "__fight_row_id",
             "prior_losses_ko": f"{prefix}losses_ko",
             "prior_losses_sub": f"{prefix}losses_sub",
             "prior_recent_ko_loss": f"{prefix}recent_ko_loss",
         })
-        renamed = renamed.drop_duplicates(subset=[fighter_col, "event_date"], keep="last")
+        row_merge_cols = (
+            ["__fight_row_id"]
+            if "__fight_row_id" in renamed.columns
+            else []
+        )
+        renamed = renamed.drop_duplicates(
+            subset=[merge_key, *row_merge_cols, "event_date"],
+            keep="last",
+        )
         features = features.merge(
             renamed,
-            on=[fighter_col, "event_date"],
+            on=[merge_key, *row_merge_cols, "event_date"],
             how="left",
         )
 
@@ -514,28 +801,41 @@ def _compute_strength_of_schedule(
 
     rolling_df = rolling_df.copy()
 
-    # Lookup: (fighter, event_date) → roll_won at that fight
-    _won_rows = rolling_df[["fighter", "event_date", "roll_won"]].dropna(
+    identity_col = _stateful_identity_column(rolling_df)
+    opponent_col = "opponent_key" if identity_col == "fighter_key" else "opponent"
+
+    row_id_columns = (
+        ["fight_row_id"] if "fight_row_id" in rolling_df.columns else []
+    )
+    lookup_columns = [identity_col, *row_id_columns, "event_date", "roll_won"]
+    _won_rows = rolling_df[lookup_columns].dropna(
         subset=["roll_won"]
     )
     _lookup: dict[tuple, float] = {
-        (r["fighter"], r["event_date"]): r["roll_won"]
+        (
+            r[identity_col],
+            *(r[column] for column in row_id_columns),
+            r["event_date"],
+        ): r["roll_won"]
         for _, r in _won_rows.iterrows()
     }
 
     sos_results = np.full(len(rolling_df), np.nan)
 
-    for _fighter, group in rolling_df.groupby("fighter"):
-        group = group.sort_values("event_date")
-        past_opps: list[tuple[str, object]] = []
+    for _fighter, group in rolling_df.groupby(identity_col):
+        group = group.sort_values(
+            ["event_date", *row_id_columns],
+            kind="stable",
+        )
+        past_opps: list[tuple] = []
 
         for df_idx, row in group.iterrows():
             if past_opps:
                 recent = past_opps[-window:]
                 opp_wrs: list[float] = []
                 weights: list[float] = []
-                for rank, (opp, opp_date) in enumerate(recent, start=1):
-                    wr = _lookup.get((opp, opp_date))
+                for rank, opponent_observation in enumerate(recent, start=1):
+                    wr = _lookup.get(opponent_observation)
                     if wr is not None and not np.isnan(wr):
                         opp_wrs.append(wr)
                         # Linear recency weight: most recent = highest
@@ -543,9 +843,15 @@ def _compute_strength_of_schedule(
                 if opp_wrs:
                     sos_results[df_idx] = float(np.average(opp_wrs, weights=weights))
 
-            opp = row.get("opponent")
+            opp = row.get(opponent_col)
             if pd.notna(opp) and opp:
-                past_opps.append((opp, row["event_date"]))
+                past_opps.append(
+                    (
+                        opp,
+                        *(row.get(column) for column in row_id_columns),
+                        row["event_date"],
+                    )
+                )
 
     rolling_df["opp_strength"] = sos_results
     non_null = np.count_nonzero(~np.isnan(sos_results))
@@ -582,22 +888,26 @@ def _career_history_columns(fighter_fights: pd.DataFrame) -> tuple[list[int], ..
     total_rounds = 0.0
     title_bouts = 0
     wins_ko = wins_sub = wins_dec = 0
+    unknown_win_method = unknown_rounds = unknown_titles = False
+    retained_flags = _retained_long_mask(fighter_fights).to_numpy()
 
-    for _, row in fighter_fights.iterrows():
+    for index, (_, row) in enumerate(fighter_fights.iterrows()):
         current_win_streaks.append(win_streak)
         prior_wins.append(wins)
         prior_losses.append(losses)
         prior_draws.append(draws)
         prior_lose_streaks.append(lose_streak)
         prior_longest_win_streaks.append(longest_win_streak)
-        prior_total_rounds.append(total_rounds)
-        prior_title_bouts.append(title_bouts)
-        prior_wins_ko.append(wins_ko)
-        prior_wins_sub.append(wins_sub)
-        prior_wins_dec.append(wins_dec)
+        prior_total_rounds.append(np.nan if unknown_rounds else total_rounds)
+        prior_title_bouts.append(np.nan if unknown_titles else title_bouts)
+        prior_wins_ko.append(np.nan if unknown_win_method else wins_ko)
+        prior_wins_sub.append(np.nan if unknown_win_method else wins_sub)
+        prior_wins_dec.append(np.nan if unknown_win_method else wins_dec)
 
         result_label = row.get("result_label", "draw")
         method_group = _method_group(row.get("method"))
+        if retained_flags[index] and result_label == "win" and not _has_observed_win_method(row.get("method")):
+            unknown_win_method = True
 
         if result_label == "win":
             wins += 1
@@ -620,10 +930,14 @@ def _career_history_columns(fighter_fights: pd.DataFrame) -> tuple[list[int], ..
             lose_streak = 0
 
         finish_round = pd.to_numeric(pd.Series([row.get("finish_round")]), errors="coerce").iloc[0]
+        if retained_flags[index] and pd.isna(finish_round):
+            unknown_rounds = True
         if not pd.isna(finish_round):
             total_rounds += float(finish_round)
 
         title_flag = pd.to_numeric(pd.Series([row.get("title_bout")]), errors="coerce").iloc[0]
+        if retained_flags[index] and pd.isna(title_flag):
+            unknown_titles = True
         if not pd.isna(title_flag) and float(title_flag) != 0.0:
             title_bouts += 1
 
@@ -655,78 +969,43 @@ def _method_group(value: object) -> str | None:
     return None
 
 
-def _coerce_nullable_binary(series: pd.Series) -> pd.Series:
-    """Coerce a mixed binary series to float 0/1 while preserving unknowns as NaN."""
-    coerced = pd.to_numeric(series, errors="coerce").astype(float)
-    unresolved = coerced.isna() & series.notna()
-    if unresolved.any():
-        normalized = series.astype(str).str.strip().str.lower()
-        truthy = {"1", "true", "t", "yes", "y"}
-        falsy = {"0", "false", "f", "no", "n"}
-        coerced.loc[unresolved & normalized.isin(truthy)] = 1.0
-        coerced.loc[unresolved & normalized.isin(falsy)] = 0.0
-    return coerced
-
-
-def materialize_honest_context_features(features_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Rebuild context/ranking features directly from raw columns without fake defaults.
-
-    Historical unknowns must stay NaN instead of being rewritten as title_bout=0,
-    empty_arena=0, or rank=16 unless the raw value is actually present.
-    """
-    features = features_df.copy()
-
-    if "title_bout" in features.columns:
-        features["is_title_bout"] = _coerce_nullable_binary(features["title_bout"])
-
-    if "num_rounds" in features.columns:
-        features["num_rounds_feat"] = pd.to_numeric(features["num_rounds"], errors="coerce").astype(float)
-
-    if "empty_arena" in features.columns:
-        features["is_empty_arena"] = _coerce_nullable_binary(features["empty_arena"])
-
-    for prefix in ["a_", "b_"]:
-        wc_rank_col = f"{prefix}wc_rank"
-        if wc_rank_col in features.columns:
-            features[f"{prefix}wc_rank_feat"] = pd.to_numeric(
-                features[wc_rank_col],
-                errors="coerce",
-            ).astype(float)
-
-        pfp_rank_col = f"{prefix}pfp_rank"
-        if pfp_rank_col in features.columns:
-            features[f"{prefix}pfp_rank_feat"] = pd.to_numeric(
-                features[pfp_rank_col],
-                errors="coerce",
-            ).astype(float)
-
-    if "a_wc_rank_feat" in features.columns and "b_wc_rank_feat" in features.columns:
-        features["diff_wc_rank"] = features["a_wc_rank_feat"] - features["b_wc_rank_feat"]
-    if "a_pfp_rank_feat" in features.columns and "b_pfp_rank_feat" in features.columns:
-        features["diff_pfp_rank"] = features["a_pfp_rank_feat"] - features["b_pfp_rank_feat"]
-
-    return features
-
-
 def _load_supplement_raw(path: Path) -> pd.DataFrame:
     """Load a supplement CSV in its raw fight-pair schema."""
     if not path.is_file():
         return pd.DataFrame()
+    from src.data.provider_consumer_references import verify_provider_consumer_artifact
+    references = verify_provider_consumer_artifact(path)
     try:
-        return pd.read_csv(path, parse_dates=["event_date"])
+        result = pd.read_csv(path, parse_dates=["event_date"], dtype={column: object for column in PROVENANCE_COLUMNS})
+        result.attrs["provider_references"] = references
+        return result
     except Exception as exc:
+        if active_sources() is not None:
+            raise
         logger.warning("Failed to load supplement %s: %s", path, exc)
         return pd.DataFrame()
 
 
-def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
+def _supplement_rows_to_long_format(
+    raw: pd.DataFrame,
+    *,
+    raw_data_dir: Path | None = None,
+    expected_division: str | None = None,
+) -> pd.DataFrame:
     """Convert raw supplement rows to per-fighter long format."""
     if raw.empty:
         return pd.DataFrame()
 
     records: list[dict] = []
+    ambiguous_name_keys = _training_ambiguous_name_keys(raw_data_dir)
     for _, row in raw.iterrows():
+        retained = bool(_bound_history_mask(pd.DataFrame([row])).iloc[0])
+        if retained:
+            from src.data.provider_observation_history import ProviderObservationError, verify_retained_history_row
+
+            verify_retained_history_row(row.to_dict(), references=raw.attrs.get("provider_references"))
+            if expected_division is not None and row.get("history_division") != expected_division:
+                raise ProviderObservationError("retained career row belongs to a different professional/amateur track")
         date = row.get("event_date")
         winner = row.get("winner", "")
         method = row.get("method", "")
@@ -737,6 +1016,10 @@ def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
         organization = row.get("organization", "")
 
         for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+            if retained and prefix != "a_":
+                # A response bound to its subject does not independently bind
+                # the opponent's stable UFC identity.
+                continue
             fighter = row.get(fighter_col)
             if pd.isna(fighter) or not fighter:
                 continue
@@ -744,9 +1027,32 @@ def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
             opp_prefix = "b_" if prefix == "a_" else "a_"
             opp_col = "fighter_b" if prefix == "a_" else "fighter_a"
 
+            # A legacy row binds its fighter only through an explicit id column
+            # (absent in the accepted supplement today); an ambiguous spelling
+            # without one gets no stateful key and therefore no summary.
+            id_col = "fighter_a_id" if prefix == "a_" else "fighter_b_id"
+            explicit_id = row.get(id_col) if id_col in raw.columns else None
+            # Owner decision D10-OLD-GAPS (review finding IS3-2): the opponent
+            # side keys through its own explicit id column as well, so a
+            # spelling that binds or collides is never credited to the wrong
+            # identity from the opponent's perspective. An ordinary name keeps
+            # its name key whatever id it carries.
+            opp_id_col = "fighter_b_id" if prefix == "a_" else "fighter_a_id"
+            opp_explicit_id = row.get(opp_id_col) if opp_id_col in raw.columns else None
             record = {
                 "fighter": fighter,
+                "fighter_id": normalize_ufcstats_id(explicit_id),
+                "fighter_key": fighter_identity_key(
+                    fighter,
+                    explicit_id,
+                    ambiguous_name_keys=ambiguous_name_keys,
+                ),
                 "opponent": row.get(opp_col, ""),
+                "opponent_key": fighter_identity_key(
+                    row.get(opp_col, ""),
+                    opp_explicit_id,
+                    ambiguous_name_keys=ambiguous_name_keys,
+                ),
                 "event_date": date,
                 "weight_class": row.get("weight_class", ""),
                 "won": 1 if winner == fighter else 0,
@@ -760,6 +1066,10 @@ def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
                 "title_bout": title_bout,
                 "organization": organization,
             }
+            if retained:
+                record.update({key: row.get(key) for key in PROVENANCE_COLUMNS})
+                record["fighter_id"] = row.get("fighter_a_id")
+                record["fighter_key"] = f"ufcstats:{row['fighter_a_id']}"
 
             # Per-fight stats are NaN for pre-UFC fights
             for stat in STAT_COLUMNS + EXTENDED_STAT_COLUMNS:
@@ -773,6 +1083,72 @@ def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def _retained_long_mask(frame: pd.DataFrame) -> pd.Series:
+    return _bound_history_mask(frame)
+
+
+def _scope_retained_history_owners(fights: pd.DataFrame, history: pd.DataFrame) -> pd.DataFrame:
+    """Use observed stable IDs to join retained owners into the existing chronology."""
+    retained = history.loc[_retained_long_mask(history)]
+    if retained.empty:
+        return fights
+    owners = set(retained["fighter_id"])
+    result = fights.copy()
+    for side in ("a", "b"):
+        identity_column = f"fighter_{side}_id"
+        if identity_column not in result:
+            continue
+        ids = result[identity_column].map(normalize_ufcstats_id)
+        key_column = f"__fighter_{side}_key"
+        if key_column not in result:
+            result[key_column] = [fighter_identity_key(name, identity) for name, identity
+                                  in zip(result[f"fighter_{side}"], ids)]
+        selected = ids.isin(owners)
+        result.loc[selected, key_column] = ids.loc[selected].map(lambda identity: f"ufcstats:{identity}")
+    return result
+
+
+def _eligible_retained_history(frame: pd.DataFrame, *, fighter_id: object, available_before: object) -> pd.DataFrame:
+    """Select an already verified subject at its actual prediction cutoff."""
+    stable_id = normalize_ufcstats_id(fighter_id)
+    if not stable_id or frame.empty or "fighter_id" not in frame.columns:
+        return frame.iloc[0:0].copy()
+    cutoff = pd.to_datetime(available_before, errors="coerce", utc=True)
+    capture = pd.to_datetime(frame.get("source_captured_at_utc"), errors="coerce", utc=True)
+    dates = pd.to_datetime(frame["event_date"], errors="coerce", utc=True)
+    boundary = pd.to_datetime(frame.get("first_ufc_date"), errors="coerce", utc=True)
+    valid = (_retained_long_mask(frame) & frame["fighter_id"].eq(stable_id)
+             & capture.notna() & (capture < cutoff) & dates.notna()
+             & (dates < cutoff) & (dates < boundary))
+    return frame.loc[valid].copy()
+
+
+def _overlay_retained_career_summaries(features: pd.DataFrame, history: pd.DataFrame, *, amateur: bool = False) -> pd.DataFrame:
+    retained = history.loc[_retained_long_mask(history)]
+    if retained.empty:
+        return features
+    result = features.copy()
+    columns = _AMATEUR_SUMMARY_COLUMNS if amateur else _PRE_UFC_SUMMARY_COLUMNS
+    compute = _compute_amateur_summary if amateur else _compute_pre_ufc_summary
+    owners = set(retained["fighter_id"])
+    for side in ("a", "b"):
+        for index, row in result.iterrows():
+            stable_id = normalize_ufcstats_id(row.get(f"fighter_{side}_id"))
+            if stable_id not in owners:
+                continue
+            eligible = _eligible_retained_history(retained, fighter_id=stable_id, available_before=row["event_date"])
+            summary = compute(eligible.assign(fighter=stable_id))
+            values = summary.iloc[0].to_dict() if len(summary) == 1 else {}
+            for column in columns:
+                result.loc[index, f"{side}_{column}"] = values.get(column, np.nan)
+    for column in columns:
+        for side in ("a", "b"):
+            if f"{side}_{column}" not in result:
+                result[f"{side}_{column}"] = np.nan
+        result[f"diff_{column}"] = result[f"a_{column}"] - result[f"b_{column}"]
+    return result
+
+
 def _drop_quarantined_supplement_identities(
     long_df: pd.DataFrame,
     *,
@@ -782,9 +1158,13 @@ def _drop_quarantined_supplement_identities(
     if long_df.empty or "fighter" not in long_df.columns:
         return long_df
 
-    quarantined_mask = long_df["fighter"].isin(
-        _SUPPLEMENT_QUARANTINED_IDENTITIES
-    )
+    quarantined_identities = _SUPPLEMENT_QUARANTINED_IDENTITIES
+    if label == "amateur":
+        quarantined_identities = (
+            quarantined_identities
+            | _AMATEUR_SUPPLEMENT_QUARANTINED_IDENTITIES
+        )
+    quarantined_mask = long_df["fighter"].isin(quarantined_identities)
     if not quarantined_mask.any():
         return long_df
 
@@ -798,6 +1178,47 @@ def _drop_quarantined_supplement_identities(
         ", ".join(quarantined_names),
     )
     return long_df.loc[~quarantined_mask].copy()
+
+
+def _drop_legacy_rows_of_reviewed_identities(
+    long_df: pd.DataFrame,
+    *,
+    label: str,
+) -> pd.DataFrame:
+    """Drop legacy (name-only) rows whose stateful key is a reviewed identity.
+
+    A reviewed identity's history is the audited stable-ID artifact appended by
+    ``_load_reviewed_supplement_history``; every one of its tracked spellings
+    keys to ``ufcstats:<id>`` through ``fighter_identity_key``. A legacy
+    scraped row under any of those spellings would be counted a second time
+    next to the reviewed rows once the summary and the rolling seed key on the
+    identity (Mizuki: five legacy "Mizuki Inoue" bouts on top of the eighteen
+    reviewed ones, found in review on 2026-09-17). Such rows are excluded
+    whether or not the reviewed rows are appended: without them the features
+    stay NaN, exactly as the spelling quarantine does for "Mizuki". Rows that
+    carry their own stable id (the reviewed rows themselves, retained rows)
+    are never touched.
+    """
+    if long_df.empty or "fighter_key" not in long_df.columns:
+        return long_df
+    reviewed_keys = {f"ufcstats:{ufcstats_id}" for ufcstats_id in REVIEWED_FIGHTER_IDENTITIES}
+    mask = long_df["fighter_key"].isin(reviewed_keys) & ~_retained_long_mask(long_df)
+    if "fighter_id" in long_df.columns:
+        bound_ids = long_df["fighter_id"].map(normalize_ufcstats_id)
+        carries_own_id = bound_ids.notna() & ("ufcstats:" + bound_ids.fillna("").astype(str)).eq(
+            long_df["fighter_key"].astype(str)
+        )
+        mask &= ~carries_own_id
+    if not mask.any():
+        return long_df
+    logger.info(
+        "Excluded %d legacy %s rows keyed to a reviewed stable identity (%s); "
+        "only the reviewed history is used for it",
+        int(mask.sum()),
+        label,
+        ", ".join(sorted(long_df.loc[mask, "fighter"].astype(str).unique())),
+    )
+    return long_df.loc[~mask].copy()
 
 
 def _reviewed_history_group_is_valid(
@@ -854,17 +1275,29 @@ def _reviewed_history_canonical_sha256(path: Path) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _load_reviewed_supplement_history(history_type: str) -> pd.DataFrame:
+def _load_reviewed_supplement_history(
+    history_type: str,
+    *,
+    raw_data_dir: Path | None = None,
+) -> pd.DataFrame:
     """Load one audited history type, rejecting any incomplete fighter group."""
-    path = _resolve_reviewed_supplement_history_path()
+    path = (
+        _resolve_reviewed_supplement_history_path()
+        if raw_data_dir is None
+        else _resolve_reviewed_supplement_history_path(raw_data_dir)
+    )
     if not path.is_file():
         return pd.DataFrame()
     try:
         digest = _reviewed_history_canonical_sha256(path)
     except OSError as exc:
+        if active_sources() is not None:
+            raise
         logger.warning("Failed to hash reviewed fighter history %s: %s", path, exc)
         return pd.DataFrame()
     if digest != _REVIEWED_SUPPLEMENT_HISTORY_CANONICAL_SHA256:
+        if active_sources() is not None:
+            raise ValueError('Selected reviewed career history differs from its approved original')
         logger.warning(
             "Ignoring reviewed fighter history %s because its canonical SHA-256 "
             "does not match the approved 40-row evidence artifact",
@@ -874,6 +1307,8 @@ def _load_reviewed_supplement_history(history_type: str) -> pd.DataFrame:
     raw = _load_supplement_raw(path)
     missing = sorted(_REVIEWED_HISTORY_REQUIRED_COLUMNS.difference(raw.columns))
     if missing:
+        if active_sources() is not None:
+            raise ValueError(f'Selected reviewed career history lacks columns: {missing}')
         logger.warning(
             "Ignoring reviewed fighter history %s because columns are missing: %s",
             path,
@@ -897,6 +1332,7 @@ def _load_reviewed_supplement_history(history_type: str) -> pd.DataFrame:
         selected = selected[~selected["ufcstats_id"].astype(str).isin(unknown_ids)]
 
     records: list[dict[str, object]] = []
+    ambiguous_name_keys = _training_ambiguous_name_keys(raw_data_dir)
     for ufcstats_id, identity in REVIEWED_FIGHTER_IDENTITIES.items():
         group = selected[selected["ufcstats_id"].astype(str) == ufcstats_id].copy()
         expected = identity.get("reviewed_history", {}).get(history_type)
@@ -926,7 +1362,16 @@ def _load_reviewed_supplement_history(history_type: str) -> pd.DataFrame:
             result_label = str(row["subject_result"]).strip().casefold()
             record: dict[str, object] = {
                 "fighter": canonical_name,
+                "fighter_id": ufcstats_id,
+                "fighter_key": fighter_identity_key(
+                    canonical_name,
+                    ufcstats_id,
+                ),
                 "opponent": row["fighter_b"],
+                "opponent_key": fighter_identity_key(
+                    row["fighter_b"],
+                    ambiguous_name_keys=ambiguous_name_keys,
+                ),
                 "event_date": pd.to_datetime(row["event_date"], errors="coerce"),
                 "weight_class": row.get("weight_class", ""),
                 "won": 1 if result_label == "win" else 0,
@@ -970,6 +1415,8 @@ def _load_pre_ufc_supplement(
     path: Path,
     *,
     include_reviewed: bool = False,
+    raw_data_dir: Path | None = None,
+    _new_ambiguous_names: frozenset[str] | None = None,
 ) -> pd.DataFrame:
     """Load trustworthy, deduplicated pre-UFC rows in long format.
 
@@ -983,22 +1430,36 @@ def _load_pre_ufc_supplement(
     if not raw.empty:
         missing_columns = sorted(_PRE_UFC_REQUIRED_COLUMNS.difference(raw.columns))
         if missing_columns:
+            if active_sources() is not None:
+                raise ValueError(f"Selected professional history lacks columns: {missing_columns}")
             logger.warning(
                 "Ignoring pre-UFC supplement %s because required columns are missing: %s",
                 path,
                 ", ".join(missing_columns),
             )
         else:
-            deduped = _dedupe_supplement_rows(raw)
+            # NEW owner evidence must precede any identity-based collapse.
+            # The ordinary raw collapse cannot distinguish supplied IDs under
+            # ordinary spellings; retain all raw rows for the existing long
+            # bout reconciliation in the NEW owner domain instead.
+            deduped = _dedupe_supplement_rows(raw) if _new_ambiguous_names is None else raw.copy()
             if "organization" in deduped.columns:
                 ufc_mask = deduped["organization"].map(_is_tracked_ufc_organization)
                 deduped = deduped.loc[~ufc_mask].copy()
 
-            long_df = _supplement_rows_to_long_format(deduped)
+            long_df = _supplement_rows_to_long_format(
+                deduped,
+                raw_data_dir=raw_data_dir,
+                expected_division="pro",
+            )
+            if _new_ambiguous_names is not None:
+                long_df = _new_legacy_history_owners(long_df, _new_ambiguous_names)
             long_df = _drop_quarantined_supplement_identities(
                 long_df,
                 label="pre-UFC",
             )
+            long_df = _drop_legacy_rows_of_reviewed_identities(long_df, label="pre-UFC")
+            long_df = _drop_duplicate_supplement_bouts(long_df)
             if not long_df.empty:
                 # An unparseable date can never be proven to precede a modeled
                 # fight. Drop it rather than assigning an artificial value.
@@ -1007,7 +1468,10 @@ def _load_pre_ufc_supplement(
                 ).dt.tz_localize(None)
                 long_df = long_df.dropna(subset=["event_date"]).reset_index(drop=True)
     if include_reviewed:
-        reviewed = _load_reviewed_supplement_history("professional")
+        reviewed = _load_reviewed_supplement_history(
+            "professional",
+            raw_data_dir=raw_data_dir,
+        )
         if not reviewed.empty:
             long_df = pd.concat([long_df, reviewed], ignore_index=True)
     return long_df
@@ -1017,6 +1481,8 @@ def _load_amateur_supplement(
     path: Path,
     *,
     include_reviewed: bool = False,
+    raw_data_dir: Path | None = None,
+    _new_ambiguous_names: frozenset[str] | None = None,
 ) -> pd.DataFrame:
     """Load legacy amateur rows safely, then append reviewed subject histories."""
     raw = _load_supplement_raw(path)
@@ -1024,45 +1490,232 @@ def _load_amateur_supplement(
         legacy_long = pd.DataFrame()
     else:
         legacy_long = _supplement_rows_to_long_format(
-            _dedupe_supplement_rows(raw)
+            _dedupe_supplement_rows(raw) if _new_ambiguous_names is None else raw.copy(),
+            raw_data_dir=raw_data_dir,
+            expected_division="am",
         )
+        if _new_ambiguous_names is not None:
+            legacy_long = _new_legacy_history_owners(legacy_long, _new_ambiguous_names)
         legacy_long = _drop_quarantined_supplement_identities(
             legacy_long,
             label="amateur",
         )
+        legacy_long = _drop_legacy_rows_of_reviewed_identities(legacy_long, label="amateur")
+        # Same per-fighter bout collapse as the professional loader (added
+        # 2026-09-17): mirrored label-variant copies of one amateur bout were
+        # counted twice (9 bouts / 18 records on the accepted file).
+        legacy_long = _drop_duplicate_supplement_bouts(legacy_long)
 
     if include_reviewed:
-        reviewed = _load_reviewed_supplement_history("amateur")
+        reviewed = _load_reviewed_supplement_history(
+            "amateur",
+            raw_data_dir=raw_data_dir,
+        )
         if not reviewed.empty:
             legacy_long = pd.concat([legacy_long, reviewed], ignore_index=True)
     return legacy_long.reset_index(drop=True)
 
 
-def _tracked_ufc_debut_dates(tracked_fights: pd.DataFrame) -> pd.Series:
-    """Return each exact-spelling fighter's first tracked UFC event date.
+def _new_legacy_history_owners(long_df, ambiguous_names):
+    """Set actual/reviewed owner evidence before the existing bout collapse."""
+    if type(ambiguous_names) is not frozenset:
+        raise ValueError('Exact internal NEW collision domain required')
+    if long_df.empty:
+        return long_df
+    result = long_df.copy()
+    ordinary = ~_retained_long_mask(result)
+    result.loc[ordinary, 'fighter_key'] = result.loc[ordinary].apply(
+        lambda row: _new_observed_owner_key(row.get('fighter'), row.get('fighter_id'), ambiguous_names),
+        axis=1,
+    )
+    return result
 
-    ``tracked_fights`` may be either the raw two-fighter fight schema or the
-    internal long schema. Identity matching is exact on purpose: a fuzzy or
-    suffix-insensitive match can merge two people and is less safe than leaving
-    the corresponding feature unknown.
+
+def _drop_duplicate_supplement_bouts(long_df: pd.DataFrame) -> pd.DataFrame:
+    """Keep one record per fighter identity, calendar day and opponent.
+
+    Each fighter's page names the opponent in its own way, so one bout can
+    reach the long frame twice for the same fighter: through the fighter's own
+    row and through the opponent's mirrored row when the promotion label
+    differs ("Bellator Fighting Championships" / "Bellator"), when the
+    opponent's tokens are ordered or spaced differently (Song Kenan / Kenan
+    Song, Won Bin Ki / WonBin Ki), or when the opponent is spelled by a
+    reviewed ring name or source spelling (Patricio Pitbull / Patricio Freire,
+    Kyung Pyo Kim / KyeungPyo Kim). The fighter side is grouped by the same
+    stateful identity the summary and the rolling statistics use
+    (``fighter_key`` when present: an accent or case variant of one spelling is
+    one identity, a reviewed ring name such as Patricio Pitbull / Patricio
+    Freire is not folded, and an ambiguous spelling without an id binding is
+    left untouched here because it never reaches the professional summary;
+    the amateur summary still keys on the spelling); without a key column the
+    exact spelling is used. Two different opponents on one day
+    (one-night tournaments) are kept. Stable-ID retained rows are left to
+    their own rule.
     """
-    if tracked_fights.empty or "event_date" not in tracked_fights.columns:
-        return pd.Series(dtype="datetime64[ns]")
+    if long_df.empty or not {"fighter", "opponent", "event_date"}.issubset(long_df.columns):
+        return long_df
+    from src.data.pre_ufc_scraper import _supplement_pair_name_keys
 
+    retained = _retained_long_mask(long_df)
+    identity_column = _stateful_identity_column(long_df)
+    unkeyed = pd.Series(False, index=long_df.index)
+    if identity_column == "fighter_key":
+        unkeyed = long_df["fighter_key"].isna()
+    legacy = long_df.loc[~retained & ~unkeyed].copy()
+    if legacy.empty:
+        return long_df
+    keys = legacy["opponent"].map(_supplement_pair_name_keys)
+    legacy["__bout_day"] = pd.to_datetime(legacy["event_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    legacy["__opponent_order_key"] = [key[0] for key in keys]
+    legacy["__opponent_flat_key"] = [key[1] for key in keys]
+    legacy["__identity"] = legacy[identity_column].astype(str)
+    # Within a duplicate group keep the record whose promotion label the tier
+    # tables recognise best (1 = major ... 3 = regional/unknown, unlabelled last);
+    # the raw frame arrives sorted longest-label-first, and the long variant
+    # ("Bellator Fighting Championships", "Jungle Fight Championship") is the
+    # one the tables do not know. Ties keep the incoming order. The frame is
+    # restored to its original order afterwards.
+    legacy["__org_tier"] = _encode_org_tiers(legacy).fillna(4.0)
+    legacy = legacy.sort_values("__org_tier", kind="stable")
+    before = len(legacy)
+    survivors = legacy.drop_duplicates(subset=["__identity", "__bout_day", "__opponent_order_key"], keep="first")
+    survivors = survivors.drop_duplicates(subset=["__identity", "__bout_day", "__opponent_flat_key"], keep="first")
+    absorbed = legacy.loc[~legacy.index.isin(survivors.index)]
+    survivors = _reconcile_collapsed_duplicates(survivors, absorbed)
+    dropped = before - len(survivors)
+    if dropped:
+        logger.info("Dropped %d duplicate pre-UFC bout records (same fighter, day and opponent)", dropped)
+    legacy = survivors.drop(columns=["__bout_day", "__opponent_order_key", "__opponent_flat_key", "__org_tier", "__identity"])
+    return pd.concat([legacy, long_df.loc[retained | unkeyed]]).sort_index()
+
+
+def _observed_method_text(value: object) -> str:
+    text = "" if value is None else str(value)
+    if text.strip().lower() == "nan":
+        return ""
+    return " ".join(text.strip().casefold().split())
+
+
+def _reconcile_collapsed_duplicates(survivors: pd.DataFrame, absorbed: pd.DataFrame) -> pd.DataFrame:
+    """Never let a collapsed group hide a disagreement between its copies.
+
+    The two copies of one bout come from two source pages. When they agree,
+    the survivor (best promotion tier) stands. When they disagree on the
+    method, the survivor keeps the bout but its method becomes unknown (NaN):
+    a real observation is preferred, an unresolved conflict is not guessed.
+    When they disagree on the result itself (the ``won`` flag or the result
+    label: a loss on one page against a draw or no contest on the other), the
+    bout is dropped altogether: an outcome the two sources contradict cannot
+    be counted as a win or a loss. Owner decision 2026-09-17, Step 0
+    sub-decision (d).
+    """
+    if absorbed.empty or survivors.empty:
+        return survivors
+    by_order: dict[tuple, object] = {}
+    by_flat: dict[tuple, object] = {}
+    for index, row in survivors.iterrows():
+        by_order.setdefault((row["__identity"], row["__bout_day"], row["__opponent_order_key"]), index)
+        by_flat.setdefault((row["__identity"], row["__bout_day"], row["__opponent_flat_key"]), index)
+    method_conflicts: set = set()
+    result_conflicts: set = set()
+    has_method = "method" in survivors.columns
+    has_won = "won" in survivors.columns
+    has_label = "result_label" in survivors.columns
+    for _, row in absorbed.iterrows():
+        target = by_order.get((row["__identity"], row["__bout_day"], row["__opponent_order_key"]))
+        if target is None:
+            target = by_flat.get((row["__identity"], row["__bout_day"], row["__opponent_flat_key"]))
+        if target is None:
+            continue
+        kept = survivors.loc[target]
+        if has_won:
+            kept_won = pd.to_numeric(pd.Series([kept.get("won")]), errors="coerce").iloc[0]
+            other_won = pd.to_numeric(pd.Series([row.get("won")]), errors="coerce").iloc[0]
+            if pd.notna(kept_won) and pd.notna(other_won) and float(kept_won) != float(other_won):
+                result_conflicts.add(target)
+                continue
+        if has_label:
+            kept_label = _observed_method_text(kept.get("result_label"))
+            other_label = _observed_method_text(row.get("result_label"))
+            if kept_label and other_label and kept_label != other_label:
+                result_conflicts.add(target)
+                continue
+        if has_method:
+            kept_method = _observed_method_text(kept.get("method"))
+            other_method = _observed_method_text(row.get("method"))
+            if kept_method and other_method and kept_method != other_method:
+                method_conflicts.add(target)
+    if method_conflicts:
+        logger.info(
+            "Blanked the method of %d collapsed pre-UFC bouts whose source copies disagree",
+            len(method_conflicts),
+        )
+        survivors = survivors.copy()
+        survivors.loc[sorted(method_conflicts, key=str), "method"] = np.nan
+    if result_conflicts:
+        logger.warning(
+            "Dropped %d collapsed pre-UFC bouts whose source copies disagree on the result",
+            len(result_conflicts),
+        )
+        survivors = survivors.loc[~survivors.index.isin(result_conflicts)]
+    return survivors
+
+
+def _tracked_fighter_dates(
+    tracked_fights: pd.DataFrame,
+    *,
+    ambiguous_name_keys: frozenset[str] | set[str] | None = None,
+) -> pd.DataFrame:
+    """Long (fighter, fighter_key, event_date, event_name) rows from either tracked schema.
+
+    ``event_name`` is blank when the caller's frame does not carry it; such rows
+    are treated as UFC-owned, which preserves the historical behaviour for
+    callers that only know a debut date. ``fighter_key`` is the same stateful
+    identity the rolling statistics use: taken from a ``fighter_key`` /
+    ``__fighter_<side>_key`` column when the caller carries one, otherwise
+    derived from the spelling and any ``fighter_id`` / ``fighter_<side>_id``
+    column (an ambiguous spelling without an id yields no key).
+    """
+    empty = pd.DataFrame(columns=["fighter", "fighter_key", "event_date", "event_name"])
+    if tracked_fights.empty or "event_date" not in tracked_fights.columns:
+        return empty
+
+    def derive_keys(names, ids):
+        return [
+            fighter_identity_key(name, fighter_id, ambiguous_name_keys=ambiguous_name_keys)
+            for name, fighter_id in zip(names, ids)
+        ]
+
+    has_event_name = "event_name" in tracked_fights.columns
     identity_frames: list[pd.DataFrame] = []
     if "fighter" in tracked_fights.columns:
-        identity_frames.append(tracked_fights[["fighter", "event_date"]].copy())
+        frame = tracked_fights[["fighter", "event_date"]].copy()
+        frame["event_name"] = tracked_fights["event_name"].values if has_event_name else ""
+        if "fighter_key" in tracked_fights.columns:
+            frame["fighter_key"] = tracked_fights["fighter_key"].values
+        else:
+            ids = tracked_fights["fighter_id"].values if "fighter_id" in tracked_fights.columns else [None] * len(frame)
+            frame["fighter_key"] = derive_keys(frame["fighter"].values, ids)
+        identity_frames.append(frame)
     else:
-        for fighter_col in ("fighter_a", "fighter_b"):
+        for side in ("a", "b"):
+            fighter_col = f"fighter_{side}"
             if fighter_col in tracked_fights.columns:
-                identity_frames.append(
-                    tracked_fights[[fighter_col, "event_date"]].rename(
-                        columns={fighter_col: "fighter"}
-                    )
+                frame = tracked_fights[[fighter_col, "event_date"]].rename(
+                    columns={fighter_col: "fighter"}
                 )
+                frame["event_name"] = tracked_fights["event_name"].values if has_event_name else ""
+                key_col = f"__fighter_{side}_key"
+                id_col = f"fighter_{side}_id"
+                if key_col in tracked_fights.columns:
+                    frame["fighter_key"] = tracked_fights[key_col].values
+                else:
+                    ids = tracked_fights[id_col].values if id_col in tracked_fights.columns else [None] * len(frame)
+                    frame["fighter_key"] = derive_keys(frame["fighter"].values, ids)
+                identity_frames.append(frame)
 
     if not identity_frames:
-        return pd.Series(dtype="datetime64[ns]")
+        return empty
 
     identities = pd.concat(identity_frames, ignore_index=True)
     identities["event_date"] = pd.to_datetime(
@@ -1071,9 +1724,47 @@ def _tracked_ufc_debut_dates(tracked_fights: pd.DataFrame) -> pd.Series:
     identities = identities.dropna(subset=["fighter", "event_date"])
     identities["fighter"] = identities["fighter"].astype(str)
     identities = identities[identities["fighter"].str.strip().ne("")]
+    identities["fighter_key"] = identities["fighter_key"].where(identities["fighter_key"].notna(), None)
+    return identities.reset_index(drop=True)[["fighter", "fighter_key", "event_date", "event_name"]]
+
+
+def _tracked_ufc_debut_dates(
+    tracked_fights: pd.DataFrame,
+    *,
+    identity_column: str = "fighter",
+) -> pd.Series:
+    """Return each fighter's first tracked UFC-owned event date.
+
+    ``tracked_fights`` may be either the raw two-fighter fight schema or the
+    internal long schema. The series is indexed by the exact spelling by
+    default, or by the stateful identity key when ``identity_column`` is
+    ``"fighter_key"`` (rows without a key are ignored). Identity matching is
+    exact on purpose: a fuzzy or suffix-insensitive match can merge two people
+    and is less safe than leaving the corresponding feature unknown. Tracked
+    bouts from promotions not treated as UFC-owned (Strikeforce, WEC, PRIDE,
+    ...) do not count as a UFC debut. An identity whose tracked bouts are ALL
+    such bouts (a Strikeforce-only opponent, say) keeps its earliest tracked
+    bout as the cutoff, exactly as before, so its earlier regional record is
+    not discarded. Note: for the 79 tracked non-UFC rows themselves (all
+    2012-08-18 or earlier, outside every modeled window) the per-fighter
+    pre-UFC aggregate may include bouts dated after that row.
+    """
+    if identity_column not in {"fighter", "fighter_key"}:
+        raise ValueError(f"unsupported identity column {identity_column!r}")
+    identities = _tracked_fighter_dates(tracked_fights)
+    if identity_column == "fighter_key" and not identities.empty:
+        identities = identities.loc[identities["fighter_key"].notna()]
     if identities.empty:
         return pd.Series(dtype="datetime64[ns]")
-    return identities.groupby("fighter", sort=False)["event_date"].min()
+    any_organisation = identities.groupby(identity_column, sort=False)["event_date"].min()
+    ufc_owned = identities[~identities["event_name"].map(_is_non_ufc_tracked_event)]
+    if ufc_owned.empty:
+        return any_organisation
+    debut = ufc_owned.groupby(identity_column, sort=False)["event_date"].min()
+    fallback = any_organisation[~any_organisation.index.isin(debut.index)]
+    if fallback.empty:
+        return debut
+    return pd.concat([debut, fallback])
 
 
 def _filter_pre_ufc_rows_before_tracked_debut(
@@ -1082,11 +1773,18 @@ def _filter_pre_ufc_rows_before_tracked_debut(
 ) -> pd.DataFrame:
     """Keep only dated supplement rows strictly before each tracked debut.
 
-    The debut is the earliest modeled UFC row for the exact fighter spelling.
-    Therefore ``supplement_date < debut_date`` also guarantees that the row is
-    strictly earlier than every historical modeled fight for that fighter. A
-    missing/ambiguous identity or date fails closed to no rows, which later
-    materializes as NaN rather than a fabricated zero.
+    The debut is the earliest modeled UFC-owned row for the fighter's stateful
+    identity: the ``fighter_key`` the rolling statistics group by when the
+    supplement rows carry one (the loader always attaches it), otherwise the
+    exact spelling. Therefore ``supplement_date < debut_date`` also guarantees
+    that the row is strictly earlier than every historical modeled UFC fight
+    for that fighter. A supplement bout dated the same day as ANY tracked bout
+    of the same identity is dropped as well: the tracked table already holds
+    that bout (for example a WEC or Strikeforce fight listed by UFCStats), so
+    keeping the supplement copy would count it twice. A missing/ambiguous
+    identity (an ambiguous spelling with no id binding has no key) or date
+    fails closed to no rows, which later materializes as NaN rather than a
+    fabricated zero.
     """
     if supplement_df.empty:
         return supplement_df.copy()
@@ -1094,7 +1792,8 @@ def _filter_pre_ufc_rows_before_tracked_debut(
     if not required.issubset(supplement_df.columns):
         return supplement_df.iloc[0:0].copy()
 
-    debut_dates = _tracked_ufc_debut_dates(tracked_fights)
+    identity_column = _stateful_identity_column(supplement_df)
+    debut_dates = _tracked_ufc_debut_dates(tracked_fights, identity_column=identity_column)
     if debut_dates.empty:
         return supplement_df.iloc[0:0].copy()
 
@@ -1102,12 +1801,34 @@ def _filter_pre_ufc_rows_before_tracked_debut(
     filtered["event_date"] = pd.to_datetime(
         filtered["event_date"], errors="coerce", utc=True
     ).dt.tz_localize(None).dt.normalize()
-    filtered["__tracked_ufc_debut"] = filtered["fighter"].map(debut_dates)
+    if identity_column == "fighter_key":
+        identities = filtered["fighter_key"].where(filtered["fighter_key"].notna(), None)
+    else:
+        identities = filtered["fighter"].astype(str)
+    filtered["__tracked_ufc_debut"] = identities.map(debut_dates)
     valid = (
         filtered["event_date"].notna()
         & filtered["__tracked_ufc_debut"].notna()
         & (filtered["event_date"] < filtered["__tracked_ufc_debut"])
     )
+    tracked_dates = _tracked_fighter_dates(tracked_fights)
+    if not tracked_dates.empty:
+        tracked_pairs = set(zip(tracked_dates[identity_column], tracked_dates["event_date"]))
+        same_day_as_tracked = pd.Series(
+            [
+                identity is not None and (identity, event_date) in tracked_pairs
+                for identity, event_date in zip(identities, filtered["event_date"])
+            ],
+            index=filtered.index,
+        )
+        valid &= ~same_day_as_tracked
+    retained = _retained_long_mask(filtered)
+    if retained.any():
+        boundary = pd.to_datetime(filtered["first_ufc_date"], errors="coerce", utc=True).dt.tz_localize(None)
+        # Retained rows carry the independently supplied subject debut; grouping
+        # later uses the stable owner, never a spelling match to another person.
+        valid = (valid & ~retained) | (retained & filtered["event_date"].notna()
+                                     & boundary.notna() & (filtered["event_date"] < boundary))
     return (
         filtered.loc[valid]
         .drop(columns="__tracked_ufc_debut")
@@ -1125,6 +1846,16 @@ _ORG_TIER_1 = {
     "professional fighters league", "strikeforce", "pride", "pride fc",
     "wec", "world extreme cagefighting", "affliction", "dream",
     "invicta", "invicta fc", "rizin", "rizin ff", "ksw",
+    # Exact label variants observed in the accepted supplement (verified
+    # 2026-09-17; owner decision to map them). Matching stays exact on the
+    # lower-cased label: no substring rule, per the note above
+    # _TRACKED_UFC_ORGANIZATION_LABELS.
+    "bellator fighting championships", "one fighting championship",
+    "rizin fighting federation", "rizin fighting world grand prix",
+    "pride fighting championships", "strikeforce / m-1 global",
+    "strikeforce sf", "strikeforce-elitexc", "invicta fighting championships",
+    "invicta on axs tv", "affliction entertainment", "ksw epic",
+    "pfl super fights",
 }
 
 # Tier 2: Established feeder promotions — meaningful but less predictive
@@ -1137,15 +1868,53 @@ _ORG_TIER_2 = {
     "deep", "jungle fight", "fury fc", "cfa", "efn",
     "resurrection fighting alliance", "rfa", "legacy fc",
     "world series of fighting", "wsof",
+    # Exact label variants observed in the accepted supplement (2026-09-17;
+    # the six "brave cf NN / ..." co-promotion labels are the exact strings
+    # of the file). "brave fc" is NOT here: in the supplement it is a 2009
+    # Brazilian promotion (Curitiba), not Brave Combat Federation.
+    "cwfc", "cwfc usa", "m-1 challenge", "m-1 global m-1",
+    "wkg & m-1 global", "wkg & m-1 challenge",
+    "m-1 global / angel fight promotions",
+    "m-1 global / absolute championship berkut", "sambo-70 / m-1 global",
+    "cage fury fighting championships", "fury fighting championship",
+    "legacy fighting championship", "titan fighting championship",
+    "ares fighting championship", "jungle fight championship",
+    "pancrase hybrid wrestling", "brave cf 53 / octagon",
+    "brave cf 88 / wfc", "wef 91 / brave cf", "brave cf 70 / wfc",
+    "wfc 24 / brave cf", "brave cf 74 / hxmma",
+    "combate americas: mexico vs. spain", "combate americas camma",
+    "combate americas: stockton", "wsof global championship wsofgc",
+}
+
+# Labels whose meaning depends on the bout date. "BFC" is Bellator Fighting
+# Championships only during Bellator's founding era (first event 2009-04-03;
+# renamed Bellator MMA in 2013): before 2009 the label belongs to Brazilian
+# events and from 2013 on to other promotions. Owner decision 2026-09-17,
+# Step 0 sub-decision (a). Outside the window the label is tier 3 as before.
+_DATE_SCOPED_ORG_TIERS: dict[str, tuple[pd.Timestamp, pd.Timestamp, float]] = {
+    "bfc": (pd.Timestamp("2009-01-01"), pd.Timestamp("2012-12-31"), 1.0),
 }
 
 # Everything else is tier 3 (regional / unknown)
 
 
-def _encode_org_tier(org_name: str) -> float:
+def _naive_bout_day(value: object) -> pd.Timestamp:
+    """Coerce a bout date to a naive calendar day (NaT when unknown)."""
+    try:
+        stamp = pd.to_datetime(value, errors="coerce")
+    except (TypeError, ValueError):
+        return pd.NaT
+    if isinstance(stamp, pd.Timestamp) and stamp.tz is not None:
+        stamp = stamp.tz_convert("UTC").tz_localize(None)
+    return stamp.normalize() if isinstance(stamp, pd.Timestamp) and pd.notna(stamp) else pd.NaT
+
+
+def _encode_org_tier(org_name: str, event_date: object = None) -> float:
     """Map organization name to tier (1=major, 2=feeder, 3=regional/unknown).
 
-    Returns NaN if org_name is empty or missing — never fabricates.
+    Returns NaN if org_name is empty or missing — never fabricates. A label in
+    ``_DATE_SCOPED_ORG_TIERS`` takes its scoped tier only when ``event_date``
+    falls inside the recorded window; without a usable date it stays tier 3.
     """
     if not org_name or (isinstance(org_name, float) and np.isnan(org_name)):
         return np.nan
@@ -1156,10 +1925,30 @@ def _encode_org_tier(org_name: str) -> float:
         return 1.0
     if name_lower in _ORG_TIER_2:
         return 2.0
+    scoped = _DATE_SCOPED_ORG_TIERS.get(name_lower)
+    if scoped is not None:
+        start, end, tier = scoped
+        day = _naive_bout_day(event_date)
+        if pd.notna(day) and start <= day <= end:
+            return tier
     return 3.0
 
 
-def _compute_pre_ufc_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
+def _encode_org_tiers(frame: pd.DataFrame) -> pd.Series:
+    """Per-row org tier for a long frame, using each row's own bout date."""
+    if "organization" not in frame.columns:
+        return pd.Series(np.nan, index=frame.index, dtype=float)
+    dates = frame["event_date"] if "event_date" in frame.columns else pd.Series(None, index=frame.index, dtype=object)
+    return pd.Series(
+        [_encode_org_tier(org, date) for org, date in zip(frame["organization"], dates)],
+        index=frame.index,
+        dtype=float,
+    )
+
+
+def _compute_pre_ufc_summary(
+    supplement_df: pd.DataFrame, *, preserve_unknown_methods: bool = False,
+) -> pd.DataFrame:
     """Compute per-fighter pre-UFC career summary features.
 
     Returns a DataFrame with one row per fighter, columns:
@@ -1167,20 +1956,30 @@ def _compute_pre_ufc_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
         pre_ufc_win_pct, pre_ufc_ko_rate, pre_ufc_sub_rate,
         pre_ufc_dec_rate, pre_ufc_org_tier_best (best org tier fought in).
 
-    All values derived from real data or NaN. No estimates.
+    All values derived from real data or NaN. No estimates. Rows are grouped
+    by the same stateful identity the rolling statistics use (``fighter_key``
+    when present, else the exact spelling); the ``fighter`` column of the
+    result carries that identity. Rows without a key (an ambiguous spelling
+    with no id binding) form no group and therefore no summary.
     """
     if supplement_df.empty:
         return pd.DataFrame()
 
+    identity_column = _stateful_identity_column(supplement_df)
     summaries: list[dict] = []
-    for fighter, group in supplement_df.groupby("fighter"):
+    for fighter, group in supplement_df.groupby(identity_column):
         total = len(group)
         wins = (group["won"] == 1).sum()
         losses = (group["result_label"] == "loss").sum()
 
         # Method rates — from real method strings, NaN if 0 wins
-        if wins > 0:
-            methods = group.loc[group["won"] == 1, "method"].str.lower().fillna("")
+        complete_methods = group.loc[group["won"] == 1, "method"].map(_has_observed_win_method).all()
+        if wins > 0 and (complete_methods or (
+            not preserve_unknown_methods and not _retained_long_mask(group).any()
+        )):
+            methods = group.loc[group["won"] == 1, "method"].astype(object).map(
+                lambda value: "" if value is None or (isinstance(value, float) and np.isnan(value)) else str(value).lower()
+            )
             ko_wins = methods.str.contains("ko|tko|punch|kick|knee|elbow|slam|stomp", regex=True).sum()
             sub_wins = methods.str.contains("sub|submission|choke|armbar|triangle|guillotine|rear.naked|kimura|americana|heel.hook|ankle.lock|arm.triangle|darce|anaconda|twister|calf.slicer|neck.crank", regex=True).sum()
             dec_wins = methods.str.contains("dec|decision|unanimous|split|majority", regex=True).sum()
@@ -1195,8 +1994,9 @@ def _compute_pre_ufc_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
         win_pct = wins / total if total > 0 else np.nan
 
         # Best org tier — lowest number = highest tier promotion fought in
+        # (date-aware for the date-scoped labels).
         if "organization" in group.columns:
-            org_tiers = group["organization"].apply(_encode_org_tier).dropna()
+            org_tiers = _encode_org_tiers(group).dropna()
             best_tier = org_tiers.min() if not org_tiers.empty else np.nan
         else:
             best_tier = np.nan
@@ -1216,7 +2016,22 @@ def _compute_pre_ufc_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(summaries)
 
 
-def _compute_amateur_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
+def _amateur_summary_labels(names, identity_keys) -> np.ndarray:
+    """Return the spelling labels of the amateur career summary (owner decision D10).
+
+    The amateur summary is keyed by spelling, not by the stateful identity.
+    The reviewed bound spellings of one UFCStats fighter share one label, his
+    UFCStats spelling, when their stateful key is that fighter; under any
+    other key (a contradicting UFCStats ID) they get none (no group, no
+    match). Every other spelling is its own label, unchanged.
+    """
+    return np.asarray(
+        [reviewed_spelling_binding_name(name, key) for name, key in zip(names, identity_keys)],
+        dtype=object,
+    )
+
+
+def _compute_amateur_summary(supplement_df: pd.DataFrame, *, observed_owner_summary: bool = False) -> pd.DataFrame:
     """Compute per-fighter amateur career summary features from raw supplement rows."""
     if supplement_df.empty:
         return pd.DataFrame()
@@ -1225,7 +2040,7 @@ def _compute_amateur_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
         long_df = supplement_df.copy()
     else:
         deduped_raw = _dedupe_supplement_rows(supplement_df)
-        long_df = _supplement_rows_to_long_format(deduped_raw)
+        long_df = _supplement_rows_to_long_format(deduped_raw, expected_division="am")
         long_df = _drop_quarantined_supplement_identities(
             long_df,
             label="amateur",
@@ -1233,13 +2048,22 @@ def _compute_amateur_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
     if long_df.empty:
         return pd.DataFrame()
 
+    identity_keys = (
+        long_df["fighter_key"]
+        if "fighter_key" in long_df.columns
+        else long_df["fighter"].map(fighter_identity_key)
+    )
     summaries: list[dict] = []
-    for fighter, group in long_df.groupby("fighter"):
+    labels = identity_keys if observed_owner_summary else _amateur_summary_labels(long_df["fighter"], identity_keys)
+    for fighter, group in long_df.groupby(labels):
         total = len(group)
         wins = (group["won"] == 1).sum()
         losses = (group["result_label"] == "loss").sum()
 
-        if wins > 0:
+        complete_methods = group.loc[group["won"] == 1, "method"].map(_has_observed_win_method).all()
+        if wins > 0 and (complete_methods or (
+            not observed_owner_summary and not _retained_long_mask(group).any()
+        )):
             methods = group.loc[group["won"] == 1, "method"].str.lower().fillna("")
             ko_wins = methods.str.contains("ko|tko|punch|kick|knee|elbow|slam|stomp", regex=True).sum()
             sub_wins = methods.str.contains("sub|submission|choke|armbar|triangle|guillotine|rear.naked|kimura|americana|heel.hook|ankle.lock|arm.triangle|darce|anaconda|twister|calf.slicer|neck.crank", regex=True).sum()
@@ -1299,7 +2123,38 @@ def _normalize_binary_probability_pair(
 # Main feature building
 # ---------------------------------------------------------------------------
 
-def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
+class _NewFeatureContext:
+    """Actual owner/date metadata for the internal NEW-only calculation."""
+
+    def __init__(self, tracked_dates: pd.DataFrame, ambiguous_names: frozenset[str], supplement: pd.DataFrame):
+        self.tracked_dates = tracked_dates
+        self.ambiguous_names = ambiguous_names
+        self.supplement = supplement
+
+
+def _new_observed_owner_key(name, identity, ambiguous_names, observed_ids=None):
+    """Use actual ID evidence; only reviewed bindings can supply a missing ID."""
+    reviewed = fighter_identity_key(name, identity, ambiguous_name_keys=ambiguous_names)
+    if reviewed is None:
+        return None
+    actual = normalize_ufcstats_id(identity)
+    if actual is not None:
+        return f"ufcstats:{actual}"
+    if reviewed.startswith("ufcstats:"):
+        return reviewed
+    name_key = canonical_fighter_name_key(name)
+    candidates = (observed_ids or {}).get(name_key, set())
+    if name_key not in ambiguous_names and len(candidates) == 1:
+        return "ufcstats:" + next(iter(candidates))
+    return None
+
+
+def build_features(
+    fights_df: pd.DataFrame,
+    *,
+    raw_data_dir: Path | None = None,
+    _new_context: _NewFeatureContext | None = None,
+) -> pd.DataFrame:
     """
     Build the full feature matrix from a fights DataFrame.
 
@@ -1313,7 +2168,17 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     logger.info(f"Building features for {len(fights_df)} fights")
 
     # Ensure sorted by date
-    fights_df = fights_df.sort_values("event_date").reset_index(drop=True)
+    fights_df = fights_df.sort_values("event_date", kind="stable").reset_index(
+        drop=True
+    )
+    fights_df["__fight_row_id"] = range(len(fights_df))
+    raw_root = Path(raw_data_dir) if raw_data_dir is not None else None
+    if _new_context is None:
+        fights_df = _attach_fighter_identity_keys(fights_df, raw_data_dir=raw_root)
+    elif type(_new_context) is not _NewFeatureContext or not {
+        "__fighter_a_key", "__fighter_b_key"
+    } <= set(fights_df.columns):
+        raise ValueError("Internal observed NEW feature context required")
 
     # Step 1: Compute per-fight stats in long format
     ufc_per_fight = _compute_per_fight_stats(fights_df)
@@ -1323,16 +2188,33 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     # Step 1b: Merge pre-UFC career supplement (Sherdog) if available.
     # These rows enrich rolling stats / career counters for debut fighters
     # but are filtered out of the final output (we only return UFC fight rows).
-    pre_ufc_path = _resolve_pre_ufc_supplement_path()
+    pre_ufc_path = (
+        _resolve_pre_ufc_supplement_path()
+        if raw_root is None
+        else _resolve_pre_ufc_supplement_path(raw_root)
+    )
     _pre_ufc_marker = "__is_pre_ufc"
     pre_ufc_supplement = pd.DataFrame()
-    loaded_supplement = _load_pre_ufc_supplement(
-        pre_ufc_path,
-        include_reviewed=True,
+    loaded_supplement = (
+        _load_pre_ufc_supplement(pre_ufc_path, include_reviewed=True, raw_data_dir=raw_root)
+        if _new_context is None else _new_context.supplement.copy()
     )
+    if _new_context is not None and not loaded_supplement.empty:
+        # These owner keys were established before the genuine loader's
+        # existing duplicate/reconciliation policy, never after collapse.
+        owners = set(fights_df["__fighter_a_key"].dropna()) | set(fights_df["__fighter_b_key"].dropna())
+        loaded_supplement = loaded_supplement.loc[loaded_supplement["fighter_key"].isin(owners)].copy()
+    if _retained_long_mask(loaded_supplement).any():
+        if _new_context is None:
+            fights_df = _scope_retained_history_owners(fights_df, loaded_supplement)
+        ufc_per_fight = _compute_per_fight_stats(fights_df)
+        per_fight = ufc_per_fight.copy()
+    tracked_dates = ufc_per_fight
+    if _new_context is not None:
+        tracked_dates = _new_context.tracked_dates
     pre_ufc_supplement = _filter_pre_ufc_rows_before_tracked_debut(
         loaded_supplement,
-        ufc_per_fight,
+        tracked_dates,
     )
     if not pre_ufc_supplement.empty:
         supplement = pre_ufc_supplement.copy()
@@ -1348,7 +2230,8 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
 
     # Step 2: Compute rolling stats per fighter
     all_rolling = []
-    for fighter, group in per_fight.groupby("fighter"):
+    rolling_identity_col = _stateful_identity_column(per_fight)
+    for _fighter, group in per_fight.groupby(rolling_identity_col):
         rolled = _compute_rolling_stats(group)
         all_rolling.append(rolled)
 
@@ -1371,8 +2254,13 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     # Step 3: Merge rolling stats back into fights DataFrame
     # For fighter_a
     rolling_helper_cols = {
+        "fight_row_id",
         "fighter",
+        "fighter_id",
+        "fighter_key",
         "opponent",
+        "opponent_id",
+        "opponent_key",
         "event_date",
         "weight_class",
         "won",
@@ -1380,7 +2268,9 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         "method",
         "finish_round",
         "title_bout",
+        "event_name",
     }
+    rolling_helper_cols.update(PROVENANCE_COLUMNS)
 
     a_rolling = rolling_df.rename(
         columns={c: f"a_roll_{c.replace('roll_', '')}" if c.startswith("roll_") else f"a_{c}"
@@ -1388,7 +2278,8 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
                  if c not in rolling_helper_cols}
     )
     # Keep key columns for merge
-    a_merge_cols = ["fighter", "event_date"] + [
+    rolling_merge_key = _stateful_identity_column(rolling_df)
+    a_merge_cols = [rolling_merge_key, "event_date"] + [
         c for c in a_rolling.columns
         if c.startswith("a_roll_") or c in ["current_win_streak", "num_fights", "days_since_last_fight"]
     ]
@@ -1397,13 +2288,18 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     for c in ["current_win_streak", "num_fights", "days_since_last_fight"]:
         if c in a_rolling.columns:
             rename_map[c] = f"a_{c}"
+    if "fight_row_id" in a_rolling.columns:
+        rename_map["fight_row_id"] = "__fight_row_id"
     a_rolling = a_rolling.rename(columns=rename_map)
-    a_merge_cols = ["fighter", "event_date"] + [
+    a_merge_cols = [rolling_merge_key, "__fight_row_id", "event_date"] + [
         c for c in a_rolling.columns if c.startswith("a_")
     ]
     a_rolling_deduped = a_rolling[
         [c for c in a_merge_cols if c in a_rolling.columns]
-    ].drop_duplicates(subset=["fighter", "event_date"], keep="last")
+    ].drop_duplicates(
+        subset=[rolling_merge_key, "__fight_row_id", "event_date"],
+        keep="last",
+    )
 
     # For fighter_b
     b_rolling = rolling_df.copy()
@@ -1412,29 +2308,33 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         for c in rolling_df.columns
         if c not in rolling_helper_cols
     }
+    rename_b["fight_row_id"] = "__fight_row_id"
     b_rolling = b_rolling.rename(columns=rename_b)
-    b_merge_cols = ["fighter", "event_date"] + [
+    b_merge_cols = [rolling_merge_key, "__fight_row_id", "event_date"] + [
         c for c in b_rolling.columns if c.startswith("b_")
     ]
     b_rolling_deduped = b_rolling[
         [c for c in b_merge_cols if c in b_rolling.columns]
-    ].drop_duplicates(subset=["fighter", "event_date"], keep="last")
+    ].drop_duplicates(
+        subset=[rolling_merge_key, "__fight_row_id", "event_date"],
+        keep="last",
+    )
 
     # Merge fighter A rolling stats
     features = fights_df.merge(
         a_rolling_deduped,
-        left_on=["fighter_a", "event_date"],
-        right_on=["fighter", "event_date"],
+        left_on=["__fighter_a_key", "__fight_row_id", "event_date"],
+        right_on=[rolling_merge_key, "__fight_row_id", "event_date"],
         how="left",
-    ).drop(columns=["fighter"], errors="ignore")
+    ).drop(columns=[rolling_merge_key], errors="ignore")
 
     # Merge fighter B rolling stats
     features = features.merge(
         b_rolling_deduped,
-        left_on=["fighter_b", "event_date"],
-        right_on=["fighter", "event_date"],
+        left_on=["__fighter_b_key", "__fight_row_id", "event_date"],
+        right_on=[rolling_merge_key, "__fight_row_id", "event_date"],
         how="left",
-    ).drop(columns=["fighter"], errors="ignore")
+    ).drop(columns=[rolling_merge_key], errors="ignore")
 
     features = _overlay_ufc_history_backed_fields(features, ufc_per_fight)
     _fill_history_backed_fighter_fields(features)
@@ -1574,8 +2474,14 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
                 feature_col = f"{prefix}{odds_type}_prob"
                 if feature_col in features.columns:
                     existing = pd.to_numeric(features[feature_col], errors="coerce")
-                    features[feature_col] = prob.combine_first(existing)
+                    combined = prob.combine_first(existing)
+                    if "method_observation_policy" in features:
+                        verified = features["method_observation_policy"].notna()
+                        combined.loc[verified] = existing.loc[verified]
+                    features[feature_col] = combined
                 else:
+                    if "method_observation_policy" in features:
+                        prob = prob.where(features["method_observation_policy"].isna())
                     features[feature_col] = prob
 
     # Win record ratio (wins / (wins + losses)) — overall quality
@@ -1626,7 +2532,7 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     # --- Weight class move detection ---
     # Flag fighters who are fighting outside their usual weight class
     if "weight_class" in features.columns:
-        _detect_weight_class_moves(features)
+        _detect_weight_class_moves(features, preserve_unknown=_new_context is not None)
 
     # --- Style matchup interactions ---
     # Striker vs grappler matchup (KO rate vs TD/sub stats)
@@ -1660,16 +2566,20 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             features[f"diff_{feat}"] = features[a_col] - features[b_col]
 
     # Step 6a: Add rematch / H2H features
-    features = features.sort_values("event_date")
+    features = features.sort_values(
+        ["event_date", "__fight_row_id"],
+        kind="stable",
+    )
     h2h: dict[tuple[str, str], list[str]] = {}
     is_rematch_vals = []
     h2h_diff_vals = []
     for _, row in features.iterrows():
-        fa = str(row.get("fighter_a", ""))
-        fb = str(row.get("fighter_b", ""))
+        fa = str(row.get("__fighter_a_key", ""))
+        fb = str(row.get("__fighter_b_key", ""))
         pair = tuple(sorted([fa, fb]))
         prior = h2h.get(pair, [])
-        if prior:
+        # A prior draw or no-contest establishes a rematch without a winner.
+        if pair in h2h:
             is_rematch_vals.append(1)
             h2h_diff_vals.append(sum(1 for w in prior if w == fa) - sum(1 for w in prior if w == fb))
         else:
@@ -1677,9 +2587,11 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             h2h_diff_vals.append(0)
         if pair not in h2h:
             h2h[pair] = []
-        winner = str(row.get("winner", ""))
-        if winner:
-            h2h[pair].append(winner)
+        winner = row.get("winner", "")
+        if winner == row.get("fighter_a"):
+            h2h[pair].append(fa)
+        elif winner == row.get("fighter_b"):
+            h2h[pair].append(fb)
     features["is_rematch"] = is_rematch_vals
     features["h2h_record_diff"] = h2h_diff_vals
 
@@ -1691,23 +2603,34 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     # debut-bounded rows seeded rolling history above, so the aggregate cannot
     # see a future, same-day, or post-UFC supplement result.
     if not pre_ufc_supplement.empty:
-        _pre_ufc_summary = _compute_pre_ufc_summary(pre_ufc_supplement)
+        _pre_ufc_summary = _compute_pre_ufc_summary(
+            pre_ufc_supplement.loc[~_retained_long_mask(pre_ufc_supplement)],
+            preserve_unknown_methods=_new_context is not None,
+        )
         if not _pre_ufc_summary.empty:
             _pre_ufc_cols = [c for c in _pre_ufc_summary.columns if c != "fighter"]
+            # The summary is keyed by the same stateful identity as the rolling
+            # statistics (fighter_key: UFCStats id for ambiguous spellings,
+            # normalized spelling otherwise), so it is merged on the fight
+            # row's identity keys rather than on the display spelling. A
+            # spelling shared by two UFCStats ids can no longer attach one
+            # person's regional record to the other's fight.
+            _summary_identity = "__fighter_a_key" if "__fighter_a_key" in features.columns else "fighter_a"
             # Merge for fighter_a
             _a_summary = _pre_ufc_summary.rename(
                 columns={c: f"a_{c}" for c in _pre_ufc_cols}
             )
             features = features.merge(
-                _a_summary, left_on="fighter_a", right_on="fighter",
+                _a_summary, left_on=_summary_identity, right_on="fighter",
                 how="left"
             ).drop(columns=["fighter"], errors="ignore")
             # Merge for fighter_b
+            _summary_identity_b = "__fighter_b_key" if "__fighter_b_key" in features.columns else "fighter_b"
             _b_summary = _pre_ufc_summary.rename(
                 columns={c: f"b_{c}" for c in _pre_ufc_cols}
             )
             features = features.merge(
-                _b_summary, left_on="fighter_b", right_on="fighter",
+                _b_summary, left_on=_summary_identity_b, right_on="fighter",
                 how="left"
             ).drop(columns=["fighter"], errors="ignore")
             # Differentials
@@ -1723,6 +2646,8 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
                 features["a_pre_ufc_total_fights"].notna().mean() * 100.0,
             )
 
+    features = _overlay_retained_career_summaries(features, pre_ufc_supplement)
+
     # Feature absence is unknown, never a zero-fight synthetic observation.
     for col in _PRE_UFC_SUMMARY_COLUMNS:
         for prefix in ("a_", "b_", "diff_"):
@@ -1730,31 +2655,56 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             if target not in features.columns:
                 features[target] = np.nan
 
-    amateur_path = _resolve_amateur_supplement_path()
+    amateur_path = (
+        _resolve_amateur_supplement_path()
+        if raw_root is None
+        else _resolve_amateur_supplement_path(raw_root)
+    )
     _amateur_summary = pd.DataFrame()
     _amateur_long = _load_amateur_supplement(
         amateur_path,
         include_reviewed=True,
+        raw_data_dir=raw_root,
+        _new_ambiguous_names=None if _new_context is None else _new_context.ambiguous_names,
     )
+    if _new_context is not None and not _amateur_long.empty:
+        legacy = ~_retained_long_mask(_amateur_long)
+        owners = set(features["__fighter_a_key"].dropna()) | set(features["__fighter_b_key"].dropna())
+        _amateur_long = _amateur_long.loc[~legacy | _amateur_long["fighter_key"].isin(owners)].copy()
     if not _amateur_long.empty:
-        _amateur_summary = _compute_amateur_summary(_amateur_long)
+        _amateur_summary = _compute_amateur_summary(_amateur_long.loc[~_retained_long_mask(_amateur_long)],
+                                                   observed_owner_summary=_new_context is not None)
 
     if not _amateur_summary.empty:
         _amateur_cols = [c for c in _amateur_summary.columns if c != "fighter"]
+        # Merged on the summary's spelling labels (owner decision D10): a
+        # reviewed bound spelling under his UFCStats spelling, every other
+        # name as it is.
+        for _side in ("a", "b"):
+            _key_column = f"__fighter_{_side}_key"
+            _keys = (
+                features[_key_column]
+                if _key_column in features.columns
+                else features[f"fighter_{_side}"].map(fighter_identity_key)
+            )
+            features[f"__amateur_{_side}_label"] = (
+                _amateur_summary_labels(features[f"fighter_{_side}"], _keys)
+                if _new_context is None else _keys
+            )
         _a_amateur = _amateur_summary.rename(columns={c: f"a_{c}" for c in _amateur_cols})
         features = features.merge(
             _a_amateur,
-            left_on="fighter_a",
+            left_on="__amateur_a_label",
             right_on="fighter",
             how="left",
         ).drop(columns=["fighter"], errors="ignore")
         _b_amateur = _amateur_summary.rename(columns={c: f"b_{c}" for c in _amateur_cols})
         features = features.merge(
             _b_amateur,
-            left_on="fighter_b",
+            left_on="__amateur_b_label",
             right_on="fighter",
             how="left",
-        ).drop(columns=["fighter"], errors="ignore")
+        ).drop(columns=["fighter", "__amateur_a_label", "__amateur_b_label"], errors="ignore")
         for col in _amateur_cols:
             a_c = f"a_{col}"
             b_c = f"b_{col}"
@@ -1766,6 +2716,8 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             features["a_amateur_total_fights"].notna().mean() * 100.0,
         )
 
+    features = _overlay_retained_career_summaries(features, _amateur_long, amateur=True)
+
     for col in _AMATEUR_SUMMARY_COLUMNS:
         for prefix in ("a_", "b_", "diff_"):
             target = f"{prefix}{col}"
@@ -1776,7 +2728,172 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     features["has_data"] = features.get("a_num_fights", pd.Series(0)) + features.get("b_num_fights", pd.Series(0))
 
     logger.info(f"Built {len(features)} fight feature rows with {len(features.columns)} columns")
-    return features
+    return features.drop(
+        columns=["__fighter_a_key", "__fighter_b_key", "__fight_row_id"],
+        errors="ignore",
+    )
+
+
+def build_new_features(
+    accepted_fights: pd.DataFrame,
+    new_fights: pd.DataFrame,
+    *,
+    raw_data_dir: Path | None = None,
+    historical_identity_associations: list[dict] | None = None,
+) -> pd.DataFrame:
+    """Calculate only NEW targets with the genuine time-directed dependencies.
+
+    Primary owners need their prior timelines. Core SOS additionally needs the
+    prior timeline of each last-five opponent, through that original matchup.
+    No opponent-of-opponent graph or historical feature reproduction is needed.
+    """
+    TARGET_FIELD = "__incremental_refresh_target"
+    if TARGET_FIELD in accepted_fights or TARGET_FIELD in new_fights:
+        raise ValueError("Private NEW target field already exists")
+    if new_fights.empty:
+        return new_fights.copy()
+    for frame in (accepted_fights, new_fights):
+        if not {"event_date", "fighter_a", "fighter_b"} <= set(frame.columns):
+            raise ValueError("Observed historical/NEW participant columns required")
+    history, targets = accepted_fights.copy(), new_fights.copy()
+    history[TARGET_FIELD] = ""
+    targets[TARGET_FIELD] = [str(index) for index in range(len(targets))]
+    observed = pd.concat([history, targets], ignore_index=True, sort=False)
+    collision_rows = [
+        {"name": name, "fighter_id": identity}
+        for side in ("a", "b")
+        for name, identity in zip(
+            observed["fighter_" + side],
+            observed.get("fighter_" + side + "_id", pd.Series(None, index=observed.index)),
+        )
+    ]
+    # Accepted draw/NC and older source rows may carry blank IDs. Associate
+    # those calculation-only roles with existing observed IDs when the entire
+    # accepted/new/selected inventory domain has exactly one owner for the
+    # canonical name. Stored historical cells remain untouched. Collisions
+    # still require the existing explicit reviewed association.
+    identity_evidence = list(collision_rows)
+    identity_evidence.extend({"name": item["name"], "fighter_id": item["owner_key"].removeprefix("ufcstats:")}
+                             for item in historical_identity_associations or [])
+    raw_root = Path(raw_data_dir) if raw_data_dir is not None else RAW_DATA_DIR
+    inventory_path = selected_path("profiles", raw_root / "ufc_fighters_scraped.csv")
+    if inventory_path.exists():
+        inventory = pd.read_csv(inventory_path, usecols=["name", "fighter_url"])
+        identity_evidence.extend({"name": row.name, "fighter_id": row.fighter_url}
+                                 for row in inventory.itertuples(index=False))
+    elif active_sources() is not None:
+        raise ValueError("Selected fighter inventory is absent")
+    ambiguous = frozenset(set(_training_ambiguous_name_keys(raw_data_dir)) |
+                          set(derive_ambiguous_fighter_name_keys(identity_evidence)))
+    observed_ids = {}
+    for evidence in identity_evidence:
+        identity = normalize_ufcstats_id(evidence["fighter_id"])
+        if identity is not None:
+            observed_ids.setdefault(canonical_fighter_name_key(evidence["name"]), set()).add(identity)
+    for side in ("a", "b"):
+        observed["__fighter_" + side + "_key"] = [
+            _new_observed_owner_key(item["name"], item["fighter_id"], ambiguous, observed_ids)
+            for item in collision_rows[(0 if side == "a" else len(observed)):
+                                       (len(observed) if side == "a" else 2 * len(observed))]
+        ]
+    exact_associations = {}
+    for association in historical_identity_associations or []:
+        index, side = association["observed_row"], association["side"]
+        if side not in {"a", "b"} or not isinstance(index, int) or not 0 <= index < len(history):
+            raise ValueError("Historical identity association has an invalid role")
+        if normalize_ufcstats_id(observed.at[index, "fighter_" + side + "_id"]) is not None:
+            raise ValueError("Historical identity association would replace a stored stable ID")
+        key = association["owner_key"]
+        if (normalize_ufcstats_id(key.removeprefix("ufcstats:")) is None
+                or canonical_fighter_name_key(association["name"]) != canonical_fighter_name_key(observed.at[index, "fighter_" + side])):
+            raise ValueError("Historical identity association differs from its accepted role")
+        current = observed.at[index, "__fighter_" + side + "_key"]
+        if current is not None and not pd.isna(current) and current != key:
+            raise ValueError("Historical source association contradicts an observed unique owner")
+        observed.at[index, "__fighter_" + side + "_key"] = key
+        exact_associations[index, side] = association
+    dates = pd.to_datetime(observed["event_date"], errors="coerce", utc=True, format="mixed").dt.tz_localize(None)
+    target_indices = list(range(len(history), len(observed)))
+    if dates.iloc[target_indices].isna().any():
+        raise ValueError("NEW feature target chronology is unresolved")
+    names_by_key = {}
+    timelines = {}
+    unresolved = []
+    for index, row in observed.iterrows():
+        for side in ("a", "b"):
+            key = row["__fighter_" + side + "_key"]
+            name = canonical_fighter_name_key(row["fighter_" + side])
+            if key is None or pd.isna(key):
+                unresolved.append((index, name, normalize_ufcstats_id(row.get("fighter_" + side + "_id"))))
+            else:
+                names_by_key.setdefault(key, set()).add(name)
+                timelines.setdefault(key, []).append(index)
+
+    def prior(key, cutoff):
+        if key is None or pd.isna(key):
+            raise UnresolvedTrainingFighterIdentityError("NEW target owner is unresolved")
+        owned = timelines.get(key, [])
+        if any(pd.isna(dates.iloc[index]) for index in owned):
+            raise ValueError("Required NEW owner chronology is unresolved")
+        potential = names_by_key[key]
+        for index, name, actual_id in unresolved:
+            needed = name in potential or (actual_id is not None and key == f"ufcstats:{actual_id}")
+            if needed and (pd.isna(dates.iloc[index]) or (dates.iloc[index], index) < cutoff):
+                raise UnresolvedTrainingFighterIdentityError("Required prior owner association is unresolved")
+        return sorted((index for index in owned if (dates.iloc[index], index) < cutoff),
+                      key=lambda index: (dates.iloc[index], index))
+
+    included = set(target_indices)
+    required_owners = set()
+    for index in target_indices:
+        for side in ("a", "b"):
+            key = observed.at[index, "__fighter_" + side + "_key"]
+            primary = prior(key, (dates.iloc[index], index))
+            required_owners.add(key)
+            included.update(primary)
+            for matchup in primary[-5:]:
+                past = observed.loc[matchup]
+                opponent_side = "b" if past["__fighter_a_key"] == key else "a"
+                opponent = past["__fighter_" + opponent_side + "_key"]
+                if opponent is None or pd.isna(opponent):
+                    raise UnresolvedTrainingFighterIdentityError("Required last-five opponent owner is unresolved")
+                required_owners.add(opponent)
+                included.update(prior(opponent, (dates.iloc[matchup], matchup)))
+
+    metadata_indices = sorted({index for owner in required_owners for index in timelines[owner]})
+    metadata_columns = ["event_date", "event_name", "fighter_a", "fighter_b",
+                        "fighter_a_id", "fighter_b_id", "__fighter_a_key", "__fighter_b_key"]
+    metadata = observed.loc[metadata_indices, [name for name in metadata_columns if name in observed]].copy()
+    metadata["event_date"] = dates.loc[metadata_indices]
+    context = observed.loc[sorted(included)].copy()
+    context["event_date"] = dates.loc[sorted(included)]
+    associations = []
+    for index, row in context.iterrows():
+        for side in ("a", "b"):
+            if normalize_ufcstats_id(row.get("fighter_" + side + "_id")) is None:
+                key = row["__fighter_" + side + "_key"]
+                if key is not None and not pd.isna(key):
+                    associations.append(exact_associations.get((int(index), side), {
+                        "observed_row": int(index), "side": side,
+                        "name": row["fighter_" + side], "owner_key": key,
+                        "basis": "existing observed unique ID or explicit reviewed binding"}))
+    supplement = _load_pre_ufc_supplement(
+        _resolve_pre_ufc_supplement_path(raw_data_dir), include_reviewed=True,
+        raw_data_dir=raw_data_dir,
+        _new_ambiguous_names=ambiguous,
+    )
+    calculated = build_features(context, raw_data_dir=raw_data_dir,
+                                _new_context=_NewFeatureContext(metadata, ambiguous, supplement))
+    if TARGET_FIELD not in calculated:
+        raise ValueError("Scientific feature producer lost NEW target identity")
+    result = calculated.loc[calculated[TARGET_FIELD].isin(targets[TARGET_FIELD])].copy()
+    expected = targets[TARGET_FIELD].tolist()
+    if len(result) != len(expected) or result[TARGET_FIELD].duplicated().any() or set(result[TARGET_FIELD]) != set(expected):
+        raise ValueError("Scientific NEW target occurrence relationship differs")
+    result = result.set_index(TARGET_FIELD).loc[expected].reset_index(drop=True)
+    result.attrs["new_feature_context"] = {"historical_role_associations": associations,
+                                            "context_rows": len(context), "observed_rows": len(observed)}
+    return result
 
 
 def _fill_history_backed_fighter_fields(features: pd.DataFrame) -> None:
@@ -1793,7 +2910,7 @@ def _fill_history_backed_fighter_fields(features: pd.DataFrame) -> None:
             features.drop(columns=[history_col], inplace=True)
 
 
-def _detect_weight_class_moves(features: pd.DataFrame) -> None:
+def _detect_weight_class_moves(features: pd.DataFrame, *, preserve_unknown: bool = False) -> None:
     """
     Detect fighters competing outside their usual weight class.
     Uses a fighter's most common weight class from prior fights as their 'home' class.
@@ -1826,24 +2943,29 @@ def _detect_weight_class_moves(features: pd.DataFrame) -> None:
     # Store per-row wc_move flags keyed by DataFrame index
     wc_move_a: dict[int, int] = {}
     wc_move_b: dict[int, int] = {}
-    for idx, row in features.sort_values("event_date").iterrows():
+    for idx, row in features.sort_values(
+        ["event_date", "__fight_row_id"],
+        kind="stable",
+    ).iterrows():
         wc_w = _wc_to_weight(row.get("weight_class"))
         if wc_w is None:
-            wc_move_a[idx] = 0
-            wc_move_b[idx] = 0
+            wc_move_a[idx] = np.nan if preserve_unknown else 0
+            wc_move_b[idx] = np.nan if preserve_unknown else 0
             continue
 
         # Compute flag using prior mode BEFORE updating history
-        fa = row.get("fighter_a")
-        fb = row.get("fighter_b")
+        fa = row.get("__fighter_a_key") or row.get("fighter_a")
+        fb = row.get("__fighter_b_key") or row.get("fighter_b")
         fa_home = fighter_wc_history[fa].most_common(1)[0][0] if fa and fa in fighter_wc_history else None
         fb_home = fighter_wc_history[fb].most_common(1)[0][0] if fb and fb in fighter_wc_history else None
-        wc_move_a[idx] = 1 if (fa_home and wc_w != fa_home) else 0
-        wc_move_b[idx] = 1 if (fb_home and wc_w != fb_home) else 0
+        wc_move_a[idx] = (int(wc_w != fa_home) if fa_home else np.nan) if preserve_unknown else int(bool(fa_home and wc_w != fa_home))
+        wc_move_b[idx] = (int(wc_w != fb_home) if fb_home else np.nan) if preserve_unknown else int(bool(fb_home and wc_w != fb_home))
 
         # Now update history with this fight
-        for col in ["fighter_a", "fighter_b"]:
-            fighter = row.get(col)
+        for side in ["a", "b"]:
+            fighter = row.get(f"__fighter_{side}_key") or row.get(
+                f"fighter_{side}"
+            )
             if fighter:
                 if fighter not in fighter_wc_history:
                     fighter_wc_history[fighter] = Counter()

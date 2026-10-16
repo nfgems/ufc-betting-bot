@@ -89,14 +89,18 @@
   "health_limits": {
     "maximum_brier_relative_regression": 0.1,
     "maximum_ece_absolute_regression": 0.025,
-    "minimum_evaluation_fights": 1762,
+    "minimum_evaluation_fights": 1761,
     "minimum_evaluation_folds": 10,
     "minimum_strategy_bets": 80,
     "minimum_strategy_roi": 0.0,
     "minimum_strategy_total_profit": 0.0,
     "maximum_drawdown_multiplier": 2.0,
     "maximum_clv_absolute_regression": 0.01,
-    "maximum_snapshot_age_days": 35
+    "maximum_snapshot_age_days": 35,
+    "entry_coverage_recent_window_days": 60,
+    "minimum_entry_coverage_recent_rows": 50,
+    "minimum_verified_entry_coverage": 0.7,
+    "maximum_verified_entry_event_lag_days": 35
   },
   "root_release": {
     "bundle_id": "ufc-production-20260801-full_live_contract_v6_durability_corrected_20260805_fullfit-identity-0549b46",

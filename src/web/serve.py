@@ -4,6 +4,7 @@ Production entrypoint â€” runs the web dashboard + background monitor toget
 Used by Railway/Docker for always-on deployment.
 """
 
+import json
 import logging
 import os
 import sys
@@ -16,6 +17,18 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+# Dispatch before importing logging, trading, monitoring or dashboard components.
+# The image entrypoint uses the same minimal module directly.
+if __name__ == "__main__":
+    _startup_mode = str(os.environ.get("UFC_STARTUP_MODE", "running"))
+    if _startup_mode == "paused":
+        from src.web.paused import main as _paused_main
+
+        _paused_main()
+        raise SystemExit(0)
+    if _startup_mode != "running":
+        raise SystemExit("UFC_STARTUP_MODE must be exactly running or paused")
+
 from src.config import (
     BTC5M_LIVE_LEDGER_DIR,
     BTC5M_LIVE_PROFILES,
@@ -23,6 +36,7 @@ from src.config import (
     BTC5M_PROFILES,
     LOGS_DIR,
     MIN_EDGE_THRESHOLD,
+    MODELS_DIR,
     RUNTIME_LOG_BACKUP_COUNT,
     RUNTIME_LOG_MAX_BYTES,
 )
@@ -56,7 +70,7 @@ logging.basicConfig(
 # Mirror WARNING/ERROR/CRITICAL to a durable, time-bounded alerts.jsonl so the
 # Activity dashboard can surface them for the full retention window instead of
 # losing them to INFO-volume scroll-out in bot.log.
-from src.web.alert_store import install_alert_handler
+from src.web.alert_store import install_alert_handler, suppress_durable_alerts
 
 install_alert_handler(LOGS_DIR)
 
@@ -115,6 +129,16 @@ def _auto_redeem_enabled() -> bool:
 
 def _ufc_refresh_enabled() -> bool:
     raw = str(os.getenv("UFC_REFRESH_ENABLED", "0") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _ufc_update_calendar_enabled() -> bool:
+    raw = str(os.getenv("UFC_UPDATE_CALENDAR_ENABLED", "0") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _ufc_monthly_candidate_enabled() -> bool:
+    raw = str(os.getenv("UFC_MONTHLY_CANDIDATE_ENABLED", "0") or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
 
@@ -463,7 +487,9 @@ def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, f
     overall = audit.get("overall_summary") or {}
     source_limited_missing_fields = audit_alert_summary.get("source_limited_missing_fields") or {}
     split_summary = (
-        audit_alert_summary.get("split_summary_alias_aware")
+        audit_alert_summary.get("split_summary_stable_identity")
+        or audit.get("split_summary_stable_identity")
+        or audit_alert_summary.get("split_summary_alias_aware")
         or audit_alert_summary.get("split_summary_official_name")
         or audit.get("split_summary_alias_aware")
         or audit.get("split_summary_official_name")
@@ -649,12 +675,57 @@ def _ufc_refresh_operational_notes(summary: dict | None) -> list[str]:
             notes.append(
                 f"excluded {inactive_excluded_rows} inactive/non-fighting UFC profile row(s) from active roster sync"
             )
+        non_mma_excluded_rows = int(
+            counts.get("excluded_non_mma_identity") or 0
+        )
+        if non_mma_excluded_rows:
+            notes.append(
+                f"excluded {non_mma_excluded_rows} reviewed non-MMA identity row(s) "
+                "from active roster sync"
+            )
         unknown_status_rows = int(counts.get("quarantined_unknown_profile_status") or 0)
         if unknown_status_rows:
             notes.append(
                 f"quarantined {unknown_status_rows} UFC profile row(s) with unverified current status "
                 "from active-roster coverage"
             )
+    profile_checks = (
+        ((refresh_summary.get("publication_quality") or {}).get("checks") or {}).get(
+            "fighter_profile_bundles"
+        )
+        or {}
+    )
+    group_completeness = profile_checks.get("bundle_completeness") or {}
+    if isinstance(group_completeness, dict):
+        for group in ("physical", "striking", "grappling"):
+            values = group_completeness.get(group)
+            if not isinstance(values, dict) or int(values.get("total") or 0) <= 0:
+                continue
+            notes.append(
+                f"UFC profile {group} completeness: "
+                f"{int(values.get('complete') or 0)}/{int(values.get('total') or 0)} "
+                f"complete ({float(values.get('complete_pct') or 0.0):.2f}%), "
+                f"{int(values.get('partial') or 0)} partial, "
+                f"{int(values.get('empty') or 0)} empty"
+            )
+    detail_status = (refresh_summary.get("ufcstats_backfill") or {}).get(
+        "fight_detail_status_counts"
+    ) or {}
+    if isinstance(detail_status, dict) and int(detail_status.get("total") or 0) > 0:
+        source_deferred = int(detail_status.get("source_deferred") or 0)
+        source_deferred_note = (
+            f", {source_deferred} source-limited and deferred for retry"
+            if source_deferred
+            else ""
+        )
+        notes.append(
+            "UFC fight-detail completeness: "
+            f"{int(detail_status.get('complete') or 0)}/{int(detail_status.get('total') or 0)} "
+            f"complete ({float(detail_status.get('complete_pct') or 0.0):.2f}%), "
+            f"{int(detail_status.get('partial') or 0)} partial, "
+            f"{int(detail_status.get('failed') or 0)} failed"
+            f"{source_deferred_note}"
+        )
     return notes
 
 
@@ -720,12 +791,16 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
         alerts.append(detail)
     identity_audit_rows = int(roster_sync.get("identity_audit_rows") or 0)
     test_rows = 0
+    non_mma_excluded_rows = 0
     if identity_audit_rows:
         counts = roster_sync.get("identity_audit_action_counts") or {}
         if isinstance(counts, dict) and counts:
             detail_parts: list[str] = []
             test_rows = int(counts.get("excluded_test_profile") or 0)
             inactive_excluded_rows = int(counts.get("excluded_inactive_profile_status") or 0)
+            non_mma_excluded_rows = int(
+                counts.get("excluded_non_mma_identity") or 0
+            )
             full_quarantine_rows = int(counts.get("quarantined_untrusted_url_identity") or 0)
             slug_alias_rows = int(counts.get("quarantined_untrusted_slug_alias") or 0)
             unknown_status_rows = int(counts.get("quarantined_unknown_profile_status") or 0)
@@ -734,6 +809,7 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
                 identity_audit_rows
                 - test_rows
                 - inactive_excluded_rows
+                - non_mma_excluded_rows
                 - full_quarantine_rows
                 - slug_alias_rows
                 - unknown_status_rows,
@@ -742,6 +818,10 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
                 detail_parts.append(f"{test_rows} test/staging excluded")
             if inactive_excluded_rows:
                 detail_parts.append(f"{inactive_excluded_rows} inactive/non-fighting excluded")
+            if non_mma_excluded_rows:
+                detail_parts.append(
+                    f"{non_mma_excluded_rows} reviewed non-MMA identities excluded"
+                )
             if full_quarantine_rows:
                 detail_parts.append(f"{full_quarantine_rows} URL identity quarantined")
             if slug_alias_rows:
@@ -799,16 +879,26 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
         len(backfill.get("partial_fight_urls") or []),
     )
     if partial_fights:
+        total_fights = int(detail_status.get("total") or 0)
+        partial_pct = float(detail_status.get("partial_pct") or 0.0)
+        suffix = (
+            f" of {total_fights} ({partial_pct:.2f}%)" if total_fights else ""
+        )
         alerts.append(
             "UFCStats fight-detail collection returned partial observations for "
-            f"{partial_fights} fight(s)"
+            f"{partial_fights} fight(s){suffix}"
         )
     failed_fights = max(
         int(detail_status.get("failed") or 0),
         len(backfill.get("failed_fight_urls") or []),
     )
     if failed_fights:
-        alerts.append(f"UFCStats fight-detail collection failed for {failed_fights} fight(s)")
+        total_fights = int(detail_status.get("total") or 0)
+        failed_pct = float(detail_status.get("failed_pct") or 0.0)
+        suffix = f" of {total_fights} ({failed_pct:.2f}%)" if total_fights else ""
+        alerts.append(
+            f"UFCStats fight-detail collection failed for {failed_fights} fight(s){suffix}"
+        )
 
     supplement = refresh_summary.get("profile_supplement_refresh") or {}
     if str(supplement.get("action") or "").strip().casefold() == "error":
@@ -849,12 +939,41 @@ def _ufc_refresh_coverage_skip_reason(summary: dict | None) -> str:
 def _run_ufc_refresh_cycle(
     *,
     limit_fighters: int | None = None,
+    calendar_claim: dict[str, object] | None = None,
 ) -> dict:
     from scripts.run_scheduled_ufc_refresh import run_scheduled_refresh
 
-    return run_scheduled_refresh(
-        limit_fighters=limit_fighters,
-        refresh_existing_profiles=True,
+    refresh_kwargs: dict[str, object] = {
+        "limit_fighters": limit_fighters,
+        "refresh_existing_profiles": True,
+    }
+    if calendar_claim is not None:
+        refresh_kwargs["calendar_claim"] = calendar_claim
+    return run_scheduled_refresh(**refresh_kwargs)
+
+
+def _recover_pending_ufc_data_publication() -> dict[str, object]:
+    """Repair a killed raw/pointer transaction before any refresh-loop delay."""
+    from scripts.run_scheduled_ufc_refresh import recover_scheduled_refresh_publication
+
+    recovery = recover_scheduled_refresh_publication()
+    if recovery.get("action") != "none":
+        logger.warning("Recovered interrupted UFC data publication: %s", recovery)
+    return recovery
+
+
+def _build_ufc_monthly_candidate_runner():
+    """Construct the permissioned candidate runner only when explicitly enabled."""
+    if not _ufc_monthly_candidate_enabled():
+        return None
+    from scripts.run_scheduled_ufc_refresh import _active_production_manifest_path
+    from src.model.monthly_candidate_runtime import (
+        build_monthly_candidate_runner_from_env,
+    )
+
+    return build_monthly_candidate_runner_from_env(
+        active_manifest_path=_active_production_manifest_path(),
+        live_models_dir=MODELS_DIR,
     )
 
 
@@ -868,6 +987,7 @@ def run_background_ufc_refresh_loop(
     """Refresh UFC data inside the hosted service so Railway uses the same volume."""
     from src.web.app import get_runtime_status, set_runtime_status, update_runtime_component
 
+    _recover_pending_ufc_data_publication()
     heartbeat_window = max(1800.0, interval_hours * 3600 * 2.5)
     delay_seconds = max(initial_delay_seconds, 0.0)
     delay_deadline = time.monotonic() + delay_seconds
@@ -942,7 +1062,8 @@ def run_background_ufc_refresh_loop(
         _mark_ufc_refresh_cycle_started()
 
         try:
-            summary = _run_ufc_refresh_cycle(limit_fighters=limit_fighters)
+            with suppress_durable_alerts():
+                summary = _run_ufc_refresh_cycle(limit_fighters=limit_fighters)
             cycle_completed_at = datetime.now(timezone.utc).isoformat()
             next_planned_refresh_at = (
                 datetime.now(timezone.utc) + timedelta(hours=interval_hours)
@@ -1112,6 +1233,408 @@ def run_background_ufc_refresh_loop(
             interval_seconds=interval_hours * 3600.0,
             last_cycle_completed_monotonic=last_cycle_completed_monotonic,
         )
+
+
+def _accepted_calendar_publication_id(summary: dict | None) -> str:
+    """Return the accepted generation only for a fully committed publication."""
+    payload = summary if isinstance(summary, dict) else {}
+    receipt = payload.get("data_publication_receipt")
+    if not isinstance(receipt, dict):
+        return ""
+    raw_receipt = receipt.get("raw")
+    if not isinstance(raw_receipt, dict) or raw_receipt.get("status") != "committed":
+        return ""
+    accepted_id = str(receipt.get("accepted_generation_id") or "").strip()
+    if (
+        payload.get("continuity_green") is not True
+        or payload.get("published") is not True
+        or (payload.get("publication_quality") or {}).get("passed") is not True
+    ):
+        return ""
+    return accepted_id
+
+
+def _calendar_claim_publication_context(claim: dict) -> dict[str, object]:
+    """Return the minimum durable claim identity embedded in publication."""
+    return {
+        "schema_version": 1,
+        "claim_id": str(claim.get("claim_id") or "").strip(),
+        "iso_week": str(claim.get("iso_week") or "").strip(),
+        "slot": str(claim.get("slot") or "").strip(),
+        "claimed_at_utc": str(claim.get("now_utc") or "").strip(),
+        "due_at_utc": str(claim.get("due_at_utc") or "").strip(),
+    }
+
+
+def _reconcile_committed_calendar_publication(
+    schedule, *, now: datetime | None = None, monthly_input_request=None,
+    monthly_input_request_provider=None,
+) -> dict[str, object]:
+    """Recover only independently bound original completion or saved selection.
+
+    Current publication may already be B/C/D. Its current hash cannot confer
+    authority to repair the uncertain original A completion.
+    """
+    if monthly_input_request is None:
+        if monthly_input_request_provider is not None:
+            return monthly_input_request_provider.reconcile(schedule, now=now)
+        result = schedule.reconcile_monthly_inputs(now=now)
+        return {**result, "reason": "saved_monthly_intents_reconciled"}
+    from src.model.monthly_input import inspect_monthly_completion
+
+    context = inspect_monthly_completion(monthly_input_request)
+    completion = schedule.complete_data_update(
+        context["claim_id"], succeeded=True,
+        accepted_update_id=context["accepted_update_id"],
+        accepted_at=datetime.fromisoformat(context["accepted_at_utc"]), now=now,
+        monthly_input_request=monthly_input_request, expected_monthly_context=context)
+    return {"changed": bool(completion.get("changed") or
+                            (completion.get("monthly_registration") or {}).get("changed")),
+            "reason": "original_committed_completion_reconciled",
+            "accepted_update_id": context["accepted_update_id"],
+            "claim_id": context["claim_id"], "completion": completion}
+
+
+def _run_due_ufc_calendar_update(
+    schedule,
+    *,
+    now: datetime | None = None,
+    limit_fighters: int | None = None,
+    monthly_input_request=None,
+    monthly_input_request_provider=None,
+) -> dict:
+    """Claim and finish at most one due weekly update."""
+    observed_at = now or datetime.now(timezone.utc)
+    claim = schedule.claim_data_update(now=observed_at)
+    if claim.get("claimed") is not True:
+        return {"claimed": False, "claim": claim}
+
+    schedule.protect_data_completion(str(claim["claim_id"]), now=observed_at)
+    _mark_ufc_refresh_cycle_started()
+    summary: dict | None = None
+    error = ""
+    uncertain = False
+    try:
+        with suppress_durable_alerts():
+            summary = _run_ufc_refresh_cycle(
+                limit_fighters=limit_fighters,
+                calendar_claim=_calendar_claim_publication_context(claim),
+            )
+        accepted_id = _accepted_calendar_publication_id(summary)
+        succeeded = bool(accepted_id)
+        if not succeeded:
+            reasons = (summary or {}).get("outcome_reasons") or []
+            if isinstance(reasons, (str, bytes)):
+                reasons = [reasons]
+            error = " | ".join(str(reason) for reason in reasons if str(reason).strip())
+            if not error:
+                error = "refresh_did_not_produce_a_committed_accepted_generation"
+    except Exception as exc:
+        accepted_id = ""
+        succeeded = False
+        uncertain = True
+        error = f"{type(exc).__name__}: {exc}"
+    finally:
+        _mark_ufc_refresh_cycle_finished()
+
+    if uncertain:
+        return {"claimed": True, "claim": claim, "succeeded": False,
+                "accepted_update_id": "", "summary": summary, "error": error,
+                "completion": {"changed": False, "reason": "original_completion_evidence_required",
+                               "reacquisition_authorized": False,
+                               "next": schedule.plan_data_update(now=observed_at)}}
+    accepted_at_text = str(
+        ((summary or {}).get("data_publication_receipt") or {}).get(
+            "accepted_at_utc"
+        )
+        or ""
+    ).strip()
+    accepted_at = observed_at
+    if succeeded and accepted_at_text:
+        parsed_accepted_at = datetime.fromisoformat(
+            accepted_at_text.replace("Z", "+00:00")
+        )
+        if parsed_accepted_at.tzinfo is None:
+            raise RuntimeError("Committed UFC publication accepted_at_utc is naive")
+        accepted_at = parsed_accepted_at
+    completion = schedule.complete_data_update(
+        str(claim["claim_id"]),
+        succeeded=succeeded,
+        monthly_input_request=monthly_input_request if succeeded else None,
+        accepted_update_id=accepted_id or None,
+        accepted_at=accepted_at if succeeded else None,
+        error=error or None,
+        now=observed_at,
+    )
+    preparation_error = ""
+    if succeeded and monthly_input_request_provider is not None:
+        try:
+            request = monthly_input_request_provider(dict(claim), summary)
+            completion = schedule.complete_data_update(
+                str(claim["claim_id"]), succeeded=True, accepted_update_id=accepted_id,
+                accepted_at=accepted_at, monthly_input_request=request, now=observed_at)
+        except Exception as exc:
+            # Provisioning happens only after successful data completion is durable.
+            preparation_error = f"{type(exc).__name__}: {exc}"
+            schedule.record_monthly_preparation_refusal(str(claim["claim_id"]), preparation_error,
+                                                        now=observed_at)
+    return {
+        "claimed": True,
+        "claim": claim,
+        "completion": completion,
+        "succeeded": succeeded,
+        "accepted_update_id": accepted_id,
+        "summary": summary,
+        "monthly_preparation_error": preparation_error,
+        "error": error,
+    }
+
+
+def _run_due_monthly_candidate(
+    schedule,
+    *,
+    runner,
+    now: datetime | None = None,
+) -> dict:
+    """Claim one due candidate-only attempt using an explicitly supplied runner."""
+    observed_at = now or datetime.now(timezone.utc)
+    if runner is None:
+        return {"claimed": False, "reason": "monthly_candidate_runner_disabled"}
+    claim = schedule.claim_monthly_candidate(now=observed_at)
+    if claim.get("claimed") is not True:
+        return {"claimed": False, "claim": claim}
+    try:
+        with suppress_durable_alerts():
+            result = runner(dict(claim))
+        if not isinstance(result, dict) or result.get("succeeded") is not True:
+            reason = (
+                str((result or {}).get("error") or "monthly_candidate_failed")
+                if isinstance(result, dict)
+                else "monthly_candidate_runner_returned_invalid_result"
+            )
+            succeeded = False
+            candidate_id = ""
+        else:
+            candidate_id = str(result.get("candidate_id") or "").strip()
+            succeeded = bool(candidate_id)
+            reason = "" if succeeded else "monthly_candidate_id_missing"
+    except Exception as exc:
+        result = None
+        succeeded = False
+        candidate_id = ""
+        reason = f"{type(exc).__name__}: {exc}"
+    completion = schedule.complete_monthly_candidate(
+        str(claim["claim_id"]),
+        succeeded=succeeded,
+        candidate_id=candidate_id or None,
+        error=reason or None,
+        now=observed_at,
+    )
+    return {
+        "claimed": True,
+        "claim": claim,
+        "completion": completion,
+        "succeeded": succeeded,
+        "candidate_id": candidate_id,
+        "result": result,
+        "error": reason,
+    }
+
+
+def _wait_for_ufc_calendar_tick(timeout_seconds: float) -> str:
+    """Wait for the next due-time poll or a freshness wake-up request."""
+    woke_for_event = _UFC_COMPLETED_EVENT_REFRESH_REQUEST.wait(
+        timeout=max(float(timeout_seconds), 0.0)
+    )
+    if not woke_for_event:
+        return "calendar_poll"
+    global _UFC_COMPLETED_EVENT_REFRESH_CLAIMED
+    with _UFC_REFRESH_CYCLE_LOCK:
+        _UFC_COMPLETED_EVENT_REFRESH_REQUEST.clear()
+        _UFC_COMPLETED_EVENT_REFRESH_CLAIMED = False
+    return "completed_event_schedule_recheck"
+
+
+def run_background_ufc_update_calendar_loop(
+    *,
+    limit_fighters: int | None = None,
+    startup_gate: threading.Event | None = None,
+    schedule=None,
+    monthly_runner=None,
+    monthly_input_request_provider=None,
+    poll_seconds: float = 60.0,
+):
+    """Run the durable Tuesday/conditional-Wednesday calendar."""
+    from src.data.ufc_update_schedule import UFCUpdateSchedule
+    from src.model.monthly_provisioning import configure_monthly_calendar_from_env
+    from src.web.app import get_runtime_status, set_runtime_status, update_runtime_component
+
+    _recover_pending_ufc_data_publication()
+    provisioning = configure_monthly_calendar_from_env()
+    schedule_options = {"monthly_policy": provisioning["policy"]}
+    if provisioning["configured"] and provisioning["policy"] is None:
+        schedule_options["promotion_month_utc"] = ""
+    schedule = schedule or UFCUpdateSchedule(**schedule_options)
+    if monthly_input_request_provider is None:
+        monthly_input_request_provider = provisioning["provider"]
+    if _ufc_monthly_candidate_enabled() and monthly_runner is None:
+        logger.error("Monthly candidates remain disabled: an approved evaluator runner is unavailable")
+    if startup_gate is not None and not startup_gate.is_set():
+        startup_gate.wait(timeout=_UFC_REFRESH_STARTUP_GATE_TIMEOUT_SECONDS)
+
+    existing = dict(
+        (get_runtime_status().get("components") or {}).get("ufc_refresh_loop") or {}
+    )
+    last_successful_refresh_at = existing.get("last_successful_refresh_at")
+    consecutive_failures = int(existing.get("consecutive_failures") or 0)
+
+    while True:
+        observed_at = datetime.now(timezone.utc)
+        committed_publication_reconciliation = (
+            _reconcile_committed_calendar_publication(
+                schedule,
+                now=observed_at,
+                monthly_input_request_provider=monthly_input_request_provider,
+            )
+        )
+        monthly_reconciler = getattr(monthly_runner, "reconcile_completed", None)
+        monthly_completion_reconciliation = (
+            monthly_reconciler(schedule, now=observed_at)
+            if callable(monthly_reconciler)
+            else {"changed": False, "reason": "monthly_runner_has_no_completion_to_reconcile"}
+        )
+        interrupted_claim_recovery = schedule.reconcile_stale_claims(
+            now=observed_at
+        )
+        status = schedule.status(now=observed_at)
+        data_plan = status["data_update"]
+        update_runtime_component(
+            "ufc_refresh_loop",
+            "running",
+            "UFC update calendar active; waiting for the next Eastern-time slot.",
+            calendar_mode=True,
+            schedule_state_path=status["state_path"],
+            schedule_decision=data_plan,
+            next_planned_refresh_at=data_plan.get("next_due_at_utc"),
+            last_successful_refresh_at=last_successful_refresh_at,
+            consecutive_failures=consecutive_failures,
+            committed_publication_reconciliation=(
+                committed_publication_reconciliation
+            ),
+            monthly_completion_reconciliation=monthly_completion_reconciliation,
+            interrupted_claim_recovery=interrupted_claim_recovery,
+        )
+
+        attempt = _run_due_ufc_calendar_update(
+            schedule,
+            now=observed_at,
+            limit_fighters=limit_fighters,
+            monthly_input_request_provider=monthly_input_request_provider,
+        )
+        if attempt.get("claimed"):
+            summary = attempt.get("summary") or {}
+            coverage_snapshot = _coverage_snapshot_from_refresh_summary(summary)
+            coverage_skip_reason = _ufc_refresh_coverage_skip_reason(summary)
+            coverage_notes = [
+                *_ufc_refresh_operational_notes(summary),
+                *_ufc_refresh_coverage_notes(coverage_snapshot),
+            ]
+            refresh_alerts = _ufc_refresh_operational_alerts(summary)
+            if not coverage_skip_reason:
+                refresh_alerts.extend(_ufc_refresh_coverage_alerts(coverage_snapshot))
+            if not attempt["succeeded"] and not refresh_alerts:
+                refresh_alerts.append(attempt["error"] or "weekly update failed")
+            refresh_alerts = list(dict.fromkeys(refresh_alerts))
+            completed_at = datetime.now(timezone.utc).isoformat()
+            if attempt["succeeded"]:
+                consecutive_failures = 0
+                last_successful_refresh_at = completed_at
+                refreshed_bundle = summary.get("production_bundle") or (
+                    (summary.get("rebuild") or {}).get("production_bundle")
+                )
+                if isinstance(refreshed_bundle, dict):
+                    runtime_status = get_runtime_status()
+                    runtime_status["production_bundle"] = dict(refreshed_bundle)
+                    set_runtime_status(runtime_status)
+            else:
+                consecutive_failures += 1
+
+            next_plan = (attempt.get("completion") or {}).get("next") or {}
+            update_runtime_component(
+                "ufc_refresh_loop",
+                "running" if attempt["succeeded"] and not refresh_alerts else "degraded",
+                (
+                    f"Weekly UFC update accepted at {completed_at}."
+                    if attempt["succeeded"]
+                    else f"Weekly UFC update rejected at {completed_at}; accepted data preserved."
+                ),
+                calendar_mode=True,
+                consecutive_failures=consecutive_failures,
+                last_successful_refresh_at=last_successful_refresh_at,
+                last_cycle_completed_at=completed_at,
+                next_planned_refresh_at=next_plan.get("next_due_at_utc"),
+                schedule_completion=attempt.get("completion"),
+                last_summary=summary,
+                continuity_green=summary.get("continuity_green") is True,
+                published=summary.get("published") is True,
+                accepted_update_id=attempt.get("accepted_update_id") or None,
+                coverage_snapshot=coverage_snapshot,
+                coverage_alerts=refresh_alerts,
+                coverage_skip_reason=coverage_skip_reason,
+                coverage_notes=coverage_notes,
+                last_error=None if attempt["succeeded"] else attempt["error"],
+            )
+            if attempt["succeeded"] and not refresh_alerts:
+                logger.info(
+                    "Weekly UFC update accepted: %s",
+                    attempt["accepted_update_id"],
+                    extra={
+                        "alert_recovered_incident_keys": [
+                            _SCHEDULED_UFC_REFRESH_INCIDENT_KEY
+                        ]
+                    },
+                )
+            else:
+                logger.warning(
+                    "Weekly UFC update incident: %s",
+                    " | ".join(refresh_alerts),
+                    extra={"alert_incident_key": _SCHEDULED_UFC_REFRESH_INCIDENT_KEY},
+                )
+
+        monthly_attempt = _run_due_monthly_candidate(
+            schedule,
+            runner=(monthly_runner if _ufc_monthly_candidate_enabled() else None),
+            now=observed_at,
+        )
+        if monthly_attempt.get("claimed"):
+            update_runtime_component(
+                "ufc_refresh_loop",
+                "running" if monthly_attempt["succeeded"] else "degraded",
+                (
+                    "Monthly UFC candidate completed and awaits owner review."
+                    if monthly_attempt["succeeded"]
+                    else "Monthly UFC candidate failed; live model unchanged."
+                ),
+                monthly_candidate=monthly_attempt,
+            )
+            if monthly_attempt["succeeded"]:
+                logger.info(
+                    "Monthly UFC candidate completed and awaits owner review: %s",
+                    monthly_attempt["candidate_id"],
+                    extra={
+                        "alert_recovered_incident_keys": [
+                            _SCHEDULED_UFC_REFRESH_INCIDENT_KEY
+                        ]
+                    },
+                )
+            else:
+                logger.warning(
+                    "Monthly UFC candidate incident: %s",
+                    monthly_attempt["error"],
+                    extra={"alert_incident_key": _SCHEDULED_UFC_REFRESH_INCIDENT_KEY},
+                )
+
+        _wait_for_ufc_calendar_tick(poll_seconds)
 
 
 def _log_auto_redeem_summary(summary: dict, *, wait: bool) -> None:
@@ -1840,6 +2363,14 @@ def _method_odds_runtime_metadata(signals: dict) -> tuple[str, dict]:
 
     metadata = {"method_odds_snapshot": snapshot}
     status = str(snapshot.get("status", "") or "unknown").lower()
+    if status == "blocked":
+        metadata["method_odds_effective_status"] = "blocked"
+        reason = snapshot.get("reason_code") or (snapshot.get("stage_error") or {}).get("reason_code")
+        if reason == "no_usable_method_values_in_inspected_response":
+            metadata["method_odds_status_message"] = "No usable method-odds values were established; market availability remains unknown."
+        else:
+            metadata["method_odds_status_message"] = "Method-odds collection is blocked: " + str(snapshot.get("error", "collection evidence is incomplete"))
+        return "; method odds collection blocked", metadata
     record_count = _safe_int(snapshot.get("record_count"), 0)
     if status == "success":
         metadata["method_odds_effective_status"] = "current"
@@ -1860,7 +2391,7 @@ def _method_odds_runtime_metadata(signals: dict) -> tuple[str, dict]:
         return f"; {message[:-1].lower()}", metadata
 
     unavailable = status == "unavailable"
-    state_message = "Method-odds props are not currently published" if unavailable else "Method-odds refresh failed"
+    state_message = "No usable method-odds values were established" if unavailable else "Method-odds refresh failed"
     latest_usable = snapshot.get("latest_usable_snapshot")
     if isinstance(latest_usable, dict) and latest_usable:
         fallback_time = latest_usable.get("snapshot_time") or "unknown time"
@@ -1900,13 +2431,15 @@ def run_background_monitor(interval_hours: float = 6.0):
 
     while True:
         cycle_started_at = datetime.now(timezone.utc).isoformat()
+        cycle_stage_errors = []
 
         def _heartbeat(message: str, *, state: str = "running", **metadata) -> None:
             update_runtime_component(
                 "monitor_loop",
-                state,
+                "degraded" if cycle_stage_errors else state,
                 message,
                 last_cycle_started_at=cycle_started_at,
+                cycle_stage_errors=list(cycle_stage_errors),
                 **metadata,
             )
 
@@ -1938,6 +2471,7 @@ def run_background_monitor(interval_hours: float = 6.0):
                     logger.info(f"Reconciled {total_reconciled} sold positions total")
             except Exception as e:
                 _log_sold_position_reconciliation_error(e)
+                cycle_stage_errors.append({"stage": "sold_position_reconciliation", "error_type": type(e).__name__, "error": str(e)})
 
             if _auto_redeem_enabled():
                 redeem_summary = auto_redeem_positions_from_polymarket(
@@ -1947,6 +2481,7 @@ def run_background_monitor(interval_hours: float = 6.0):
                 _log_auto_redeem_summary(redeem_summary, wait=False)
         except Exception as e:
             logger.error(f"Auto-settle error: {e}")
+            cycle_stage_errors.append({"stage": "auto_settle", "error_type": type(e).__name__, "error": str(e)})
             _heartbeat(f"Auto-settle error: {e}", state="degraded")
 
         try:
@@ -1954,15 +2489,17 @@ def run_background_monitor(interval_hours: float = 6.0):
 
             _heartbeat("Monitor cycle active: scanning live events")
             signals = run_monitoring_pass()
+            cycle_stage_errors.extend(signals.get("stage_errors") or [])
             logger.info(f"Monitor pass: {len(signals.get('events', []))} events")
             method_odds_suffix, method_odds_metadata = _method_odds_runtime_metadata(signals)
             _heartbeat(
-                "Monitor cycle active: monitoring pass complete "
-                f"({len(signals.get('events', []))} events){method_odds_suffix}; starting line tracking",
+                ("Monitor cycle active: monitoring pass incomplete " if cycle_stage_errors else "Monitor cycle active: monitoring pass complete ")
+                + f"({len(signals.get('events', []))} events){method_odds_suffix}; starting line tracking",
                 **method_odds_metadata,
             )
         except Exception as e:
             logger.error(f"Monitor error: {e}")
+            cycle_stage_errors.append({"stage": "monitoring_pass", "error_type": type(e).__name__, "error": str(e)})
             _heartbeat(f"Monitor error: {e}", state="degraded")
 
         try:
@@ -1999,17 +2536,26 @@ def run_background_monitor(interval_hours: float = 6.0):
             logger.info(f"Line tracking: {line_summary.get('sharp_moves', 0)} sharp moves")
         except Exception as e:
             logger.error(f"Line tracking error: {e}")
+            cycle_stage_errors.append({"stage": "line_tracking", "error_type": type(e).__name__, "error": str(e)})
             _heartbeat(f"Line tracking error: {e}", state="degraded")
 
         cycle_completed_at = datetime.now(timezone.utc).isoformat()
         _heartbeat(
-            f"Last monitor cycle completed at {cycle_completed_at}",
+            f"Last monitor cycle {'finished with stage errors' if cycle_stage_errors else 'completed'} at {cycle_completed_at}",
             last_cycle_completed_at=cycle_completed_at,
+            last_cycle_succeeded=not cycle_stage_errors,
         )
         time.sleep(interval_hours * 3600)
 
 
 def main():
+    startup_mode = str(os.environ.get("UFC_STARTUP_MODE", "running"))
+    if startup_mode == "paused":
+        from src.web.paused import main as paused_main
+
+        return paused_main()
+    if startup_mode != "running":
+        raise ValueError("UFC_STARTUP_MODE must be exactly running or paused")
     port = int(os.environ.get("PORT", 5050))
     # Hosted deployments must bind all interfaces so Railway can reach the process.
     host = os.environ.get("WEB_HOST", "0.0.0.0")
@@ -2022,10 +2568,30 @@ def main():
     logger.info(f"Starting on {host}:{port}")
 
     try:
+        data_publication_recovery = _recover_pending_ufc_data_publication()
+    except Exception as exc:
+        logger.error("Interrupted UFC data publication recovery failed: %s", exc)
+        raise SystemExit(1) from exc
+
+    try:
         bundle_summary = _resolve_hosted_bundle_startup_summary()
     except Exception as exc:
         logger.error("Hosted production bundle validation failed: %s", exc)
         raise SystemExit(1) from exc
+
+    from src.model.monthly_provisioning import configure_monthly_calendar_from_env
+    monthly_provisioning = configure_monthly_calendar_from_env()
+    try:
+        monthly_candidate_runner = _build_ufc_monthly_candidate_runner()
+        if monthly_candidate_runner is not None and (
+            not _ufc_refresh_enabled() or not _ufc_update_calendar_enabled()
+        ):
+            raise RuntimeError(
+                "Monthly candidate automation requires the enabled UFC update calendar"
+            )
+    except Exception as exc:
+        logger.error("Monthly candidate runtime configuration failed: %s", exc)
+        monthly_candidate_runner = None
 
     from src.web.app import (
         btc5m_emergency_stop_status,
@@ -2153,6 +2719,7 @@ def main():
     runtime_status["btc5m_emergency_stop"] = btc5m_stop_status
     if bundle_summary is not None:
         runtime_status["production_bundle"] = bundle_summary
+    runtime_status["data_publication_recovery"] = data_publication_recovery
     set_runtime_status(runtime_status)
 
     if runtime_status["errors"]:
@@ -2209,14 +2776,35 @@ def main():
     # betting pass. On cold deploys this prevents scraping/rebuild CPU and disk
     # work from pushing live orders past their safety cutoffs.
     if refresh_enabled:
+        calendar_enabled = _ufc_update_calendar_enabled()
+        refresh_target = (
+            run_background_ufc_update_calendar_loop
+            if calendar_enabled
+            else run_background_ufc_refresh_loop
+        )
+        refresh_kwargs = {
+            "limit_fighters": _ufc_refresh_limit_fighters(),
+            "startup_gate": first_betting_cycle_complete,
+        }
+        if not calendar_enabled:
+            refresh_kwargs.update(
+                {
+                    "interval_hours": _ufc_refresh_interval_hours(),
+                    "initial_delay_seconds": _ufc_refresh_initial_delay_seconds(),
+                }
+            )
+        else:
+            from src.data.ufc_update_schedule import UFCUpdateSchedule
+            schedule_options = {"monthly_policy": monthly_provisioning["policy"]}
+            if monthly_provisioning["configured"] and monthly_provisioning["policy"] is None:
+                schedule_options["promotion_month_utc"] = ""
+            refresh_kwargs["schedule"] = UFCUpdateSchedule(**schedule_options)
+            refresh_kwargs["monthly_input_request_provider"] = monthly_provisioning["provider"]
+            if monthly_candidate_runner is not None:
+                refresh_kwargs["monthly_runner"] = monthly_candidate_runner
         refresh_thread = threading.Thread(
-            target=run_background_ufc_refresh_loop,
-            kwargs={
-                "interval_hours": _ufc_refresh_interval_hours(),
-                "initial_delay_seconds": _ufc_refresh_initial_delay_seconds(),
-                "limit_fighters": _ufc_refresh_limit_fighters(),
-                "startup_gate": first_betting_cycle_complete,
-            },
+            target=refresh_target,
+            kwargs=refresh_kwargs,
             daemon=True,
         )
         register_runtime_thread("ufc_refresh_loop", refresh_thread)

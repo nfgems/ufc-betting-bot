@@ -40,6 +40,7 @@ from src.features.build_features import (
     STAT_COLUMNS,
 )
 from src.model.train import _compute_sample_weights, _add_odds_noise
+from src.features.contract_transforms import add_rematch_features
 
 logger = logging.getLogger(__name__)
 
@@ -539,48 +540,6 @@ def combined_bug_fixes() -> VariantConfig:
 # ---------------------------------------------------------------------------
 # Rematch / Head-to-Head feature
 # ---------------------------------------------------------------------------
-
-def add_rematch_features(features_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add rematch detection features:
-    - is_rematch: binary flag if fighters have fought before
-    - h2h_record_diff: A's wins minus B's wins in prior meetings
-    """
-    features_df = features_df.sort_values("event_date").copy()
-
-    # Build H2H history chronologically
-    h2h: dict[tuple[str, str], list[str]] = {}  # (sorted pair) -> list of winners
-
-    is_rematch = []
-    h2h_diff = []
-
-    for _, row in features_df.iterrows():
-        fa = row.get("fighter_a", "")
-        fb = row.get("fighter_b", "")
-        winner = row.get("winner", "")
-        pair = tuple(sorted([fa, fb]))
-
-        prior_fights = h2h.get(pair, [])
-        if prior_fights:
-            is_rematch.append(1)
-            a_prior_wins = sum(1 for w in prior_fights if w == fa)
-            b_prior_wins = sum(1 for w in prior_fights if w == fb)
-            h2h_diff.append(a_prior_wins - b_prior_wins)
-        else:
-            is_rematch.append(0)
-            h2h_diff.append(0)
-
-        # Record this fight's result
-        if pair not in h2h:
-            h2h[pair] = []
-        if winner:
-            h2h[pair].append(winner)
-
-    features_df["is_rematch"] = is_rematch
-    features_df["h2h_record_diff"] = h2h_diff
-
-    return features_df
-
 
 def apply_variant_feature_transforms(
     features_df: pd.DataFrame,

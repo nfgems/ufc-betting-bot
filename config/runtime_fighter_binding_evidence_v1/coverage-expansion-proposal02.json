@@ -1,0 +1,1839 @@
+{
+  "schema_version": 1,
+  "kind": "compact_preferred_saved_runtime_route_expansion_proposal",
+  "created_utc": "2026-09-20T21:09:43.889968+00:00",
+  "authority_status": "Proposal pending independent source review and isolated integration/testing; active runtime artifact unchanged.",
+  "full_proposal_pin": {
+    "path": "C:\\Temp\\v9-observation-coverage-contract-20260920-01\\evidence\\indexed-saved-route-expansion-proposal02.json",
+    "bytes": 542236,
+    "sha256": "6f4b10ca092a1372b205e8bc77de2b08505c58eb1c7b5e832f5a1b02060f2c9a"
+  },
+  "algorithm_pin": {
+    "path": "C:\\Temp\\v9-observation-coverage-contract-20260920-01\\evidence\\scan_indexed_saved_routes02.py",
+    "sha256": "43c5d8f9864fe9aed11a2d68b4d518a6f62be4b3c4aacde6e6899bb754119608"
+  },
+  "artifact_pin": {
+    "path": "C:\\Temp\\v9-observation-coverage-contract-20260920-01\\source\\config\\runtime_fighter_bindings_v1.json",
+    "bytes": 5813,
+    "sha256": "63542ce0965d51e10d73844fad491ddcd5f415e25065806692c54f4405183c02"
+  },
+  "input_pins": {
+    "roster": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\active_roster\\ufc_active_roster_official.csv",
+      "bytes": 358499,
+      "sha256": "a17cc92fdab735673128425b6330395c19a251d7c7b64e52d80431664f9f7270"
+    },
+    "accepted_roster": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\accepted_active_roster\\accepted-active-roster.csv",
+      "bytes": 357056,
+      "sha256": "f1e7d9fbd00e61a2104e66a3461ba672e180656d18fba18edb8c7d1110d57a73"
+    },
+    "profiles": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+      "bytes": 673721,
+      "sha256": "9d054fb8c03209baedeb44d9e69ef577adef90d81cff38b0e10488c67c00b2eb"
+    },
+    "fights": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\processed\\fights_cleaned.csv",
+      "bytes": 16543108,
+      "sha256": "bb9de5b25456fc6a74c965b28bef682b5f70aac4205d1cddad0b2667ccaaf2f6"
+    },
+    "request_log": {
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\source_request_log.csv",
+      "bytes": 418167,
+      "sha256": "4d09f2f9ed89e6b397250a841eeb4559b700263fa275f8c1de1836ab50659c12"
+    },
+    "evidence_inventory": {
+      "path": "C:\\Temp\\u7pi1\\sources\\weights\\evidence_inventory.csv",
+      "bytes": 162465,
+      "sha256": "d43f4ef699966cf6f3429df3c108955a2b60d063fdfa23e8831ea9e9f3ce7f21"
+    },
+    "tracked_inventory": {
+      "path": "C:\\Temp\\v9-observation-coverage-20260920-01\\evidence\\identity-inventory-audit01.json",
+      "bytes": 82569,
+      "sha256": "53cd833443cf58a9ae25cec35eb77bc67b016e73ecd68dcff42aeeff2c79815a"
+    }
+  },
+  "counts": {
+    "original_accepted_sides": 6,
+    "indexed_article_receipts_inspected": 450,
+    "proposed_additional_routes": 17,
+    "proposed_added_sides": 17,
+    "proposed_total_sides": 23,
+    "remaining_unsupported_sides": 77
+  },
+  "independent_packaging_preconditions": {
+    "tracked_inventory_sha256_verified": "53cd833443cf58a9ae25cec35eb77bc67b016e73ecd68dcff42aeeff2c79815a",
+    "actual_fighter_sides": 100,
+    "actual_unsupported_sides": 94
+  },
+  "packaged_raw_files": [
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html",
+      "bytes": 94403,
+      "sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-05-16-ufc-fight-night-allen-vs-costa-1.html",
+      "bytes": 79687,
+      "sha256": "d7705ec0a15a9363614b7cdb55579a4966942a4c25d8747c439de6986edc43d3"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html",
+      "bytes": 79839,
+      "sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-07-18-ufc-fight-night-du-plessis-vs-usman-sitemap-01-official-weigh-results-ufc-fight-night-oklahoma-ci.html",
+      "bytes": 80535,
+      "sha256": "9e07c1c8114c119616c1fba35592561ed6cd8b8f0273f62ea1cfdbb22ace5ca9"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-05-03-ufc-fight-night-sandhagen-vs-figueiredo-sitemap-01-official-weigh-results-ufc-des-moines-sandhagen-fi.html",
+      "bytes": 94890,
+      "sha256": "086a9fb6a21d3e3e0e0b795f724071a019d3fe2d58c1380fe6a384b052bc6c08"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2024-03-30-ufc-fight-night-blanchfield-vs-fiorot-sitemap-01-weigh-results-ufc-atlantic-city-fight-night-blanch.html",
+      "bytes": 95017,
+      "sha256": "2ce09013e9f439ed3880c08ce6c89d43c2d0f4c16dcf1a7704d9b576fa704005"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-04-18-ufc-fight-night-burns-vs-malott-sitemap-01-official-weigh-results-ufc-burns-malott-winnipeg.html",
+      "bytes": 71183,
+      "sha256": "bef9dc0a8a3585654eb0a0b2c0d2a1ab619bb5f9133dcdb879aebdba5b89f06d"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-06-14-ufc-fight-night-usman-vs-buckley-sitemap-01-official-weigh-in-results-ufc-atlanta-usman-buckle.html",
+      "bytes": 76887,
+      "sha256": "be5d673317168c6df5595a0f839ef3c315d036a829ce79a79610cf6ca280aafe"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-08-23-ufc-fight-night-walker-vs-zhang-1.html",
+      "bytes": 68952,
+      "sha256": "dc4a579b2dac12a0971997a625e7543526e1cab7a05e0d6d4f11374328ad9664"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-07-19-ufc-318-holloway-vs-poirier-3-1.html",
+      "bytes": 83007,
+      "sha256": "a692d264ce68a1a61a0e2957495d9ae87ceb435d5f5e7c52dd9574ffaf9c3cf9"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-01-18-ufc-311-makhachev-vs-moicano-1.html",
+      "bytes": 98015,
+      "sha256": "f48c3a0c9c8e204f6763d6695be4dfd8103a779da201793ecf22a389cb68d8fc"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2023-08-12-ufc-fight-night-luque-vs-dos-anjos-1.html",
+      "bytes": 94405,
+      "sha256": "35694b5a8ebe6350baaeba84109594f9e056395e7f015fb37aa7769c829dcab8"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2026-04-04-ufc-fight-night-moicano-vs-duncan-1.html",
+      "bytes": 80149,
+      "sha256": "e53abea21eb13c1d373fd1e020f2995e176676cd87ca9f0bc81551eceabf90f4"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-01-11-ufc-fight-night-dern-vs-ribas-2-1.html",
+      "bytes": 94774,
+      "sha256": "6b86ef2e5aa35ebe90af4794b418d0ae5038a82b4ad2375a21f276a91f18528c"
+    },
+    {
+      "path": "runtime_fighter_binding_evidence_v1/2025-03-22-ufc-fight-night-edwards-vs-brady-sitemap-04-official-weigh-in-results-ufc-fight-night-edwards-.html",
+      "bytes": 95355,
+      "sha256": "a2ccd2584d0e40b1683c390d9551e334bc07179af0084e09146d9d2c0fe582c8"
+    }
+  ],
+  "proposals": [
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/alexander-volkov",
+      "name": "Alexander Volkov",
+      "fighter_id": "279566840aa55bf2",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/alexander-volkov",
+        "name": "Alexander Volkov",
+        "fighter_id": "279566840aa55bf2",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e",
+        "historical_bout": {
+          "event_date": "2023-03-11",
+          "event_name": "UFC Fight Night: Yan vs. Dvalishvili",
+          "fighter_a": "Alexander Volkov",
+          "fighter_b": "Alexandr Romanov",
+          "fighter_a_id": "279566840aa55bf2",
+          "fighter_b_id": "c0badf3243907e59"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/alexander-volkov",
+        "name": "Alexander Volkov",
+        "fighter_id": "279566840aa55bf2",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html",
+          "bytes": 94403,
+          "sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:39:58.394737Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-yan-vs-dvalishvili-las-vegas",
+          "final_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-yan-vs-dvalishvili-las-vegas",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "94403",
+          "response_sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 201,
+        "evidence_inventory_data_row_index": 988,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html",
+          "size_bytes": "94403",
+          "sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/weigh-results-ufc-fight-night-yan-vs-dvalishvili-las-vegas"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/alexander-volkov",
+          "anchor_text": "Alexander Volkov"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2023-03-10T09:12:17-0500"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "g content. Please try again. Cancel Weigh-In Highlights | UFC Fight Night: Yan vs Dvalishvili / Live UFC Fight Night: Yan vs Dvalishvili took place live from The Theater At Virgin Hotels Las Vegas on March 11, 2023. See the Final Results , Official Scorecards and Who Won Bonuses - an"
+        ],
+        "exact_weighin_bout_expression": "Alexander Volkov (258) vs Alexandr Romanov (264)",
+        "historical_bout": {
+          "event_date": "2023-03-11",
+          "event_name": "UFC Fight Night: Yan vs. Dvalishvili",
+          "fighter_a": "Alexander Volkov",
+          "fighter_b": "Alexandr Romanov",
+          "fighter_a_id": "279566840aa55bf2",
+          "fighter_b_id": "c0badf3243907e59"
+        },
+        "selected_profile": {
+          "name": "Alexander Volkov",
+          "fighter_url": "http://ufcstats.com/fighter-details/279566840aa55bf2",
+          "dob": "Oct 24, 1988"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Alexander Volkov",
+          "official_athlete_url": "https://www.ufc.com/athlete/alexander-volkov",
+          "ufcstats_name": "Alexander Volkov",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/279566840aa55bf2"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 4,
+            "bout_index": 6,
+            "side": "a",
+            "source_json_pointer": "/events/4/fights/6",
+            "event_title": "UFC 333: Volkanovski vs Evloev",
+            "submitted_name": "Alexander Volkov"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/arnold-allen",
+      "name": "Arnold Allen",
+      "fighter_id": "040a74bb0a465c54",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/arnold-allen",
+        "name": "Arnold Allen",
+        "fighter_id": "040a74bb0a465c54",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "d7705ec0a15a9363614b7cdb55579a4966942a4c25d8747c439de6986edc43d3",
+        "historical_bout": {
+          "event_date": "2026-05-16",
+          "event_name": "UFC Fight Night: Allen vs. Costa",
+          "fighter_a": "Arnold Allen",
+          "fighter_b": "Melquizael Costa",
+          "fighter_a_id": "040a74bb0a465c54",
+          "fighter_b_id": "20bccc9bb4ceb23e"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/arnold-allen",
+        "name": "Arnold Allen",
+        "fighter_id": "040a74bb0a465c54",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2026-05-16-ufc-fight-night-allen-vs-costa-1.html",
+          "bytes": 79687,
+          "sha256": "d7705ec0a15a9363614b7cdb55579a4966942a4c25d8747c439de6986edc43d3"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:42:08.403406Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-allen-vs-costa-vegas-117",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-allen-vs-costa-vegas-117",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "79687",
+          "response_sha256": "d7705ec0a15a9363614b7cdb55579a4966942a4c25d8747c439de6986edc43d3",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2026-05-16-ufc-fight-night-allen-vs-costa-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 351,
+        "evidence_inventory_data_row_index": 1050,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2026-05-16-ufc-fight-night-allen-vs-costa-1.html",
+          "size_bytes": "79687",
+          "sha256": "d7705ec0a15a9363614b7cdb55579a4966942a4c25d8747c439de6986edc43d3"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-allen-vs-costa-vegas-117"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/arnold-allen",
+          "anchor_text": "Arnold Allen"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2026-05-15T13:00:35-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          " Barez (125.5) vs Luis Gurule (125.5) Women\u2019s Strawweight Bout: Shauna Bannon (115.5) vs Nicolle Caliari (115.5) UFC Fight Night: Allen vs Costa took place live from Meta APEX in Las Vegas, Nevada on May 16, 2026. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Arnold Allen (145.5) vs Melquizael Costa (145.5)",
+        "historical_bout": {
+          "event_date": "2026-05-16",
+          "event_name": "UFC Fight Night: Allen vs. Costa",
+          "fighter_a": "Arnold Allen",
+          "fighter_b": "Melquizael Costa",
+          "fighter_a_id": "040a74bb0a465c54",
+          "fighter_b_id": "20bccc9bb4ceb23e"
+        },
+        "selected_profile": {
+          "name": "Arnold Allen",
+          "fighter_url": "http://ufcstats.com/fighter-details/040a74bb0a465c54",
+          "dob": "Jan 22, 1994"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Arnold Allen",
+          "official_athlete_url": "https://www.ufc.com/athlete/arnold-allen",
+          "ufcstats_name": "Arnold Allen",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/040a74bb0a465c54"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 4,
+            "bout_index": 2,
+            "side": "a",
+            "source_json_pointer": "/events/4/fights/2",
+            "event_title": "UFC 333: Volkanovski vs Evloev",
+            "submitted_name": "Arnold Allen"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2026-05-16-ufc-fight-night-allen-vs-costa-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/brendan-allen",
+      "name": "Brendan Allen",
+      "fighter_id": "2f181c0467965b98",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/brendan-allen",
+        "name": "Brendan Allen",
+        "fighter_id": "2f181c0467965b98",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985",
+        "historical_bout": {
+          "event_date": "2026-06-06",
+          "event_name": "UFC Fight Night: Muhammad vs. Bonfim",
+          "fighter_a": "Brendan Allen",
+          "fighter_b": "Edmen Shahbazyan",
+          "fighter_a_id": "2f181c0467965b98",
+          "fighter_b_id": "4144798612ef96e5"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/brendan-allen",
+        "name": "Brendan Allen",
+        "fighter_id": "2f181c0467965b98",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html",
+          "bytes": 79839,
+          "sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:42:12.096121Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-muhammad-vs-bonfim",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-muhammad-vs-bonfim",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "79839",
+          "response_sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 354,
+        "evidence_inventory_data_row_index": 1051,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html",
+          "size_bytes": "79839",
+          "sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-muhammad-vs-bonfim"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/brendan-allen",
+          "anchor_text": "Brendan Allen"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2026-06-05T13:00:08-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          " Chaves (124) vs Yuneisy Duben (125) Women\u2019s Strawweight Bout: Ketlen Souza (116) vs Ariane Carnelossi (116) UFC Fight Night: Muhammad vs Bonfim took place live from Meta APEX in Las Vegas, Nevada on June 6, 2026. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Brendan Allen (185.5) vs Edmen Shahbazyan (186)",
+        "historical_bout": {
+          "event_date": "2026-06-06",
+          "event_name": "UFC Fight Night: Muhammad vs. Bonfim",
+          "fighter_a": "Brendan Allen",
+          "fighter_b": "Edmen Shahbazyan",
+          "fighter_a_id": "2f181c0467965b98",
+          "fighter_b_id": "4144798612ef96e5"
+        },
+        "selected_profile": {
+          "name": "Brendan Allen",
+          "fighter_url": "http://ufcstats.com/fighter-details/2f181c0467965b98",
+          "dob": "Dec 28, 1995"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Brendan Allen",
+          "official_athlete_url": "https://www.ufc.com/athlete/brendan-allen",
+          "ufcstats_name": "Brendan Allen",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/2f181c0467965b98"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 2,
+            "bout_index": 0,
+            "side": "a",
+            "source_json_pointer": "/events/2/fights/0",
+            "event_title": "UFC Fight Night: Allen vs Duncan",
+            "submitted_name": "Brendan Allen"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/christian-leroy-duncan",
+      "name": "Christian Leroy Duncan",
+      "fighter_id": "a93f94c923c3a9cb",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/christian-leroy-duncan",
+        "name": "Christian Leroy Duncan",
+        "fighter_id": "a93f94c923c3a9cb",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "9e07c1c8114c119616c1fba35592561ed6cd8b8f0273f62ea1cfdbb22ace5ca9",
+        "historical_bout": {
+          "event_date": "2026-07-18",
+          "event_name": "UFC Fight Night: Du Plessis vs. Usman",
+          "fighter_a": "Jared Cannonier",
+          "fighter_b": "Christian Leroy Duncan",
+          "fighter_a_id": "13a0275fa13c4d26",
+          "fighter_b_id": "a93f94c923c3a9cb"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/christian-leroy-duncan",
+        "name": "Christian Leroy Duncan",
+        "fighter_id": "a93f94c923c3a9cb",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2026-07-18-ufc-fight-night-du-plessis-vs-usman-sitemap-01-official-weigh-results-ufc-fight-night-oklahoma-ci.html",
+          "bytes": 80535,
+          "sha256": "9e07c1c8114c119616c1fba35592561ed6cd8b8f0273f62ea1cfdbb22ace5ca9"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:52:02.510698Z",
+          "route": "ufc_official_weighin_article_sitemap_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-oklahoma-city-du-plessis-usman",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-oklahoma-city-du-plessis-usman",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "80535",
+          "response_sha256": "9e07c1c8114c119616c1fba35592561ed6cd8b8f0273f62ea1cfdbb22ace5ca9",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2026-07-18-ufc-fight-night-du-plessis-vs-usman-sitemap-01-official-weigh-results-ufc-fight-night-oklahoma-ci.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 1055,
+        "evidence_inventory_data_row_index": 960,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins-sitemap/2026-07-18-ufc-fight-night-du-plessis-vs-usman-sitemap-01-official-weigh-results-ufc-fight-night-oklahoma-ci.html",
+          "size_bytes": "80535",
+          "sha256": "9e07c1c8114c119616c1fba35592561ed6cd8b8f0273f62ea1cfdbb22ace5ca9"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-oklahoma-city-du-plessis-usman"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/christian-leroy-duncan",
+          "anchor_text": "Christian Leroy Duncan"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2026-07-17T11:25:54-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "t 20 percent of his purse to his opponent. **Ezra Elliott weigh in 1.5 pounds over the featherweight limit. UFC Fight Night: Du Plessis vs Usman took place live from Paycom Center in Oklahoma City on July 18, 2026. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Jared Cannonier (185) vs Christian Leroy Duncan (185.5)",
+        "historical_bout": {
+          "event_date": "2026-07-18",
+          "event_name": "UFC Fight Night: Du Plessis vs. Usman",
+          "fighter_a": "Jared Cannonier",
+          "fighter_b": "Christian Leroy Duncan",
+          "fighter_a_id": "13a0275fa13c4d26",
+          "fighter_b_id": "a93f94c923c3a9cb"
+        },
+        "selected_profile": {
+          "name": "Christian Leroy Duncan",
+          "fighter_url": "http://ufcstats.com/fighter-details/a93f94c923c3a9cb",
+          "dob": "Jul 24, 1995"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Christian Leroy Duncan",
+          "official_athlete_url": "https://www.ufc.com/athlete/christian-leroy-duncan",
+          "ufcstats_name": "Christian Leroy Duncan",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/a93f94c923c3a9cb"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 2,
+            "bout_index": 0,
+            "side": "b",
+            "source_json_pointer": "/events/2/fights/0",
+            "event_title": "UFC Fight Night: Allen vs Duncan",
+            "submitted_name": "Christian Leroy Duncan"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2026-07-18-ufc-fight-night-du-plessis-vs-usman-sitemap-01-official-weigh-results-ufc-fight-night-oklahoma-ci.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/deiveson-figueiredo",
+      "name": "Deiveson Figueiredo",
+      "fighter_id": "aa72b0f831d0bfe5",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/deiveson-figueiredo",
+        "name": "Deiveson Figueiredo",
+        "fighter_id": "aa72b0f831d0bfe5",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "086a9fb6a21d3e3e0e0b795f724071a019d3fe2d58c1380fe6a384b052bc6c08",
+        "historical_bout": {
+          "event_date": "2025-05-03",
+          "event_name": "UFC Fight Night: Sandhagen vs. Figueiredo",
+          "fighter_a": "Cory Sandhagen",
+          "fighter_b": "Deiveson Figueiredo",
+          "fighter_a_id": "65f09bacd3957381",
+          "fighter_b_id": "aa72b0f831d0bfe5"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/deiveson-figueiredo",
+        "name": "Deiveson Figueiredo",
+        "fighter_id": "aa72b0f831d0bfe5",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2025-05-03-ufc-fight-night-sandhagen-vs-figueiredo-sitemap-01-official-weigh-results-ufc-des-moines-sandhagen-fi.html",
+          "bytes": 94890,
+          "sha256": "086a9fb6a21d3e3e0e0b795f724071a019d3fe2d58c1380fe6a384b052bc6c08"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:49:00.541459Z",
+          "route": "ufc_official_weighin_article_sitemap_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-des-moines-sandhagen-figueiredo",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-des-moines-sandhagen-figueiredo",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "94890",
+          "response_sha256": "086a9fb6a21d3e3e0e0b795f724071a019d3fe2d58c1380fe6a384b052bc6c08",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2025-05-03-ufc-fight-night-sandhagen-vs-figueiredo-sitemap-01-official-weigh-results-ufc-des-moines-sandhagen-fi.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 782,
+        "evidence_inventory_data_row_index": 842,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins-sitemap/2025-05-03-ufc-fight-night-sandhagen-vs-figueiredo-sitemap-01-official-weigh-results-ufc-des-moines-sandhagen-fi.html",
+          "size_bytes": "94890",
+          "sha256": "086a9fb6a21d3e3e0e0b795f724071a019d3fe2d58c1380fe6a384b052bc6c08"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-des-moines-sandhagen-figueiredo"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/deiveson-figueiredo",
+          "anchor_text": "Deiveson Figueiredo"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2025-05-02T09:00:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "ut: Juliana Miller (126) vs Ivana Petrovic (125.5) Please enable Javascript to view this content UFC Fight Night: Sandhagen vs Figueiredo took place live from Wells Fargo Arena in Des Moines, Iowa on May 3, 2025. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Cory Sandhagen (135.5) vs Deiveson Figueiredo (135)",
+        "historical_bout": {
+          "event_date": "2025-05-03",
+          "event_name": "UFC Fight Night: Sandhagen vs. Figueiredo",
+          "fighter_a": "Cory Sandhagen",
+          "fighter_b": "Deiveson Figueiredo",
+          "fighter_a_id": "65f09bacd3957381",
+          "fighter_b_id": "aa72b0f831d0bfe5"
+        },
+        "selected_profile": {
+          "name": "Deiveson Figueiredo",
+          "fighter_url": "http://ufcstats.com/fighter-details/aa72b0f831d0bfe5",
+          "dob": "Dec 18, 1987"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Deiveson Figueiredo",
+          "official_athlete_url": "https://www.ufc.com/athlete/deiveson-figueiredo",
+          "ufcstats_name": "Deiveson Figueiredo",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/aa72b0f831d0bfe5"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 1,
+            "bout_index": 1,
+            "side": "a",
+            "source_json_pointer": "/events/1/fights/1",
+            "event_title": "UFC 332: Silva vs Wang",
+            "submitted_name": "Deiveson Figueiredo"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2025-05-03-ufc-fight-night-sandhagen-vs-figueiredo-sitemap-01-official-weigh-results-ufc-des-moines-sandhagen-fi.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/erin-blanchfield",
+      "name": "Erin Blanchfield",
+      "fighter_id": "669970f7feba8ecd",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/erin-blanchfield",
+        "name": "Erin Blanchfield",
+        "fighter_id": "669970f7feba8ecd",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "2ce09013e9f439ed3880c08ce6c89d43c2d0f4c16dcf1a7704d9b576fa704005",
+        "historical_bout": {
+          "event_date": "2024-03-30",
+          "event_name": "UFC Fight Night: Blanchfield vs. Fiorot",
+          "fighter_a": "Erin Blanchfield",
+          "fighter_b": "Manon Fiorot",
+          "fighter_a_id": "669970f7feba8ecd",
+          "fighter_b_id": "34ff304266360297"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/erin-blanchfield",
+        "name": "Erin Blanchfield",
+        "fighter_id": "669970f7feba8ecd",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2024-03-30-ufc-fight-night-blanchfield-vs-fiorot-sitemap-01-weigh-results-ufc-atlantic-city-fight-night-blanch.html",
+          "bytes": 95017,
+          "sha256": "2ce09013e9f439ed3880c08ce6c89d43c2d0f4c16dcf1a7704d9b576fa704005"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:48:57.916205Z",
+          "route": "ufc_official_weighin_article_sitemap_https",
+          "requested_url": "https://www.ufc.com/news/weigh-results-ufc-atlantic-city-fight-night-blanchfield-vs-fiorot",
+          "final_url": "https://www.ufc.com/news/weigh-results-ufc-atlantic-city-fight-night-blanchfield-vs-fiorot",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "95017",
+          "response_sha256": "2ce09013e9f439ed3880c08ce6c89d43c2d0f4c16dcf1a7704d9b576fa704005",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2024-03-30-ufc-fight-night-blanchfield-vs-fiorot-sitemap-01-weigh-results-ufc-atlantic-city-fight-night-blanch.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 762,
+        "evidence_inventory_data_row_index": 818,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins-sitemap/2024-03-30-ufc-fight-night-blanchfield-vs-fiorot-sitemap-01-weigh-results-ufc-atlantic-city-fight-night-blanch.html",
+          "size_bytes": "95017",
+          "sha256": "2ce09013e9f439ed3880c08ce6c89d43c2d0f4c16dcf1a7704d9b576fa704005"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/weigh-results-ufc-atlantic-city-fight-night-blanchfield-vs-fiorot"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/erin-blanchfield",
+          "anchor_text": "Erin Blanchfield"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2024-03-29T11:10:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "35) vs Caolan Loughran (135) *Julio Arce weighed-in above the 146 pound featherweight limit. UFC Fight Night: Blanchfield vs Fiorot took place live from Boardwalk Hall in Atlantic City, New Jersey on March 30, 2024. See the final Prelims & Main Card Results, Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Erin Blanchfield (125) vs Manon Fiorot (125.25)",
+        "historical_bout": {
+          "event_date": "2024-03-30",
+          "event_name": "UFC Fight Night: Blanchfield vs. Fiorot",
+          "fighter_a": "Erin Blanchfield",
+          "fighter_b": "Manon Fiorot",
+          "fighter_a_id": "669970f7feba8ecd",
+          "fighter_b_id": "34ff304266360297"
+        },
+        "selected_profile": {
+          "name": "Erin Blanchfield",
+          "fighter_url": "http://ufcstats.com/fighter-details/669970f7feba8ecd",
+          "dob": "May 04, 1999"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Erin Blanchfield",
+          "official_athlete_url": "https://www.ufc.com/athlete/erin-blanchfield",
+          "ufcstats_name": "Erin Blanchfield",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/669970f7feba8ecd"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 3,
+            "bout_index": 2,
+            "side": "a",
+            "source_json_pointer": "/events/3/fights/2",
+            "event_title": "UFC Fight Night: Buckley vs Malott",
+            "submitted_name": "Erin Blanchfield"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2024-03-30-ufc-fight-night-blanchfield-vs-fiorot-sitemap-01-weigh-results-ufc-atlantic-city-fight-night-blanch.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/gabriel-bonfim",
+      "name": "Gabriel Bonfim",
+      "fighter_id": "01641ba5df0c69b0",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/gabriel-bonfim",
+        "name": "Gabriel Bonfim",
+        "fighter_id": "01641ba5df0c69b0",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985",
+        "historical_bout": {
+          "event_date": "2026-06-06",
+          "event_name": "UFC Fight Night: Muhammad vs. Bonfim",
+          "fighter_a": "Belal Muhammad",
+          "fighter_b": "Gabriel Bonfim",
+          "fighter_a_id": "b1b0729d27936f2f",
+          "fighter_b_id": "01641ba5df0c69b0"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/gabriel-bonfim",
+        "name": "Gabriel Bonfim",
+        "fighter_id": "01641ba5df0c69b0",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html",
+          "bytes": 79839,
+          "sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:42:12.096121Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-muhammad-vs-bonfim",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-muhammad-vs-bonfim",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "79839",
+          "response_sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 354,
+        "evidence_inventory_data_row_index": 1051,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html",
+          "size_bytes": "79839",
+          "sha256": "ab4e354b8ba246c30f2c2a8cbf3c58057155711ae4f363dc8ee0f2fa5c42a985"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-muhammad-vs-bonfim"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/gabriel-bonfim",
+          "anchor_text": "Gabriel Bonfim"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2026-06-05T13:00:08-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          " Chaves (124) vs Yuneisy Duben (125) Women\u2019s Strawweight Bout: Ketlen Souza (116) vs Ariane Carnelossi (116) UFC Fight Night: Muhammad vs Bonfim took place live from Meta APEX in Las Vegas, Nevada on June 6, 2026. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Belal Muhammad (170.5) vs Gabriel Bonfim (170.5)",
+        "historical_bout": {
+          "event_date": "2026-06-06",
+          "event_name": "UFC Fight Night: Muhammad vs. Bonfim",
+          "fighter_a": "Belal Muhammad",
+          "fighter_b": "Gabriel Bonfim",
+          "fighter_a_id": "b1b0729d27936f2f",
+          "fighter_b_id": "01641ba5df0c69b0"
+        },
+        "selected_profile": {
+          "name": "Gabriel Bonfim",
+          "fighter_url": "http://ufcstats.com/fighter-details/01641ba5df0c69b0",
+          "dob": "Aug 20, 1997"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Gabriel Bonfim",
+          "official_athlete_url": "https://www.ufc.com/athlete/gabriel-bonfim",
+          "ufcstats_name": "Gabriel Bonfim",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/01641ba5df0c69b0"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 6,
+            "bout_index": 0,
+            "side": "a",
+            "source_json_pointer": "/events/6/fights/0",
+            "event_title": "UFC Fight Night: Bonfim vs Brady",
+            "submitted_name": "Gabriel Bonfim"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2026-06-06-ufc-fight-night-muhammad-vs-bonfim-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/jasmine-jasudavicius",
+      "name": "Jasmine Jasudavicius",
+      "fighter_id": "a9e260472d321361",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/jasmine-jasudavicius",
+        "name": "Jasmine Jasudavicius",
+        "fighter_id": "a9e260472d321361",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "bef9dc0a8a3585654eb0a0b2c0d2a1ab619bb5f9133dcdb879aebdba5b89f06d",
+        "historical_bout": {
+          "event_date": "2026-04-18",
+          "event_name": "UFC Fight Night: Burns vs. Malott",
+          "fighter_a": "Jasmine Jasudavicius",
+          "fighter_b": "Karine Silva",
+          "fighter_a_id": "a9e260472d321361",
+          "fighter_b_id": "9d62c2d8ee151f08"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/jasmine-jasudavicius",
+        "name": "Jasmine Jasudavicius",
+        "fighter_id": "a9e260472d321361",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2026-04-18-ufc-fight-night-burns-vs-malott-sitemap-01-official-weigh-results-ufc-burns-malott-winnipeg.html",
+          "bytes": 71183,
+          "sha256": "bef9dc0a8a3585654eb0a0b2c0d2a1ab619bb5f9133dcdb879aebdba5b89f06d"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:49:09.113012Z",
+          "route": "ufc_official_weighin_article_sitemap_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-burns-malott-winnipeg",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-burns-malott-winnipeg",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "71183",
+          "response_sha256": "bef9dc0a8a3585654eb0a0b2c0d2a1ab619bb5f9133dcdb879aebdba5b89f06d",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2026-04-18-ufc-fight-night-burns-vs-malott-sitemap-01-official-weigh-results-ufc-burns-malott-winnipeg.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 863,
+        "evidence_inventory_data_row_index": 935,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins-sitemap/2026-04-18-ufc-fight-night-burns-vs-malott-sitemap-01-official-weigh-results-ufc-burns-malott-winnipeg.html",
+          "size_bytes": "71183",
+          "sha256": "bef9dc0a8a3585654eb0a0b2c0d2a1ab619bb5f9133dcdb879aebdba5b89f06d"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-burns-malott-winnipeg"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/jasmine-jasudavicius",
+          "anchor_text": "Jasmine Jasudavicius"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2026-04-17T12:00:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "John Castaneda (139) vs Mark Vologdin (138.5) Bantamweight Bout: Jamie Siraj (136) vs John Yannis (136) UFC Fight Night: Burns vs Malott took place live from Canada Life Centre in Winnipeg, Canada on April 18, 2026. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Jasmine Jasudavicius (125) vs Karine Silva (125.5)",
+        "historical_bout": {
+          "event_date": "2026-04-18",
+          "event_name": "UFC Fight Night: Burns vs. Malott",
+          "fighter_a": "Jasmine Jasudavicius",
+          "fighter_b": "Karine Silva",
+          "fighter_a_id": "a9e260472d321361",
+          "fighter_b_id": "9d62c2d8ee151f08"
+        },
+        "selected_profile": {
+          "name": "Jasmine Jasudavicius",
+          "fighter_url": "http://ufcstats.com/fighter-details/a9e260472d321361",
+          "dob": "Mar 01, 1989"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Jasmine Jasudavicius",
+          "official_athlete_url": "https://www.ufc.com/athlete/jasmine-jasudavicius",
+          "ufcstats_name": "Jasmine Jasudavicius",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/a9e260472d321361"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 3,
+            "bout_index": 2,
+            "side": "b",
+            "source_json_pointer": "/events/3/fights/2",
+            "event_title": "UFC Fight Night: Buckley vs Malott",
+            "submitted_name": "Jasmine Jasudavicius"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2026-04-18-ufc-fight-night-burns-vs-malott-sitemap-01-official-weigh-results-ufc-burns-malott-winnipeg.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/joaquin-buckley",
+      "name": "Joaquin Buckley",
+      "fighter_id": "b9437600497350f3",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/joaquin-buckley",
+        "name": "Joaquin Buckley",
+        "fighter_id": "b9437600497350f3",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "be5d673317168c6df5595a0f839ef3c315d036a829ce79a79610cf6ca280aafe",
+        "historical_bout": {
+          "event_date": "2025-06-14",
+          "event_name": "UFC Fight Night: Usman vs. Buckley",
+          "fighter_a": "Kamaru Usman",
+          "fighter_b": "Joaquin Buckley",
+          "fighter_a_id": "f1b2aa7853d1ed6e",
+          "fighter_b_id": "b9437600497350f3"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/joaquin-buckley",
+        "name": "Joaquin Buckley",
+        "fighter_id": "b9437600497350f3",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2025-06-14-ufc-fight-night-usman-vs-buckley-sitemap-01-official-weigh-in-results-ufc-atlanta-usman-buckle.html",
+          "bytes": 76887,
+          "sha256": "be5d673317168c6df5595a0f839ef3c315d036a829ce79a79610cf6ca280aafe"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:46:55.799338Z",
+          "route": "ufc_official_weighin_article_sitemap_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-in-results-ufc-atlanta-usman-buckley",
+          "final_url": "https://www.ufc.com/news/official-weigh-in-results-ufc-atlanta-usman-buckley",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "76887",
+          "response_sha256": "be5d673317168c6df5595a0f839ef3c315d036a829ce79a79610cf6ca280aafe",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2025-06-14-ufc-fight-night-usman-vs-buckley-sitemap-01-official-weigh-in-results-ufc-atlanta-usman-buckle.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 594,
+        "evidence_inventory_data_row_index": 848,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins-sitemap/2025-06-14-ufc-fight-night-usman-vs-buckley-sitemap-01-official-weigh-in-results-ufc-atlanta-usman-buckle.html",
+          "size_bytes": "76887",
+          "sha256": "be5d673317168c6df5595a0f839ef3c315d036a829ce79a79610cf6ca280aafe"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-in-results-ufc-atlanta-usman-buckley"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/joaquin-buckley",
+          "anchor_text": "Joaquin Buckley"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2025-06-13T09:04:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "ht Bout: Jamey-Lyn Horth (126) vs Vanessa Demopolous (126) Please enable Javascript to view this content UFC Fight Night: Usman vs Buckley took place live from State Farm Arena in Atlanta, Georgia on June 14, 2025. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Kamaru Usman (171) vs Joaquin Buckley (171)",
+        "historical_bout": {
+          "event_date": "2025-06-14",
+          "event_name": "UFC Fight Night: Usman vs. Buckley",
+          "fighter_a": "Kamaru Usman",
+          "fighter_b": "Joaquin Buckley",
+          "fighter_a_id": "f1b2aa7853d1ed6e",
+          "fighter_b_id": "b9437600497350f3"
+        },
+        "selected_profile": {
+          "name": "Joaquin Buckley",
+          "fighter_url": "http://ufcstats.com/fighter-details/b9437600497350f3",
+          "dob": "Apr 27, 1994"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Joaquin Buckley",
+          "official_athlete_url": "https://www.ufc.com/athlete/joaquin-buckley",
+          "ufcstats_name": "Joaquin Buckley",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/b9437600497350f3"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 3,
+            "bout_index": 0,
+            "side": "a",
+            "source_json_pointer": "/events/3/fights/0",
+            "event_title": "UFC Fight Night: Buckley vs Malott",
+            "submitted_name": "Joaquin Buckley"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2025-06-14-ufc-fight-night-usman-vs-buckley-sitemap-01-official-weigh-in-results-ufc-atlanta-usman-buckle.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/johnny-walker",
+      "name": "Johnny Walker",
+      "fighter_id": "c21f26bbde777573",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/johnny-walker",
+        "name": "Johnny Walker",
+        "fighter_id": "c21f26bbde777573",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "dc4a579b2dac12a0971997a625e7543526e1cab7a05e0d6d4f11374328ad9664",
+        "historical_bout": {
+          "event_date": "2025-08-23",
+          "event_name": "UFC Fight Night: Walker vs. Zhang",
+          "fighter_a": "Johnny Walker",
+          "fighter_b": "Zhang Mingyang",
+          "fighter_a_id": "c21f26bbde777573",
+          "fighter_b_id": "8a65fd9ba31fd3f7"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/johnny-walker",
+        "name": "Johnny Walker",
+        "fighter_id": "c21f26bbde777573",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-08-23-ufc-fight-night-walker-vs-zhang-1.html",
+          "bytes": 68952,
+          "sha256": "dc4a579b2dac12a0971997a625e7543526e1cab7a05e0d6d4f11374328ad9664"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:41:39.840661Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-in-results-ufc-fight-night-walker-vs-zhang-shanghai",
+          "final_url": "https://www.ufc.com/news/official-weigh-in-results-ufc-fight-night-walker-vs-zhang-shanghai",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "68952",
+          "response_sha256": "dc4a579b2dac12a0971997a625e7543526e1cab7a05e0d6d4f11374328ad9664",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-08-23-ufc-fight-night-walker-vs-zhang-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 319,
+        "evidence_inventory_data_row_index": 1039,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2025-08-23-ufc-fight-night-walker-vs-zhang-1.html",
+          "size_bytes": "68952",
+          "sha256": "dc4a579b2dac12a0971997a625e7543526e1cab7a05e0d6d4f11374328ad9664"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-in-results-ufc-fight-night-walker-vs-zhang-shanghai"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/johnny-walker",
+          "anchor_text": "Johnny Walker"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2025-08-21T23:08:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "6) vs SuYoung You (135.5) Light Heavyweight Bout: Uran Satybaldiev (204) vs Diyar Nurgozhay (205.5) UFC Fight Night: Walker vs Zhang took place live from Shanghai Indoor Stadium in Shanghai, China on August 23, 2025. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Johnny Walker (206) vs Zhang Mingyang (205)",
+        "historical_bout": {
+          "event_date": "2025-08-23",
+          "event_name": "UFC Fight Night: Walker vs. Zhang",
+          "fighter_a": "Johnny Walker",
+          "fighter_b": "Zhang Mingyang",
+          "fighter_a_id": "c21f26bbde777573",
+          "fighter_b_id": "8a65fd9ba31fd3f7"
+        },
+        "selected_profile": {
+          "name": "Johnny Walker",
+          "fighter_url": "http://ufcstats.com/fighter-details/c21f26bbde777573",
+          "dob": "Mar 30, 1992"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Johnny Walker",
+          "official_athlete_url": "https://www.ufc.com/athlete/johnny-walker",
+          "ufcstats_name": "Johnny Walker",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/c21f26bbde777573"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 1,
+            "bout_index": 9,
+            "side": "a",
+            "source_json_pointer": "/events/1/fights/9",
+            "event_title": "UFC 332: Silva vs Wang",
+            "submitted_name": "Johnny Walker"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2025-08-23-ufc-fight-night-walker-vs-zhang-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/marvin-vettori",
+      "name": "Marvin Vettori",
+      "fighter_id": "7acbb0972e75281a",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/marvin-vettori",
+        "name": "Marvin Vettori",
+        "fighter_id": "7acbb0972e75281a",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "a692d264ce68a1a61a0e2957495d9ae87ceb435d5f5e7c52dd9574ffaf9c3cf9",
+        "historical_bout": {
+          "event_date": "2025-07-19",
+          "event_name": "UFC 318: Holloway vs. Poirier 3",
+          "fighter_a": "Marvin Vettori",
+          "fighter_b": "Brendan Allen",
+          "fighter_a_id": "7acbb0972e75281a",
+          "fighter_b_id": "2f181c0467965b98"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/marvin-vettori",
+        "name": "Marvin Vettori",
+        "fighter_id": "7acbb0972e75281a",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-07-19-ufc-318-holloway-vs-poirier-3-1.html",
+          "bytes": 83007,
+          "sha256": "a692d264ce68a1a61a0e2957495d9ae87ceb435d5f5e7c52dd9574ffaf9c3cf9"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:41:30.336181Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-318-holloway-vs-poirier-3",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-318-holloway-vs-poirier-3",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "83007",
+          "response_sha256": "a692d264ce68a1a61a0e2957495d9ae87ceb435d5f5e7c52dd9574ffaf9c3cf9",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-07-19-ufc-318-holloway-vs-poirier-3-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 310,
+        "evidence_inventory_data_row_index": 1036,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2025-07-19-ufc-318-holloway-vs-poirier-3-1.html",
+          "size_bytes": "83007",
+          "sha256": "a692d264ce68a1a61a0e2957495d9ae87ceb435d5f5e7c52dd9574ffaf9c3cf9"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-318-holloway-vs-poirier-3"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/marvin-vettori",
+          "anchor_text": "Marvin Vettori"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2025-07-18T10:00:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "t Bout: Carli Judice (125) vs Nicolle Caliari (126) Please enable Javascript to view this content UFC 318: Holloway vs Poirier 3 took place live from Smoothie King Center in New Orleans, Louisiana on July 19, 2025. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Marvin Vettori (186) vs Brendan Allen (185)",
+        "historical_bout": {
+          "event_date": "2025-07-19",
+          "event_name": "UFC 318: Holloway vs. Poirier 3",
+          "fighter_a": "Marvin Vettori",
+          "fighter_b": "Brendan Allen",
+          "fighter_a_id": "7acbb0972e75281a",
+          "fighter_b_id": "2f181c0467965b98"
+        },
+        "selected_profile": {
+          "name": "Marvin Vettori",
+          "fighter_url": "http://ufcstats.com/fighter-details/7acbb0972e75281a",
+          "dob": "Sep 20, 1993"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Marvin Vettori",
+          "official_athlete_url": "https://www.ufc.com/athlete/marvin-vettori",
+          "ufcstats_name": "Marvin Vettori",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/7acbb0972e75281a"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 1,
+            "bout_index": 11,
+            "side": "a",
+            "source_json_pointer": "/events/1/fights/11",
+            "event_title": "UFC 332: Silva vs Wang",
+            "submitted_name": "Marvin Vettori"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2025-07-19-ufc-318-holloway-vs-poirier-3-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/merab-dvalishvili",
+      "name": "Merab Dvalishvili",
+      "fighter_id": "c03520b5c88ed6b4",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/merab-dvalishvili",
+        "name": "Merab Dvalishvili",
+        "fighter_id": "c03520b5c88ed6b4",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "f48c3a0c9c8e204f6763d6695be4dfd8103a779da201793ecf22a389cb68d8fc",
+        "historical_bout": {
+          "event_date": "2025-01-18",
+          "event_name": "UFC 311: Makhachev vs. Moicano",
+          "fighter_a": "Merab Dvalishvili",
+          "fighter_b": "Umar Nurmagomedov",
+          "fighter_a_id": "c03520b5c88ed6b4",
+          "fighter_b_id": "2b6fc1c02736833d"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/merab-dvalishvili",
+        "name": "Merab Dvalishvili",
+        "fighter_id": "c03520b5c88ed6b4",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-01-18-ufc-311-makhachev-vs-moicano-1.html",
+          "bytes": 98015,
+          "sha256": "f48c3a0c9c8e204f6763d6695be4dfd8103a779da201793ecf22a389cb68d8fc"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:41:13.113633Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-311-makhachev-vs-moicano",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-311-makhachev-vs-moicano",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "98015",
+          "response_sha256": "f48c3a0c9c8e204f6763d6695be4dfd8103a779da201793ecf22a389cb68d8fc",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-01-18-ufc-311-makhachev-vs-moicano-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 290,
+        "evidence_inventory_data_row_index": 1029,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2025-01-18-ufc-311-makhachev-vs-moicano-1.html",
+          "size_bytes": "98015",
+          "sha256": "f48c3a0c9c8e204f6763d6695be4dfd8103a779da201793ecf22a389cb68d8fc"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-311-makhachev-vs-moicano"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/merab-dvalishvili",
+          "anchor_text": "Merab Dvalishvili"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2025-01-17T14:00:00-0500"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "STRIKE WHAT'S NEW Thorne Performance Solutions Previous Next Weigh-in Weigh-In Results | UFC 311: Makhachev vs Moicano The Official Weights Of The Athletes Competing At The Two Title Fight Mega Event January 18, 2025 At The Intuit Dome In Inglewood, CA By UFC Staff Report \u2022 Jan. 17, 20",
+          "ght Bout: Tagir Ulanbekov (125.5) vs Clayton Carpenter (125.5) Please enable Javascript to view this content UFC 311: Makhachev vs Moicano took place live from Intuit Dome in Inglewood, California on January 18, 2025. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Merab Dvalishvili (134) vs Umar Nurmagomedov (135)",
+        "historical_bout": {
+          "event_date": "2025-01-18",
+          "event_name": "UFC 311: Makhachev vs. Moicano",
+          "fighter_a": "Merab Dvalishvili",
+          "fighter_b": "Umar Nurmagomedov",
+          "fighter_a_id": "c03520b5c88ed6b4",
+          "fighter_b_id": "2b6fc1c02736833d"
+        },
+        "selected_profile": {
+          "name": "Merab Dvalishvili",
+          "fighter_url": "http://ufcstats.com/fighter-details/c03520b5c88ed6b4",
+          "dob": "Jan 10, 1991"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Merab Dvalishvili",
+          "official_athlete_url": "https://www.ufc.com/athlete/merab-dvalishvili",
+          "ufcstats_name": "Merab Dvalishvili",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/c03520b5c88ed6b4"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 4,
+            "bout_index": 1,
+            "side": "b",
+            "source_json_pointer": "/events/4/fights/1",
+            "event_title": "UFC 333: Volkanovski vs Evloev",
+            "submitted_name": "Merab Dvalishvili"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2025-01-18-ufc-311-makhachev-vs-moicano-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/petr-yan",
+      "name": "Petr Yan",
+      "fighter_id": "d661ce4da776fc20",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/petr-yan",
+        "name": "Petr Yan",
+        "fighter_id": "d661ce4da776fc20",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e",
+        "historical_bout": {
+          "event_date": "2023-03-11",
+          "event_name": "UFC Fight Night: Yan vs. Dvalishvili",
+          "fighter_a": "Petr Yan",
+          "fighter_b": "Merab Dvalishvili",
+          "fighter_a_id": "d661ce4da776fc20",
+          "fighter_b_id": "c03520b5c88ed6b4"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/petr-yan",
+        "name": "Petr Yan",
+        "fighter_id": "d661ce4da776fc20",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html",
+          "bytes": 94403,
+          "sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:39:58.394737Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-yan-vs-dvalishvili-las-vegas",
+          "final_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-yan-vs-dvalishvili-las-vegas",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "94403",
+          "response_sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 201,
+        "evidence_inventory_data_row_index": 988,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html",
+          "size_bytes": "94403",
+          "sha256": "3cfe74924ec1db1fad4e4c6e8a376c09c615b99b4293488921d7b248ca0bd55e"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/weigh-results-ufc-fight-night-yan-vs-dvalishvili-las-vegas"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/petr-yan",
+          "anchor_text": "Petr Yan"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2023-03-10T09:12:17-0500"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "g content. Please try again. Cancel Weigh-In Highlights | UFC Fight Night: Yan vs Dvalishvili / Live UFC Fight Night: Yan vs Dvalishvili took place live from The Theater At Virgin Hotels Las Vegas on March 11, 2023. See the Final Results , Official Scorecards and Who Won Bonuses - an"
+        ],
+        "exact_weighin_bout_expression": "Petr Yan (136) vs Merab Dvalishvili (134.5)",
+        "historical_bout": {
+          "event_date": "2023-03-11",
+          "event_name": "UFC Fight Night: Yan vs. Dvalishvili",
+          "fighter_a": "Petr Yan",
+          "fighter_b": "Merab Dvalishvili",
+          "fighter_a_id": "d661ce4da776fc20",
+          "fighter_b_id": "c03520b5c88ed6b4"
+        },
+        "selected_profile": {
+          "name": "Petr Yan",
+          "fighter_url": "http://ufcstats.com/fighter-details/d661ce4da776fc20",
+          "dob": "Feb 11, 1993"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Petr Yan",
+          "official_athlete_url": "https://www.ufc.com/athlete/petr-yan",
+          "ufcstats_name": "Petr Yan",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/d661ce4da776fc20"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 4,
+            "bout_index": 1,
+            "side": "a",
+            "source_json_pointer": "/events/4/fights/1",
+            "event_title": "UFC 333: Volkanovski vs Evloev",
+            "submitted_name": "Petr Yan"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2023-03-11-ufc-fight-night-yan-vs-dvalishvili-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/rafael-dos-anjos",
+      "name": "Rafael Dos Anjos",
+      "fighter_id": "6a2f7c151031653d",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/rafael-dos-anjos",
+        "name": "Rafael Dos Anjos",
+        "fighter_id": "6a2f7c151031653d",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "35694b5a8ebe6350baaeba84109594f9e056395e7f015fb37aa7769c829dcab8",
+        "historical_bout": {
+          "event_date": "2023-08-12",
+          "event_name": "UFC Fight Night: Luque vs. Dos Anjos",
+          "fighter_a": "Vicente Luque",
+          "fighter_b": "Rafael Dos Anjos",
+          "fighter_a_id": "6d4b63c767106d3a",
+          "fighter_b_id": "6a2f7c151031653d"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/rafael-dos-anjos",
+        "name": "Rafael Dos Anjos",
+        "fighter_id": "6a2f7c151031653d",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2023-08-12-ufc-fight-night-luque-vs-dos-anjos-1.html",
+          "bytes": 94405,
+          "sha256": "35694b5a8ebe6350baaeba84109594f9e056395e7f015fb37aa7769c829dcab8"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:40:15.650719Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-luque-vs-dos-anjos-vegas-78",
+          "final_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-luque-vs-dos-anjos-vegas-78",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "94405",
+          "response_sha256": "35694b5a8ebe6350baaeba84109594f9e056395e7f015fb37aa7769c829dcab8",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2023-08-12-ufc-fight-night-luque-vs-dos-anjos-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 225,
+        "evidence_inventory_data_row_index": 1000,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2023-08-12-ufc-fight-night-luque-vs-dos-anjos-1.html",
+          "size_bytes": "94405",
+          "sha256": "35694b5a8ebe6350baaeba84109594f9e056395e7f015fb37aa7769c829dcab8"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/weigh-results-ufc-fight-night-luque-vs-dos-anjos-vegas-78"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/rafael-dos-anjos",
+          "anchor_text": "Rafael Dos Anjos"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2023-08-11T14:00:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "ent *Tafon Nchukwi weighed in above the middleweight limit. **Josh Fremd weighed in above the middleweight limit. UFC Fight Night: Luque vs Dos Anjos took place live from the UFC APEX in Las Vegas on August 12, 2023. See the Final Results , Official Scorecard s and Who Won Bonuses - a"
+        ],
+        "exact_weighin_bout_expression": "Vicente Luque (170.5) vs Rafael Dos Anjos (171)",
+        "historical_bout": {
+          "event_date": "2023-08-12",
+          "event_name": "UFC Fight Night: Luque vs. Dos Anjos",
+          "fighter_a": "Vicente Luque",
+          "fighter_b": "Rafael Dos Anjos",
+          "fighter_a_id": "6d4b63c767106d3a",
+          "fighter_b_id": "6a2f7c151031653d"
+        },
+        "selected_profile": {
+          "name": "Rafael Dos Anjos",
+          "fighter_url": "http://ufcstats.com/fighter-details/6a2f7c151031653d",
+          "dob": "Oct 26, 1984"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Rafael Dos Anjos",
+          "official_athlete_url": "https://www.ufc.com/athlete/rafael-dos-anjos",
+          "ufcstats_name": "Rafael Dos Anjos",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/6a2f7c151031653d"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 1,
+            "bout_index": 10,
+            "side": "a",
+            "source_json_pointer": "/events/1/fights/10",
+            "event_title": "UFC 332: Silva vs Wang",
+            "submitted_name": "Rafael Dos Anjos"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2023-08-12-ufc-fight-night-luque-vs-dos-anjos-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/renato-moicano",
+      "name": "Renato Moicano",
+      "fighter_id": "b6452706b373eea1",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/renato-moicano",
+        "name": "Renato Moicano",
+        "fighter_id": "b6452706b373eea1",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "e53abea21eb13c1d373fd1e020f2995e176676cd87ca9f0bc81551eceabf90f4",
+        "historical_bout": {
+          "event_date": "2026-04-04",
+          "event_name": "UFC Fight Night: Moicano vs. Duncan",
+          "fighter_a": "Renato Moicano",
+          "fighter_b": "Chris Duncan",
+          "fighter_a_id": "b6452706b373eea1",
+          "fighter_b_id": "fd406a32a6fb3a29"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/renato-moicano",
+        "name": "Renato Moicano",
+        "fighter_id": "b6452706b373eea1",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2026-04-04-ufc-fight-night-moicano-vs-duncan-1.html",
+          "bytes": 80149,
+          "sha256": "e53abea21eb13c1d373fd1e020f2995e176676cd87ca9f0bc81551eceabf90f4"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:42:00.258930Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-moicano-vs-duncan",
+          "final_url": "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-moicano-vs-duncan",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "80149",
+          "response_sha256": "e53abea21eb13c1d373fd1e020f2995e176676cd87ca9f0bc81551eceabf90f4",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2026-04-04-ufc-fight-night-moicano-vs-duncan-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 341,
+        "evidence_inventory_data_row_index": 1046,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2026-04-04-ufc-fight-night-moicano-vs-duncan-1.html",
+          "size_bytes": "80149",
+          "sha256": "e53abea21eb13c1d373fd1e020f2995e176676cd87ca9f0bc81551eceabf90f4"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-results-ufc-fight-night-moicano-vs-duncan"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/renato-moicano",
+          "anchor_text": "Renato Moicano"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2026-04-03T13:00:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "bove the lightweight limit of 156. He forfeits 20% of his purse to his opponent. Fight proceeds as scheduled. UFC Fight Night: Moicano vs Duncan took place live from Meta APEX in Las Vegas, Nevada on April 4, 2026. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Renato Moicano (156) vs Chris Duncan (156)",
+        "historical_bout": {
+          "event_date": "2026-04-04",
+          "event_name": "UFC Fight Night: Moicano vs. Duncan",
+          "fighter_a": "Renato Moicano",
+          "fighter_b": "Chris Duncan",
+          "fighter_a_id": "b6452706b373eea1",
+          "fighter_b_id": "fd406a32a6fb3a29"
+        },
+        "selected_profile": {
+          "name": "Renato Moicano",
+          "fighter_url": "http://ufcstats.com/fighter-details/b6452706b373eea1",
+          "dob": "May 21, 1989"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Renato Moicano",
+          "official_athlete_url": "https://www.ufc.com/athlete/renato-moicano",
+          "ufcstats_name": "Renato Moicano",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/b6452706b373eea1"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 5,
+            "bout_index": 0,
+            "side": "a",
+            "source_json_pointer": "/events/5/fights/0",
+            "event_title": "UFC Fight Night: Moicano vs Nolan",
+            "submitted_name": "Renato Moicano"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2026-04-04-ufc-fight-night-moicano-vs-duncan-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/roman-kopylov",
+      "name": "Roman Kopylov",
+      "fighter_id": "9d83f6da776ff7d6",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/roman-kopylov",
+        "name": "Roman Kopylov",
+        "fighter_id": "9d83f6da776ff7d6",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "6b86ef2e5aa35ebe90af4794b418d0ae5038a82b4ad2375a21f276a91f18528c",
+        "historical_bout": {
+          "event_date": "2025-01-11",
+          "event_name": "UFC Fight Night: Dern vs. Ribas 2",
+          "fighter_a": "Chris Curtis",
+          "fighter_b": "Roman Kopylov",
+          "fighter_a_id": "5442f1bc4b47eaf3",
+          "fighter_b_id": "9d83f6da776ff7d6"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/roman-kopylov",
+        "name": "Roman Kopylov",
+        "fighter_id": "9d83f6da776ff7d6",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-01-11-ufc-fight-night-dern-vs-ribas-2-1.html",
+          "bytes": 94774,
+          "sha256": "6b86ef2e5aa35ebe90af4794b418d0ae5038a82b4ad2375a21f276a91f18528c"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:41:12.090005Z",
+          "route": "ufc_official_weighin_article_https",
+          "requested_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-dern-vs-ribas-2-vegas-101",
+          "final_url": "https://www.ufc.com/news/weigh-results-ufc-fight-night-dern-vs-ribas-2-vegas-101",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "94774",
+          "response_sha256": "6b86ef2e5aa35ebe90af4794b418d0ae5038a82b4ad2375a21f276a91f18528c",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins\\2025-01-11-ufc-fight-night-dern-vs-ribas-2-1.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 288,
+        "evidence_inventory_data_row_index": 1028,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins/2025-01-11-ufc-fight-night-dern-vs-ribas-2-1.html",
+          "size_bytes": "94774",
+          "sha256": "6b86ef2e5aa35ebe90af4794b418d0ae5038a82b4ad2375a21f276a91f18528c"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/weigh-results-ufc-fight-night-dern-vs-ribas-2-vegas-101"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/roman-kopylov",
+          "anchor_text": "Roman Kopylov"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2025-01-10T14:15:00-0500"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          "limit of 186 pounds. He forfeits 25% of his purse to his opponent. Please enable Javascript to view this content UFC Fight Night: Dern vs Ribas 2 took place live from UFC APEX in Las Vegas, Nevada on January 11, 2025. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Chris Curtis (185.5) vs Roman Kopylov (185.5)",
+        "historical_bout": {
+          "event_date": "2025-01-11",
+          "event_name": "UFC Fight Night: Dern vs. Ribas 2",
+          "fighter_a": "Chris Curtis",
+          "fighter_b": "Roman Kopylov",
+          "fighter_a_id": "5442f1bc4b47eaf3",
+          "fighter_b_id": "9d83f6da776ff7d6"
+        },
+        "selected_profile": {
+          "name": "Roman Kopylov",
+          "fighter_url": "http://ufcstats.com/fighter-details/9d83f6da776ff7d6",
+          "dob": "May 04, 1992"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Roman Kopylov",
+          "official_athlete_url": "https://www.ufc.com/athlete/roman-kopylov",
+          "ufcstats_name": "Roman Kopylov",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/9d83f6da776ff7d6"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 1,
+            "bout_index": 4,
+            "side": "b",
+            "source_json_pointer": "/events/1/fights/4",
+            "event_title": "UFC 332: Silva vs Wang",
+            "submitted_name": "Roman Kopylov"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2025-01-11-ufc-fight-night-dern-vs-ribas-2-1.html"
+    },
+    {
+      "decision": "PROPOSED_ACCEPTANCE_PENDING_INDEPENDENT_REVIEW",
+      "athlete_url": "https://www.ufc.com/athlete/sean-brady",
+      "name": "Sean Brady",
+      "fighter_id": "45f7cb591c3ab00b",
+      "proposed_binding": {
+        "athlete_url": "https://www.ufc.com/athlete/sean-brady",
+        "name": "Sean Brady",
+        "fighter_id": "45f7cb591c3ab00b",
+        "review_decision": "ACCEPT_OFFLINE_EVIDENCE_FOR_PROPOSED_RUNTIME_BINDING",
+        "evidence_sha256": "a2ccd2584d0e40b1683c390d9551e334bc07179af0084e09146d9d2c0fe582c8",
+        "historical_bout": {
+          "event_date": "2025-03-22",
+          "event_name": "UFC Fight Night: Edwards vs. Brady",
+          "fighter_a": "Leon Edwards",
+          "fighter_b": "Sean Brady",
+          "fighter_a_id": "f1fac969a1d70b08",
+          "fighter_b_id": "45f7cb591c3ab00b"
+        }
+      },
+      "preferred_evidence": {
+        "athlete_url": "https://www.ufc.com/athlete/sean-brady",
+        "name": "Sean Brady",
+        "fighter_id": "45f7cb591c3ab00b",
+        "source_pin": {
+          "path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2025-03-22-ufc-fight-night-edwards-vs-brady-sitemap-04-official-weigh-in-results-ufc-fight-night-edwards-.html",
+          "bytes": 95355,
+          "sha256": "a2ccd2584d0e40b1683c390d9551e334bc07179af0084e09146d9d2c0fe582c8"
+        },
+        "source_receipt": {
+          "retrieved_at_utc": "2026-08-29T04:48:59.457986Z",
+          "route": "ufc_official_weighin_article_sitemap_https",
+          "requested_url": "https://www.ufc.com/news/official-weigh-in-results-ufc-fight-night-edwards-brady-london",
+          "final_url": "https://www.ufc.com/news/official-weigh-in-results-ufc-fight-night-edwards-brady-london",
+          "attempt": "1",
+          "status_code": "200",
+          "redirect_chain_json": "[]",
+          "response_bytes": "95355",
+          "response_sha256": "a2ccd2584d0e40b1683c390d9551e334bc07179af0084e09146d9d2c0fe582c8",
+          "raw_capture_path": "C:\\Temp\\u7pi1\\sources\\weights\\raw\\ufc-weighins-sitemap\\2025-03-22-ufc-fight-night-edwards-vs-brady-sitemap-04-official-weigh-in-results-ufc-fight-night-edwards-.html",
+          "outcome": "ok",
+          "error": ""
+        },
+        "request_log_data_row_index": 781,
+        "evidence_inventory_data_row_index": 841,
+        "evidence_inventory_record": {
+          "relative_path": "raw/ufc-weighins-sitemap/2025-03-22-ufc-fight-night-edwards-vs-brady-sitemap-04-official-weigh-in-results-ufc-fight-night-edwards-.html",
+          "size_bytes": "95355",
+          "sha256": "a2ccd2584d0e40b1683c390d9551e334bc07179af0084e09146d9d2c0fe582c8"
+        },
+        "canonical_urls": [
+          "https://www.ufc.com/news/official-weigh-in-results-ufc-fight-night-edwards-brady-london"
+        ],
+        "exact_anchor": {
+          "athlete_url": "https://www.ufc.com/athlete/sean-brady",
+          "anchor_text": "Sean Brady"
+        },
+        "article_published_time_metadata": [
+          {
+            "property": "article:published_time",
+            "content": "2025-03-21T05:00:00-0400"
+          }
+        ],
+        "explicit_source_event_date_contexts": [
+          ") Lightweight Bout: Guram Kutateladze (155) vs Kaue Fernandes (155) Please enable Javascript to view this content UFC Fight Night: Edwards vs Brady took place live from O2 Arena in London, England on March 22, 2025. See the final Prelim & Main Card Results , Official Scorecards and W"
+        ],
+        "exact_weighin_bout_expression": "Leon Edwards (171) vs Sean Brady (170)",
+        "historical_bout": {
+          "event_date": "2025-03-22",
+          "event_name": "UFC Fight Night: Edwards vs. Brady",
+          "fighter_a": "Leon Edwards",
+          "fighter_b": "Sean Brady",
+          "fighter_a_id": "f1fac969a1d70b08",
+          "fighter_b_id": "45f7cb591c3ab00b"
+        },
+        "selected_profile": {
+          "name": "Sean Brady",
+          "fighter_url": "http://ufcstats.com/fighter-details/45f7cb591c3ab00b",
+          "dob": "Nov 23, 1992"
+        },
+        "selected_roster_unique_owner": {
+          "official_name": "Sean Brady",
+          "official_athlete_url": "https://www.ufc.com/athlete/sean-brady",
+          "ufcstats_name": "Sean Brady",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/45f7cb591c3ab00b"
+        },
+        "tracked_inventory_appearances": [
+          {
+            "card_index": 6,
+            "bout_index": 0,
+            "side": "b",
+            "source_json_pointer": "/events/6/fights/0",
+            "event_title": "UFC Fight Night: Bonfim vs Brady",
+            "submitted_name": "Sean Brady"
+          }
+        ]
+      },
+      "packaged_evidence_path": "runtime_fighter_binding_evidence_v1/2025-03-22-ufc-fight-night-edwards-vs-brady-sitemap-04-official-weigh-in-results-ufc-fight-night-edwards-.html"
+    }
+  ],
+  "limits": [
+    "Exact historical identity evidence grants no current method owner/event/timing/freshness authority.",
+    "All selected model/data/roster files and previous runtime evidence remain unchanged.",
+    "Filename date is only a search lead; every proposed source must literally associate the exact historical event name with a full month/day/year date.",
+    "Only exact submitted/displayed/profile names qualify; no spelling or nickname aliases are introduced."
+  ]
+}

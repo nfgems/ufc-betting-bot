@@ -1,0 +1,249 @@
+{
+  "attempts": [
+    {
+      "advertised_content_length": 14407,
+      "capture_complete": true,
+      "completed_at_utc": "2026-09-03T05:22:23.251928+00:00",
+      "completion_basis": "content_length_exact",
+      "content_codings": [
+        "identity"
+      ],
+      "decode_complete": true,
+      "decode_error": null,
+      "decode_methods": [
+        "identity"
+      ],
+      "decoded_path": "C:/Temp/u31r1/network/ufcstats-fighters-01/02-a1-decoded.bin",
+      "decoded_sha256": "67d833deafe2ee19248bb9927d6dcea80cd6a2898da7ffe87070295f23d8f036",
+      "decoded_size": 14407,
+      "error": null,
+      "framing_errors": [],
+      "kind": "get",
+      "location_header": "",
+      "media_type": "text/html",
+      "method": "GET",
+      "raw_path": "C:/Temp/u31r1/network/ufcstats-fighters-01/02-a1-raw.bin",
+      "raw_sha256": "67d833deafe2ee19248bb9927d6dcea80cd6a2898da7ffe87070295f23d8f036",
+      "raw_size": 14407,
+      "read_error": null,
+      "reason": "OK",
+      "redirects_followed": 0,
+      "request_headers": {
+        "Accept": "text/html, */*;q=0.1",
+        "Accept-Encoding": "identity",
+        "Connection": "close",
+        "Cookie": "_fmc=1788412830.7f902bf7a8587b81fadb93e6de9c4cb595b49fc602eea651b348a0f4d5e1fce4",
+        "User-Agent": "UFCBettingBot-identity-resolution/1.0 (owner-operated research bot)"
+      },
+      "response_headers": [
+        [
+          "Server",
+          "nginx/1.10.1"
+        ],
+        [
+          "Vary",
+          "Accept-Encoding"
+        ],
+        [
+          "Cache-Control",
+          "public, max-age=900"
+        ],
+        [
+          "Content-Type",
+          "text/html;charset=utf-8"
+        ],
+        [
+          "Date",
+          "Thu, 03 Sep 2026 05:20:05 GMT"
+        ],
+        [
+          "Status",
+          "200 OK"
+        ],
+        [
+          "X-XSS-Protection",
+          "1; mode=block"
+        ],
+        [
+          "X-Content-Type-Options",
+          "nosniff"
+        ],
+        [
+          "Connection",
+          "close"
+        ],
+        [
+          "X-Frame-Options",
+          "SAMEORIGIN"
+        ],
+        [
+          "Content-Length",
+          "14407"
+        ]
+      ],
+      "retry_count": 0,
+      "semantic_evidence_eligible": true,
+      "send_ordinal": 4,
+      "started_at_utc": "2026-09-03T05:22:22.992511+00:00",
+      "status_code": 200,
+      "transfer_codings": [],
+      "transport_invariant_errors": [],
+      "ufcstats_challenge_detected": false,
+      "url": "http://ufcstats.com/fighter-details/184f6ec4ee712e9f"
+    }
+  ],
+  "capture": {
+    "advertised_content_length": 14407,
+    "capture_complete": true,
+    "completed_at_utc": "2026-09-03T05:22:23.251928+00:00",
+    "completion_basis": "content_length_exact",
+    "content_codings": [
+      "identity"
+    ],
+    "decode_complete": true,
+    "decode_error": null,
+    "decode_methods": [
+      "identity"
+    ],
+    "decoded_path": "C:/Temp/u31r1/network/ufcstats-fighters-01/02-a1-decoded.bin",
+    "decoded_sha256": "67d833deafe2ee19248bb9927d6dcea80cd6a2898da7ffe87070295f23d8f036",
+    "decoded_size": 14407,
+    "error": null,
+    "framing_errors": [],
+    "kind": "get",
+    "location_header": "",
+    "media_type": "text/html",
+    "method": "GET",
+    "raw_path": "C:/Temp/u31r1/network/ufcstats-fighters-01/02-a1-raw.bin",
+    "raw_sha256": "67d833deafe2ee19248bb9927d6dcea80cd6a2898da7ffe87070295f23d8f036",
+    "raw_size": 14407,
+    "read_error": null,
+    "reason": "OK",
+    "redirects_followed": 0,
+    "request_headers": {
+      "Accept": "text/html, */*;q=0.1",
+      "Accept-Encoding": "identity",
+      "Connection": "close",
+      "Cookie": "_fmc=1788412830.7f902bf7a8587b81fadb93e6de9c4cb595b49fc602eea651b348a0f4d5e1fce4",
+      "User-Agent": "UFCBettingBot-identity-resolution/1.0 (owner-operated research bot)"
+    },
+    "response_headers": [
+      [
+        "Server",
+        "nginx/1.10.1"
+      ],
+      [
+        "Vary",
+        "Accept-Encoding"
+      ],
+      [
+        "Cache-Control",
+        "public, max-age=900"
+      ],
+      [
+        "Content-Type",
+        "text/html;charset=utf-8"
+      ],
+      [
+        "Date",
+        "Thu, 03 Sep 2026 05:20:05 GMT"
+      ],
+      [
+        "Status",
+        "200 OK"
+      ],
+      [
+        "X-XSS-Protection",
+        "1; mode=block"
+      ],
+      [
+        "X-Content-Type-Options",
+        "nosniff"
+      ],
+      [
+        "Connection",
+        "close"
+      ],
+      [
+        "X-Frame-Options",
+        "SAMEORIGIN"
+      ],
+      [
+        "Content-Length",
+        "14407"
+      ]
+    ],
+    "retry_count": 0,
+    "semantic_evidence_eligible": true,
+    "send_ordinal": 4,
+    "started_at_utc": "2026-09-03T05:22:22.992511+00:00",
+    "status_code": 200,
+    "transfer_codings": [],
+    "transport_invariant_errors": [],
+    "ufcstats_challenge_detected": false,
+    "url": "http://ufcstats.com/fighter-details/184f6ec4ee712e9f"
+  },
+  "challenge_rounds": [],
+  "completed_at_utc": "2026-09-03T05:22:23.252071+00:00",
+  "error": null,
+  "host": "ufcstats.com",
+  "method": "GET",
+  "ordinal": 2,
+  "purpose": "Lucia Szabova (Roster Watch DOB 1997-12-23; listing S: Lucia Szabova 'Silent Killer', 12-0-0)",
+  "request_headers": {
+    "Accept": "text/html, */*;q=0.1",
+    "Accept-Encoding": "identity",
+    "Connection": "close",
+    "Cookie": "_fmc=1788412830.7f902bf7a8587b81fadb93e6de9c4cb595b49fc602eea651b348a0f4d5e1fce4",
+    "User-Agent": "UFCBettingBot-identity-resolution/1.0 (owner-operated research bot)"
+  },
+  "response_headers": [
+    [
+      "Server",
+      "nginx/1.10.1"
+    ],
+    [
+      "Vary",
+      "Accept-Encoding"
+    ],
+    [
+      "Cache-Control",
+      "public, max-age=900"
+    ],
+    [
+      "Content-Type",
+      "text/html;charset=utf-8"
+    ],
+    [
+      "Date",
+      "Thu, 03 Sep 2026 05:20:05 GMT"
+    ],
+    [
+      "Status",
+      "200 OK"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "X-Frame-Options",
+      "SAMEORIGIN"
+    ],
+    [
+      "Content-Length",
+      "14407"
+    ]
+  ],
+  "started_at_utc": "2026-09-03T05:22:22.992355+00:00",
+  "status_code": 200,
+  "url": "http://ufcstats.com/fighter-details/184f6ec4ee712e9f"
+}

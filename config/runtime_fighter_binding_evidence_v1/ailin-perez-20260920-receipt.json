@@ -1,0 +1,12 @@
+{
+  "retrieved_at_utc": "2026-09-20T17:42:25.404432+00:00",
+  "started_utc": "2026-09-20T17:42:25.251680+00:00",
+  "requested_url": "https://www.ufc.com/athlete/ailin-perez",
+  "final_url": "https://www.ufc.com/athlete/ailin-perez",
+  "status_code": 200,
+  "redirect_chain": [],
+  "response_bytes": 138748,
+  "response_sha256": "6facce91d87b64718714e1a3f40ec0d5372f3a506f2719a8f502984d49393a56",
+  "content_type": "text/html; charset=UTF-8",
+  "outcome": "ok"
+}

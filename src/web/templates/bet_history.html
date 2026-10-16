@@ -348,6 +348,7 @@
     </div>
 
     <div class="container">
+        {% include "refresh_status.html" %}
         <div class="page-header">
             <div class="page-title">Bet History</div>
             <div class="page-subtitle" id="pageSubtitle">Loading bet history...</div>
@@ -355,7 +356,7 @@
 
         <div class="stats-grid" id="statsGrid">
             <div class="stat-card">
-                <div class="stat-label">Predictions</div>
+                <div class="stat-label" id="statPredictionLabel">History rows</div>
                 <div class="stat-value" id="statPredictions">--</div>
                 <div class="stat-sub" id="statPredictionSub"></div>
             </div>
@@ -380,7 +381,7 @@
                 <div class="stat-sub" id="statBuySub"></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Settled Bets</div>
+                <div class="stat-label">Closed positions</div>
                 <div class="stat-value" id="statExitCount">--</div>
                 <div class="stat-sub" id="statExitSub"></div>
             </div>
@@ -390,13 +391,16 @@
             <input type="text" class="search-input" id="searchInput" placeholder="Search markets, outcomes..." oninput="applyFilters()">
             <button type="button" class="filter-btn active" onclick="setFilter('all', this)">All</button>
             <button type="button" class="filter-btn" onclick="setFilter('open', this)">Open</button>
-            <button type="button" class="filter-btn" onclick="setFilter('won', this)">Won</button>
-            <button type="button" class="filter-btn" onclick="setFilter('lost', this)">Lost</button>
+            <button type="button" class="filter-btn" onclick="setFilter('closed', this)">Closed</button>
+            <button type="button" class="filter-btn" onclick="setFilter('closed_profit', this)">Closed gain</button>
+            <button type="button" class="filter-btn" onclick="setFilter('closed_loss', this)">Closed loss</button>
+            <button type="button" class="filter-btn" onclick="setFilter('won', this)">Resolved win</button>
+            <button type="button" class="filter-btn" onclick="setFilter('lost', this)">Resolved loss</button>
             <button type="button" class="filter-btn" onclick="setFilter('sold', this)">Sold</button>
             <div class="date-group">
-                <input type="date" class="date-input" id="dateFrom" onchange="applyFilters()" title="From date">
+                <input type="date" class="date-input" id="dateFrom" onchange="applyFilters()" title="Activity from date (New York)">
                 <span class="date-sep">to</span>
-                <input type="date" class="date-input" id="dateTo" onchange="applyFilters()" title="To date">
+                <input type="date" class="date-input" id="dateTo" onchange="applyFilters()" title="Activity through date (New York)">
             </div>
         </div>
 
@@ -408,14 +412,17 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='dashboard-format.js') }}"></script>
     <script>
         let allRows = [];
         let filteredRows = [];
         let liveSummary = null;
+        let accountSummary = null;
         let currentFilter = 'all';
         let showCount = 25;
         let sortCol = 'date';
         let sortDir = -1;
+        let unknownDateExcluded = 0;
 
         function esc(s) {
             const d = document.createElement('div');
@@ -424,8 +431,39 @@
         }
 
         function toFiniteNumber(value) {
+            if (value == null || typeof value === 'boolean' || (typeof value === 'string' && !value.trim())) return null;
             const num = Number(value);
             return Number.isFinite(num) ? num : null;
+        }
+
+        function headlinePnl() {
+            // Displayed history rows can omit unresolved/redeemable holdings.
+            // Their sum is not a substitute for the observed wallet headline.
+            for (const summary of [accountSummary, liveSummary]) {
+                if (!summary) continue;
+                const source = String(summary._profile_source || '').toLowerCase();
+                const value = toFiniteNumber(summary.profile_total_pnl);
+                if (value != null && ['live', 'stale'].includes(source)) {
+                    return { value, caption: source === 'stale'
+                        ? 'Last saved Polymarket profile P&L · all markets'
+                        : 'Observed Polymarket profile P&L · all markets' };
+                }
+            }
+            if (accountSummary && ['live', 'stale'].includes(accountSummary._pnl_source)) {
+                const value = toFiniteNumber(accountSummary.total_pnl);
+                if (value != null) return { value, caption: accountSummary._pnl_source === 'stale'
+                    ? 'Last saved account P&L · all markets'
+                    : 'Observed account P&L · all markets' };
+            }
+            // The sport-scoped history API preserves its observed account
+            // aggregate separately; never substitute its row-only total.
+            if (liveSummary && ['live', 'stale'].includes(liveSummary._pnl_source)) {
+                const value = toFiniteNumber(liveSummary.profile_total_pnl);
+                if (value != null) return { value, caption: liveSummary._pnl_source === 'stale'
+                    ? 'Last saved account P&L · all markets'
+                    : 'Observed account P&L · all markets' };
+            }
+            return { value: null, caption: 'Account P&L unavailable · row P&L shown separately' };
         }
 
         function fmtCurrency(value, { signed = false, digits = 2 } = {}) {
@@ -465,16 +503,13 @@
         }
 
         function fmtDateTime(iso) {
-            if (!iso) return '--';
-            const date = new Date(iso);
-            if (Number.isNaN(date.valueOf())) return '--';
-            return date.toLocaleString('en-US', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit',
-            });
+            return UFCDisplay.formatTimestamp(iso, { legacyUtc: true, year: true });
+        }
+
+        function fmtMarketEnd(value) {
+            return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+                ? UFCDisplay.formatCalendarDate(value)
+                : UFCDisplay.formatTimestamp(value, { year:true });
         }
 
         function tradeTypeLabel(row) {
@@ -486,8 +521,8 @@
 
         function badgeClass(typeLabel) {
             if (typeLabel === 'OPEN') return 'badge-open';
-            if (typeLabel === 'WON') return 'badge-won';
-            if (typeLabel === 'LOST') return 'badge-lost';
+            if (typeLabel === 'RESOLVED WIN' || typeLabel === 'CLOSED GAIN') return 'badge-won';
+            if (typeLabel === 'RESOLVED LOSS' || typeLabel === 'CLOSED LOSS') return 'badge-lost';
             if (typeLabel === 'SOLD') return 'badge-push';
             if (typeLabel === 'BUY') return 'badge-open';
             if (typeLabel === 'SELL') return 'badge-won';
@@ -497,6 +532,7 @@
 
         function tradeTimestampIso(row) {
             const raw = row && row.timestamp;
+            if (raw == null || raw === '') return null;
             const numeric = Number(raw);
             if (Number.isFinite(numeric)) {
                 return new Date(numeric * 1000).toISOString();
@@ -508,21 +544,30 @@
             return null;
         }
 
-        function profileBetTimestampIso(row) {
-            const raw = row && (row.settled_at || row.placed_at || row.event_date);
-            const numeric = Number(raw);
-            if (Number.isFinite(numeric)) {
-                return new Date(numeric * 1000).toISOString();
+        function profileActivityDate(raw) {
+            // Historical activity fields may contain explicit Unix seconds.
+            const seconds = toFiniteNumber(raw);
+            if (seconds != null) {
+                const date = new Date(seconds * 1000);
+                return Number.isFinite(date.valueOf()) ? date : null;
             }
-            const date = new Date(raw || '');
-            if (!Number.isNaN(date.valueOf())) {
-                return date.toISOString();
+            return UFCDisplay.parseTimestamp(raw, { legacyUtc: true });
+        }
+
+        function profileBetTimestampIso(row) {
+            // Market expiry and the Data API observation timestamp do not prove
+            // when a holding was opened or closed.
+            for (const raw of [row && row.settled_at, row && row.placed_at]) {
+                const date = profileActivityDate(raw);
+                if (date) return date.toISOString();
             }
             return null;
         }
 
         function mapProfileBetRow(row, index) {
             const status = String(row && (row.status || row.trade_side) || 'unknown').toUpperCase();
+            const statusLabels = { CLOSED_PROFIT:'CLOSED GAIN', CLOSED_LOSS:'CLOSED LOSS',
+                CLOSED_FLAT:'CLOSED FLAT', WON:'RESOLVED WIN', LOST:'RESOLVED LOSS', PUSH:'RESOLVED FLAT' };
             const isOpen = status === 'OPEN';
             const pnl = isOpen
                 ? toFiniteNumber(row && row.unrealized_pnl)
@@ -539,14 +584,16 @@
                 id: String(row && (row.token_id || row.id) || `profile-bet-${index}`),
                 row_kind: 'bet',
                 filter_key: status.toLowerCase(),
-                type_label: status,
+                type_label: statusLabels[status] || status,
                 market: fighter || event || 'Unknown market',
                 outcome: detailParts.join(' · '),
-                amount: toFiniteNumber(row && (row.amount ?? row.invested)) ?? 0,
+                amount: toFiniteNumber(row && (row.amount ?? row.invested)),
                 shares: toFiniteNumber(row && row.shares),
                 price: toFiniteNumber(row && (row.avg_price ?? row.price)),
                 pnl,
                 date_iso: profileBetTimestampIso(row),
+                date_label: row && profileActivityDate(row.settled_at) ? 'Closed' : 'Opened',
+                market_end_date: row && row.market_end_date || null,
                 raw: row || {},
             };
         }
@@ -559,7 +606,7 @@
                 type_label: tradeTypeLabel(row),
                 market: String(row && (row.title || row.market) || 'Unknown market'),
                 outcome: String(row && row.outcome || ''),
-                amount: toFiniteNumber(row && row.usdcSize) ?? 0,
+                amount: toFiniteNumber(row && row.usdcSize),
                 shares: toFiniteNumber(row && row.size),
                 price: toFiniteNumber(row && row.price),
                 pnl: null,
@@ -625,8 +672,10 @@
                         break;
                     case 'date':
                     default:
-                        va = a.date_iso ? new Date(a.date_iso).valueOf() : 0;
-                        vb = b.date_iso ? new Date(b.date_iso).valueOf() : 0;
+                        // Unknown activity times stay last in either direction.
+                        if (!a.date_iso || !b.date_iso) return a.date_iso ? -1 : b.date_iso ? 1 : 0;
+                        va = new Date(a.date_iso).valueOf();
+                        vb = new Date(b.date_iso).valueOf();
                         break;
                 }
 
@@ -637,54 +686,59 @@
         }
 
         function updateStats() {
-            const predictionCount = toFiniteNumber(liveSummary && liveSummary.profile_predictions) ?? allRows.length;
-            const totalPnl = toFiniteNumber(liveSummary && liveSummary.total_pnl);
-            const positionsValue =
-                toFiniteNumber(liveSummary && liveSummary.positions_value)
-                ?? toFiniteNumber(liveSummary && liveSummary.open_invested);
+            const profilePredictionCount = toFiniteNumber(liveSummary && liveSummary.profile_predictions);
+            const predictionCount = profilePredictionCount ?? allRows.length;
+            const headline = headlinePnl();
+            const totalPnl = headline.value;
+            const positionsValue = toFiniteNumber(liveSummary && liveSummary.positions_value);
             const biggestWin = toFiniteNumber(liveSummary && liveSummary.profile_largest_win);
             const openPositions = toFiniteNumber(liveSummary && liveSummary.open_bets);
 
-            const openRows = allRows.filter(row => row.type_label === 'OPEN').length;
-            const wonRows = allRows.filter(row => row.type_label === 'WON').length;
-            const lostRows = allRows.filter(row => row.type_label === 'LOST').length;
-            const soldRows = allRows.filter(row => row.type_label === 'SOLD').length;
-            const settledRows = wonRows + lostRows + soldRows;
-            const rowLabel = allRows.some(row => row.row_kind === 'activity') ? 'activity rows' : 'all-time bet rows';
+            const openRows = allRows.filter(row => row.filter_key === 'open').length;
+            const wonRows = allRows.filter(row => row.filter_key === 'won').length;
+            const lostRows = allRows.filter(row => row.filter_key === 'lost').length;
+            const closedRows = allRows.filter(row => row.row_kind === 'bet' && row.filter_key !== 'open');
+            const gainRows = closedRows.filter(row => row.pnl != null && row.pnl > 0).length;
+            const lossRows = closedRows.filter(row => row.pnl != null && row.pnl < 0).length;
+            const rowLabel = allRows.some(row => row.row_kind === 'activity') ? 'activity rows' : 'reported history rows';
 
             document.getElementById('statPredictions').textContent = predictionCount.toLocaleString('en-US');
+            document.getElementById('statPredictionLabel').textContent = profilePredictionCount != null ? 'Profile predictions' : 'History rows';
             document.getElementById('statPredictionSub').textContent = `${allRows.length.toLocaleString('en-US')} ${rowLabel}`;
 
             const pnlEl = document.getElementById('statPnl');
             pnlEl.textContent = fmtCurrency(totalPnl, { signed: true });
             pnlEl.className = `stat-value ${totalPnl != null ? (totalPnl >= 0 ? 'positive' : 'negative') : ''}`.trim();
-            document.getElementById('statPnlSub').textContent = 'All-time on Polymarket profile';
+            document.getElementById('statPnlSub').textContent = headline.caption;
 
             document.getElementById('statPositionsValue').textContent = fmtCurrency(positionsValue);
             document.getElementById('statPositionsSub').textContent = openPositions != null
-                ? `${openPositions.toLocaleString('en-US')} open positions`
-                : 'Current profile holdings';
+                ? `${openPositions.toLocaleString('en-US')} visible open positions · all markets`
+                : 'Observed account holdings unavailable';
 
             const biggestWinEl = document.getElementById('statBiggestWin');
             biggestWinEl.textContent = biggestWin != null ? fmtCurrency(biggestWin, { signed: true }) : '--';
             biggestWinEl.className = `stat-value ${biggestWin != null ? (biggestWin >= 0 ? 'positive' : 'negative') : ''}`.trim();
-            document.getElementById('statBiggestWinSub').textContent = 'Largest win on profile';
+            document.getElementById('statBiggestWinSub').textContent = biggestWin != null
+                ? 'Reported largest profile win' : 'Profile statistic unavailable';
 
             document.getElementById('statBuyCount').textContent = openRows.toLocaleString('en-US');
-            document.getElementById('statBuySub').textContent = `${allRows.length.toLocaleString('en-US')} total bets`;
+            document.getElementById('statBuySub').textContent = `${allRows.length.toLocaleString('en-US')} reported history rows`;
 
-            document.getElementById('statExitCount').textContent = settledRows.toLocaleString('en-US');
+            document.getElementById('statExitCount').textContent = closedRows.length.toLocaleString('en-US');
             document.getElementById('statExitSub').textContent =
-                `${wonRows.toLocaleString('en-US')} won, ${lostRows.toLocaleString('en-US')} lost, ${soldRows.toLocaleString('en-US')} sold`;
+                `${gainRows} reported gains, ${lossRows} reported losses · ${wonRows} confirmed wins, ${lostRows} confirmed losses`;
         }
 
         function applyFilters() {
             const query = document.getElementById('searchInput').value.toLowerCase().trim();
             const dateFrom = document.getElementById('dateFrom').value;
             const dateTo = document.getElementById('dateTo').value;
+            unknownDateExcluded = 0;
 
             filteredRows = allRows.filter(row => {
-                if (currentFilter !== 'all' && row.filter_key !== currentFilter) {
+                if (currentFilter === 'closed' ? row.row_kind !== 'bet' || row.filter_key === 'open'
+                    : currentFilter !== 'all' && row.filter_key !== currentFilter) {
                     return false;
                 }
 
@@ -697,17 +751,16 @@
                 }
 
                 if (dateFrom || dateTo) {
-                    if (!row.date_iso) return false;
+                    if (!row.date_iso) { unknownDateExcluded += 1; return false; }
                     const rowTime = new Date(row.date_iso).valueOf();
                     if (Number.isNaN(rowTime)) return false;
-                    if (dateFrom) {
-                        const fromTime = new Date(`${dateFrom}T00:00:00`).valueOf();
-                        if (rowTime < fromTime) return false;
-                    }
-                    if (dateTo) {
-                        const toTime = new Date(`${dateTo}T23:59:59.999`).valueOf();
-                        if (rowTime > toTime) return false;
-                    }
+                    const dayParts = new Intl.DateTimeFormat('en-US', {
+                        timeZone:'America/New_York', year:'numeric', month:'2-digit', day:'2-digit'
+                    }).formatToParts(new Date(rowTime));
+                    const part = type => dayParts.find(value => value.type === type).value;
+                    const localDay = `${part('year')}-${part('month')}-${part('day')}`;
+                    if (dateFrom && localDay < dateFrom) return false;
+                    if (dateTo && localDay > dateTo) return false;
                 }
 
                 return true;
@@ -723,14 +776,15 @@
             const info = document.getElementById('resultsInfo');
 
             if (!filteredRows.length) {
-                info.textContent = 'No matching bet rows';
+                info.textContent = 'No matching bet rows' + (unknownDateExcluded ? ` · ${unknownDateExcluded} rows with unknown activity dates excluded` : '');
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No Polymarket bets match your filters</div>';
                 return;
             }
 
             const visible = filteredRows.slice(0, showCount);
-            const rowLabel = filteredRows.some(row => row.row_kind === 'activity') ? 'activity rows' : 'all-time bets';
-            info.textContent = `Showing ${visible.length} of ${filteredRows.length} ${rowLabel}`;
+            const rowLabel = filteredRows.some(row => row.row_kind === 'activity') ? 'activity rows' : 'reported history rows';
+            info.textContent = `Showing ${visible.length} of ${filteredRows.length} ${rowLabel}`
+                + (unknownDateExcluded ? ` · ${unknownDateExcluded} rows with unknown activity dates excluded` : '');
 
             const rows = visible.map(row => `
                 <tr>
@@ -744,7 +798,8 @@
                     <td class="right">${fmtCurrency(row.amount)}</td>
                     <td class="right">${fmtShares(row.shares)}</td>
                     <td class="right ${pnlClass(row)}">${fmtPnlValue(row)}</td>
-                    <td class="right col-date">${fmtDateTime(row.date_iso)}</td>
+                    <td class="right col-date">${row.date_iso ? `${esc(fmtDateTime(row.date_iso))}<div class="opponent-name">${esc(row.date_label || 'Activity')}</div>` : '<span>Unavailable</span>'}</td>
+                    <td class="right">${esc(fmtMarketEnd(row.market_end_date))}</td>
                 </tr>
             `).join('');
 
@@ -770,7 +825,8 @@
                     <th class="right ${thClass('amount')}" onclick="setSort('amount')">Amount ${sortArrow('amount')}</th>
                     <th class="right ${thClass('shares')}" onclick="setSort('shares')">Shares ${sortArrow('shares')}</th>
                     <th class="right ${thClass('pnl')}" onclick="setSort('pnl')">P&amp;L / Price ${sortArrow('pnl')}</th>
-                    <th class="right col-date ${thClass('date')}" onclick="setSort('date')">Date ${sortArrow('date')}</th>
+                    <th class="right col-date ${thClass('date')}" onclick="setSort('date')">Activity time ${sortArrow('date')}</th>
+                    <th class="right">Market end</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
             </table>${showMoreHtml}`;
@@ -788,14 +844,18 @@
         }
 
         async function fetchHistory() {
+            const accountSummaryPromise = fetch('/api/summary', { cache: 'no-store' })
+                .then(response => response.ok ? response.json() : null)
+                .catch(() => null);
             try {
-                const profileResp = await fetch('/api/profile-bets');
+                const profileResp = await fetch('/api/profile-bets', { cache: 'no-store' });
                 if (!profileResp.ok) {
                     throw new Error(`/api/profile-bets returned HTTP ${profileResp.status}`);
                 }
 
                 const profilePayload = await profileResp.json();
                 liveSummary = profilePayload && profilePayload.summary ? profilePayload.summary : {};
+                accountSummary = await accountSummaryPromise;
                 const betRows = profilePayload && Array.isArray(profilePayload.bets) ? profilePayload.bets : [];
                 allRows = betRows.map(mapProfileBetRow);
 
@@ -803,28 +863,27 @@
                 if (liveSummary && liveSummary.profile_username) {
                     subtitleParts.push(liveSummary.profile_username);
                 }
-                subtitleParts.push(`${allRows.length.toLocaleString('en-US')} all-time profile bets`);
-                if (liveSummary && liveSummary._pnl_degraded) {
-                    subtitleParts.push('live data degraded');
-                }
+                subtitleParts.push(`${allRows.length.toLocaleString('en-US')} reported history rows · all wallet markets`);
+                subtitleParts.push('Row P&L is reported separately from the account headline');
+                if (liveSummary && liveSummary._profile_source === 'unavailable') subtitleParts.push('profile headline unavailable');
+                if (liveSummary && liveSummary._pnl_source === 'stale') subtitleParts.push('last saved history');
+                if (liveSummary && liveSummary._pnl_source === 'unavailable') subtitleParts.push('live history unavailable');
                 document.getElementById('pageSubtitle').textContent = subtitleParts.join(' · ');
 
                 applyFilters();
             } catch (e) {
                 console.error('Failed to load profile bets:', e);
                 try {
-                    const [summaryResp, tradeResp] = await Promise.all([
-                        fetch('/api/summary'),
-                        fetch('/api/trade-history?limit=1000'),
+                    const [summary, tradeResp] = await Promise.all([
+                        accountSummaryPromise,
+                        fetch('/api/trade-history?limit=1000', { cache: 'no-store' }),
                     ]);
-                    if (!summaryResp.ok) {
-                        throw new Error(`/api/summary returned HTTP ${summaryResp.status}`);
-                    }
                     if (!tradeResp.ok) {
                         throw new Error(`/api/trade-history?limit=1000 returned HTTP ${tradeResp.status}`);
                     }
 
-                    liveSummary = await summaryResp.json();
+                    accountSummary = summary;
+                    liveSummary = summary || {};
                     const tradeRows = await tradeResp.json();
                     allRows = Array.isArray(tradeRows) ? tradeRows.map(mapTradeRow) : [];
 
@@ -832,7 +891,7 @@
                     if (liveSummary && liveSummary.profile_username) {
                         subtitleParts.push(liveSummary.profile_username);
                     }
-                    subtitleParts.push(`${allRows.length.toLocaleString('en-US')} recent activity rows`);
+                    subtitleParts.push(`${allRows.length.toLocaleString('en-US')} recent activity rows · all wallet markets`);
                     subtitleParts.push('profile bets unavailable');
                     document.getElementById('pageSubtitle').textContent = subtitleParts.join(' · ');
                     applyFilters();

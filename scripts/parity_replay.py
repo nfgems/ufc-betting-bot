@@ -41,58 +41,16 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import PROCESSED_DATA_DIR
-from src.data.fighter_lookup import build_fight_features
-from src.model.training_spec import resolve_named_training_spec
-
 logger = logging.getLogger("parity_replay")
 
-# Fields whose live value legitimately depends on the reference timestamp
-# rather than fight history. In prefight mode these differ by the 1-day shift
-# (and by snapshot aging) and are reported separately, not as failures.
-TIME_AGED_FIELDS = {
-    "days_since_last_fight", "layoff_log", "cage_rust",
-    "age", "age_squared", "age_over_35", "age_under_25",
-}
-
-MISMATCH_VERDICTS = (
-    "live_feature_missing",
-    "live_nan_train_value",
-    "live_value_train_nan",
-    "value_diverge",
+# The ordinary legacy command retains its CLI defaults. The accepted-input
+# producer imports these pure rules directly and never invokes this command.
+from src.model.feature_parity import (
+    TIME_AGED_FIELDS, MISMATCH_VERDICTS, ODDS_PASSTHROUGH,
+    classify, expand_time_aged as _expand_time_aged,
+    history_identity_key as _history_identity_key,
+    established_history_mask as _established_history_mask,
 )
-
-
-def _expand_time_aged(cols: list[str]) -> set[str]:
-    out = set()
-    for col in cols:
-        for root in TIME_AGED_FIELDS:
-            if col == root or col.endswith(root):
-                out.add(col)
-    return out
-
-
-ODDS_PASSTHROUGH = [
-    "a_implied_prob", "b_implied_prob", "diff_implied_prob",
-    "a_ko_odds_prob", "a_sub_odds_prob", "a_dec_odds_prob",
-    "b_ko_odds_prob", "b_sub_odds_prob", "b_dec_odds_prob",
-]
-
-
-def classify(live_val, train_val, tol: float) -> str:
-    live_num = pd.to_numeric(pd.Series([live_val]), errors="coerce").iloc[0]
-    train_num = pd.to_numeric(pd.Series([train_val]), errors="coerce").iloc[0]
-    live_nan = pd.isna(live_num)
-    train_nan = pd.isna(train_num)
-    if live_nan and train_nan:
-        return "match"
-    if live_nan and not train_nan:
-        return "live_nan_train_value"
-    if not live_nan and train_nan:
-        return "live_value_train_nan"
-    if abs(float(live_num) - float(train_num)) <= tol:
-        return "match"
-    return "value_diverge"
 
 
 def _write_report(path: Path, payload: dict) -> None:
@@ -100,31 +58,11 @@ def _write_report(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=1, default=str), encoding="utf-8")
 
 
-def _established_history_mask(df: pd.DataFrame) -> pd.Series:
-    """Select fights where both fighters have earlier snapshot history.
-
-    Historical prefight replay cannot reconstruct a debutant from the processed
-    snapshot alone; live inference serves those fighters from contemporaneous
-    profile sources. Filtering that source-limited case matches the established
-    regression oracle while leaving every requested feature under comparison.
-    """
-    ordered = df.sort_values("event_date", kind="mergesort")
-    seen: set[str] = set()
-    eligible: dict[object, bool] = {}
-    for index, row in ordered.iterrows():
-        fighter_a = str(row.get("fighter_a") or "").strip()
-        fighter_b = str(row.get("fighter_b") or "").strip()
-        eligible[index] = bool(
-            fighter_a and fighter_b and fighter_a in seen and fighter_b in seen
-        )
-        if fighter_a:
-            seen.add(fighter_a)
-        if fighter_b:
-            seen.add(fighter_b)
-    return pd.Series(eligible, dtype=bool).reindex(df.index, fill_value=False)
-
-
 def main() -> int:
+    from src.config import PROCESSED_DATA_DIR
+    from src.data.fighter_lookup import build_fight_features
+    from src.model.training_spec import resolve_named_training_spec
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["exact", "prefight"], default="exact")
     parser.add_argument("--start", default="2025-01-01")
@@ -254,6 +192,16 @@ def main() -> int:
                 is_title_bout=bool(row.get("is_title_bout", 0)),
                 num_rounds=int(row["num_rounds_feat"]) if pd.notna(row.get("num_rounds_feat")) else 3,
                 is_empty_arena=row.get("is_empty_arena"),
+                fighter_a_id=(
+                    str(row.get("fighter_a_id")).strip()
+                    if pd.notna(row.get("fighter_a_id"))
+                    else None
+                ),
+                fighter_b_id=(
+                    str(row.get("fighter_b_id")).strip()
+                    if pd.notna(row.get("fighter_b_id"))
+                    else None
+                ),
                 as_of_date=as_of,
                 training_spec=spec,
                 processed_data_dir=processed_dir,

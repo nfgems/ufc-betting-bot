@@ -28,6 +28,7 @@ from src.config import (
     RAW_DATA_DIR,
 )
 from src.data.name_utils import normalize_person_name, same_person_name
+from src.data.rankings_scopes import WC_ALIASES as _WC_ALIASES
 from src.storage_retention import prune_json_snapshot_history
 
 logger = logging.getLogger(__name__)
@@ -59,27 +60,6 @@ _last_rankings_snapshot_prune_monotonic = 0.0
 
 # Default rank for unranked fighters (same as training pipeline)
 UNRANKED_DEFAULT = 16
-
-# Weight class name normalization: map common variants to canonical names
-_WC_ALIASES = {
-    "strawweight": "strawweight",
-    "women's strawweight": "women's strawweight",
-    "women s strawweight": "women's strawweight",
-    "flyweight": "flyweight",
-    "women's flyweight": "women's flyweight",
-    "women s flyweight": "women's flyweight",
-    "bantamweight": "bantamweight",
-    "women's bantamweight": "women's bantamweight",
-    "women s bantamweight": "women's bantamweight",
-    "featherweight": "featherweight",
-    "women's featherweight": "women's featherweight",
-    "women s featherweight": "women's featherweight",
-    "lightweight": "lightweight",
-    "welterweight": "welterweight",
-    "middleweight": "middleweight",
-    "light heavyweight": "light heavyweight",
-    "heavyweight": "heavyweight",
-}
 
 _WOMENS_WC_LEGACY_KEYS = {
     "women's strawweight": "strawweight",
@@ -154,35 +134,39 @@ def prune_rankings_snapshots(
     protected_paths: tuple[Path, ...] = (),
     force: bool = False,
 ) -> int:
-    """Bound runtime rankings snapshots while keeping a last-known-good file."""
-    global _last_rankings_snapshot_prune_monotonic
-    monotonic = time.monotonic()
-    with _rankings_snapshot_prune_lock:
-        if (
-            not force
-            and _last_rankings_snapshot_prune_monotonic
-            and monotonic - _last_rankings_snapshot_prune_monotonic
-            < RANKINGS_SNAPSHOT_PRUNE_INTERVAL_SECONDS
-        ):
-            return 0
-        removed = prune_json_snapshot_history(
-            RANKINGS_SNAPSHOT_DIR,
-            "rankings_????????_??????.json",
-            retention_days=RANKINGS_SNAPSHOT_RETENTION_DAYS,
-            full_resolution_days=RANKINGS_SNAPSHOT_FULL_RESOLUTION_DAYS,
-            daily_keep=RANKINGS_SNAPSHOT_DAILY_KEEP,
-            protected_paths=protected_paths,
-            protect_latest_matching=_successful_rankings_snapshot,
-            prefer_daily_matching=_successful_rankings_snapshot,
-            now=now,
-        )
-        _last_rankings_snapshot_prune_monotonic = monotonic
-    if removed:
-        logger.info("Pruned %d superseded rankings snapshots", len(removed))
-    return len(removed)
+    """Preserve ordinary snapshots until every consumer owner is accounted for."""
+    # Direct finalized history and a selected consumer manifest do not establish
+    # the global accepted/training/monthly/recovery/uncertainty inventory. Force
+    # bypasses no ownership requirement. Existing data receives no deletion gate.
+    return 0
 
 
-def _save_snapshot(snapshot: dict) -> Path:
+def _save_snapshot(snapshot: dict, *, reviewed_context=None, capture=None, history_root=None) -> Path:
+    if snapshot.get("observation_reference_schema") == 1:
+        from src.data.method_observation_history import _digest, _json_bytes, _write_immutable
+        from src.data.rankings_observation_history import HISTORY_SUBDIR, finalize_snapshot
+        from src.data.observation_consumer_references import record_observation_consumer_artifact
+        body = _json_bytes(snapshot)
+        base = _snapshot_path(snapshot["snapshot_time"])
+        path = base.with_name(f"{base.stem}_{_digest(body)}.json")
+        _write_immutable(path, body)
+        evidence = []
+        if reviewed_context is not None:
+            evidence.append(Path(reviewed_context["path"]))
+        if snapshot.get("collection_intent"):
+            evidence.append(Path(snapshot["collection_intent"]["path"]))
+        for descriptor in snapshot.get("response_captures", []):
+            evidence.extend(Path(descriptor[key]["path"]) for key in ("raw_response", "response_envelope"))
+        try:
+            if snapshot.get("status") == "success":
+                finalized = finalize_snapshot(path, history_root=(Path(history_root) if history_root is not None else RAW_DATA_DIR / "kaggle_rankings") / HISTORY_SUBDIR,
+                                              reviewed_context=reviewed_context, capture=capture)
+                evidence.append(finalized)
+        finally:
+            # Even a refused finalization retains its original snapshot and all
+            # completed response attempts. Processing is outside request retry.
+            record_observation_consumer_artifact(path, kind="rankings_snapshot", evidence_paths=evidence)
+        return path
     path = _snapshot_path(snapshot["snapshot_time"])
     path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     logger.info("Saved rankings snapshot: %s", path)
@@ -200,6 +184,11 @@ def _load_snapshot(path: Path) -> Optional[dict]:
         logger.warning("Failed to read rankings snapshot %s: %s", path, exc)
         return None
     if not isinstance(data, dict):
+        return None
+    if "observation_reference_schema" in data:
+        # This names-only legacy loader cannot consume a stable-ID observation,
+        # even if its final history is absent or stored in another selected root.
+        # A partial save must not turn an empty compatibility payload into 16.
         return None
     data.setdefault("snapshot_path", str(path))
     return data
@@ -275,15 +264,17 @@ def load_latest_rankings_snapshot(
     return None
 
 
-def _fetch_html(url: str) -> Optional[str]:
+def _fetch_html(url: str, *, response_capture=None, transport=None) -> Optional[str | bytes]:
     last_exc: Exception | None = None
     for attempt in range(1, REQUEST_ATTEMPTS + 1):
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
+            resp = (transport or requests.get)(url, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
+            if response_capture is not None:
+                response_capture(resp, requested_url=url, format="html")
             resp.raise_for_status()
             time.sleep(REQUEST_DELAY)
-            return resp.text
-        except Exception as exc:
+            return resp.content if response_capture is not None else resp.text
+        except requests.RequestException as exc:
             last_exc = exc
             if attempt < REQUEST_ATTEMPTS:
                 logger.info(
@@ -331,7 +322,10 @@ def _normalize_rankings_payload(payload: dict, *, source: str) -> Optional[dict]
     }
 
 
-def _parse_ufc_rankings_html(html: str) -> Optional[dict]:
+def _parse_ufc_rankings_html(html: str | bytes, *, strict: bool = False) -> Optional[dict]:
+    if strict:
+        from src.data.rankings_observation_history import parse_official_rankings_html
+        return parse_official_rankings_html(html)
     soup = BeautifulSoup(html, "lxml")
 
     wc_rankings: dict[str, dict[str, int]] = {}
@@ -617,12 +611,15 @@ def _source_result(
     return result
 
 
-def collect_rankings_snapshot() -> dict:
+def collect_rankings_snapshot(*, strict: bool = False, reviewed_context=None, history_root=None, transport=None) -> dict:
     """
     Fetch rankings from live sources and persist a timestamped normalized snapshot.
 
     Inference should not call this. It exists for scheduled/offline collection.
     """
+    if strict or reviewed_context is not None:
+        return _collect_verified_rankings_snapshot(reviewed_context=reviewed_context,
+                                                   history_root=history_root, transport=transport)
     source_chain: list[tuple[str, Callable[[], Optional[dict]]]] = [
         ("ufc.com", _scrape_ufc_rankings),
         ("espn.com", _scrape_espn_rankings),
@@ -680,6 +677,92 @@ def collect_rankings_snapshot() -> dict:
     }
     path = _save_snapshot(snapshot)
     snapshot["snapshot_path"] = str(path)
+    return snapshot
+
+
+def _collect_verified_rankings_snapshot(*, reviewed_context, history_root, transport):
+    from src.data.method_observation_history import ObservationRefusal, _attachment, _digest, _json_bytes, _read_pin, _require, _safe_path, _write_immutable
+    from src.data.rankings_observation_history import CAPTURE_SUBDIR, SOURCE_URL, load_reviewed_registry
+    from src.data.source_response_capture import SourceCaptureRefusal, SourceResponseCapture
+    # No source work may establish or silently substitute the identity registry.
+    registry = load_reviewed_registry(reviewed_context)
+    original_context = _read_pin(reviewed_context)
+    _require(transport is None or callable(transport), "invalid synthetic rankings transport")
+    root = _safe_path(Path(history_root or RANKINGS_SNAPSHOT_DIR))
+    collection_root = _safe_path(root / CAPTURE_SUBDIR / "collections" / _digest(registry["collection_id"].encode()))
+    intent_path, ready_path = collection_root / "intent.json", collection_root / "ready.json"
+    _safe_path(intent_path)
+    _safe_path(ready_path)
+    intent = {"schema": 1, "reviewed_context": reviewed_context, "context_sha256": _digest(original_context),
+              "registry_original": _attachment(reviewed_context)}
+    intent_body = _json_bytes(intent)
+    intent_pin = {"path": str(intent_path), "bytes": len(intent_body), "sha256": _digest(intent_body)}
+    if intent_path.exists():
+        _require(json.loads(intent_path.read_bytes()) == intent, "rankings collection identity binds different original input")
+        _require(ready_path.exists(), "original rankings collection remains interrupted; automatic reacquisition refused")
+        ready = json.loads(_safe_path(ready_path).read_bytes())
+        _require(isinstance(ready, dict) and set(ready) == {"schema", "kind", "snapshot"}
+                 and type(ready["schema"]) is int and ready["schema"] == 1
+                 and ready["kind"] == "rankings_collection_ready_v1",
+                 "invalid original rankings ready checkpoint")
+        snapshot = ready["snapshot"]
+        _require(isinstance(snapshot, dict) and snapshot.get("reviewed_context") == reviewed_context
+                 and snapshot.get("collection_id") == registry["collection_id"]
+                 and snapshot.get("collection_intent") == intent_pin,
+                 "rankings ready state differs from original registry/collection pin")
+        captures = snapshot["response_captures"]
+        path = _save_snapshot(snapshot, reviewed_context=reviewed_context,
+                              capture=captures[-1] if captures else None, history_root=history_root)
+        if snapshot["status"] == "processing_refused":
+            raise SourceCaptureRefusal(f"original rankings processing remains refused: {snapshot.get('error')}", captures=captures)
+        return {**snapshot, "snapshot_path": str(path)}
+    collection_root.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        collection_root.mkdir()
+    except FileExistsError as exc:
+        raise ObservationRefusal("original rankings claim is incomplete or concurrent; reacquisition refused") from exc
+    _write_immutable(intent_path, intent_body)
+    captures = []
+    sink = SourceResponseCapture("ufc_rankings", history_root=root,
+                                 capture_subdir=CAPTURE_SUBDIR, capture_log=captures)
+    snapshot = {"schema_version": 2, "observation_reference_schema": 1,
+                "status": "failed", "source": "ufc.com", "acquisition_failed": True,
+                "wc": {}, "pfp": {}, "sources": [], "response_captures": captures,
+                "reviewed_context": reviewed_context, "collection_id": registry["collection_id"],
+                "collection_intent": intent_pin}
+    capture, processing_error = None, None
+    try:
+        html = _fetch_html(SOURCE_URL, response_capture=sink, transport=transport)
+        if html is not None:
+            capture = captures[-1]
+            envelope = json.loads(_read_pin(capture["response_envelope"]))
+            snapshot["captured_at"] = envelope["received_at"]
+            snapshot["rankings_observation"] = _parse_ufc_rankings_html(html, strict=True)
+            snapshot.update(status="success", acquisition_failed=False)
+            snapshot["sources"].append({"source": "ufc.com", "status": "success", "captured_at": envelope["received_at"]})
+        else:
+            snapshot["sources"].append({"source": "ufc.com", "status": "acquisition_failed"})
+    except Exception as exc:
+        processing_error = exc
+        snapshot.update(status="processing_refused", acquisition_failed=False, error=str(exc))
+        snapshot["sources"].append({"source": "ufc.com", "status": "processing_refused", "error": str(exc)})
+    snapshot["snapshot_time"] = datetime.now(timezone.utc).isoformat()
+    if captures:
+        # This is original receipt, never the timestamp taken before acquisition.
+        last = json.loads(_read_pin(captures[-1]["response_envelope"]))
+        snapshot.setdefault("captured_at", last["received_at"])
+    snapshot["sources"].extend([
+        {"source": "espn.com", "status": "strict_refused", "reason": "equivalent original identity/response proof unavailable"},
+        {"source": "tapology.com", "status": "strict_refused", "reason": "equivalent original identity/response proof unavailable"},
+    ])
+    # The ready checkpoint is retained collection evidence. Its nested snapshot
+    # is published separately with a consumer sidecar after finalization.
+    _write_immutable(ready_path, _json_bytes({"schema": 1, "kind": "rankings_collection_ready_v1", "snapshot": snapshot}))
+    path = _save_snapshot(snapshot, reviewed_context=reviewed_context, capture=capture, history_root=history_root)
+    snapshot["snapshot_path"] = str(path)
+    if processing_error is not None:
+        raise SourceCaptureRefusal(f"rankings processing refused; original snapshot retained at {path}: {processing_error}",
+                                   captures=captures) from processing_error
     return snapshot
 
 
@@ -745,6 +828,7 @@ def get_fighter_rankings(
     fighter_name: str,
     weight_class: Optional[str] = None,
     as_of_date: Optional[str] = None,
+    *, fighter_id: Optional[str] = None, strict: bool = False, history_root=None,
 ) -> dict:
     """
     Get a fighter's weight class rank and P4P rank.
@@ -753,6 +837,17 @@ def get_fighter_rankings(
       - wc_rank_feat: weight class rank (1-15, 16 for true unranked, NaN on source failure)
       - pfp_rank_feat: P4P rank (1-15, 16 for true unranked, NaN on source failure)
     """
+    from src.data.rankings_observation_history import HISTORY_SUBDIR, read_finalized_rankings, select_finalized_rankings
+    from src.data.selected_source_inputs import selected_path
+    retained_root = selected_path("rankings_observations", Path(history_root) if history_root is not None else RAW_DATA_DIR / "kaggle_rankings" / HISTORY_SUBDIR)
+    if strict or fighter_id is not None or retained_root.exists():
+        rows = read_finalized_rankings(retained_root)
+        now = datetime.now(timezone.utc)
+        if as_of_date is None:
+            rows = [row for row in rows if now - _parse_snapshot_timestamp(row["observed_at"]) <= RANKINGS_SNAPSHOT_MAX_AGE]
+        result = select_finalized_rankings(rows, fighter_id=fighter_id, weight_class=weight_class,
+                                           as_of=as_of_date or now.isoformat())
+        return {key: np.nan if value is None else value for key, value in result.items()}
     rankings = get_rankings(as_of_date=as_of_date)
     name_lower = _normalize_name(fighter_name)
     if rankings.get("acquisition_failed") or rankings.get("source") == "none":

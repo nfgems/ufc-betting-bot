@@ -129,6 +129,7 @@ def prune_json_snapshot_history(
     protect_latest: bool = True,
     protect_latest_matching: Callable[[dict], bool] | None = None,
     prefer_daily_matching: Callable[[dict], bool] | None = None,
+    before_remove: Callable[[Path], bool] | None = None,
     now: datetime | float | int | None = None,
 ) -> list[Path]:
     """Thin timestamped JSON snapshots while preserving safe fallbacks.
@@ -146,7 +147,10 @@ def prune_json_snapshot_history(
     ahead of non-matching snapshots during daily thinning, with recency used
     to break ties. If no snapshot from a day matches, the newest snapshots are
     retained as usual.
-    A non-positive retention period disables pruning.
+    ``before_remove`` can require durable finalization and reference checks.
+    Only an exact True authorizes deletion; refusal or an ordinary data/write
+    error preserves the snapshot. Changed bytes are never deleted using the
+    finalization of an earlier version. A non-positive period disables pruning.
     """
     retention = int(retention_days)
     if retention <= 0:
@@ -163,9 +167,13 @@ def prune_json_snapshot_history(
     full_resolution_cutoff = current - timedelta(days=full_days)
 
     entries: list[tuple[datetime, Path, dict]] = []
+    scanned_bytes: dict[Path, bytes] = {}
     for path in root.glob(pattern):
+        if path.is_symlink() or not path.is_file():
+            continue
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            body = path.read_bytes()
+            payload = json.loads(body.decode("utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         if not isinstance(payload, dict):
@@ -174,6 +182,7 @@ def prune_json_snapshot_history(
         if captured_at is None:
             continue
         entries.append((captured_at, path, payload))
+        scanned_bytes[path] = body
 
     if not entries:
         return []
@@ -231,11 +240,17 @@ def prune_json_snapshot_history(
     removed: list[Path] = []
     for path in sorted(remove, key=lambda item: str(item)):
         try:
+            if path.is_symlink() or path.read_bytes() != scanned_bytes[path]:
+                continue
+            if before_remove is not None and before_remove(path) is not True:
+                continue
+            if path.is_symlink() or path.read_bytes() != scanned_bytes[path]:
+                continue
             path.unlink()
             removed.append(path)
         except FileNotFoundError:
             continue
-        except OSError:
+        except (OSError, ValueError):
             # Best effort: preserving a file is safer than breaking collection.
             continue
     return removed

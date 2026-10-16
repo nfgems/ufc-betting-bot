@@ -1548,6 +1548,7 @@
     </div>
 
     <div class="container">
+        {% include "refresh_status.html" %}
         <div class="hero-shell">
             <div class="hero-copy">
                 <div class="hero-eyebrow">UFC Cockpit</div>
@@ -1587,6 +1588,7 @@
         <div class="grid-full">
             <div class="section">
                 <div class="section-header"><h2>Fight Decisions</h2><span class="badge badge-open" id="fightDecisionCount">0 fights</span><label class="history-toggle"><input type="checkbox" id="showFightHistory" onchange="refreshFightDecisions()"> Show past events</label></div>
+                <p style="padding:0 18px;color:var(--text-muted);font-size:12px">Edges use % for the probability gap: 74.7% versus 72.0% displays +2.7%. Expected profit is a separate calculation.</p>
                 <div class="table-wrap decision-matrix" id="fightDecisionMatrix">
                     <div class="empty-state"><div class="empty-icon">--</div>Loading fight decisions...</div>
                 </div>
@@ -1610,8 +1612,10 @@
                     <div class="section-header-actions">
                         <div class="tabs">
                             <button class="tab active" onclick="setHistoryFilter('all', this)">All</button>
-                            <button class="tab" onclick="setHistoryFilter('won', this)">Won</button>
-                            <button class="tab" onclick="setHistoryFilter('lost', this)">Lost</button>
+                            <button class="tab" onclick="setHistoryFilter('closed_profit', this)">Closed gain</button>
+                            <button class="tab" onclick="setHistoryFilter('closed_loss', this)">Closed loss</button>
+                            <button class="tab" onclick="setHistoryFilter('won', this)">Resolved win</button>
+                            <button class="tab" onclick="setHistoryFilter('lost', this)">Resolved loss</button>
                             <button class="tab" onclick="setHistoryFilter('cancelled', this)">Cancelled</button>
                         </div>
                         <a href="/bet-history" class="btn btn-compact">Full History</a>
@@ -1676,6 +1680,7 @@
 
     <div class="toast" id="toast"></div>
 
+    <script src="{{ url_for('static', filename='dashboard-format.js') }}"></script>
     <script>
         // ── UFC-only dashboard ──
         const SPORT_FILTER = 'ufc';
@@ -1697,9 +1702,13 @@
 
         function buildScopedSummary(baseSummary, bets, livePnl) {
             if (SPORT_FILTER === 'all') return baseSummary;
+            // Wallet totals already use observed exchange data. Historical
+            // trade rows cannot reconstruct a complete wallet cost basis.
+            if (String(baseSummary?.accounting_scope || '').startsWith('shared_wallet')) return baseSummary;
 
             const scoped = { ...(baseSummary || {}) };
-            const settled = (bets || []).filter(b => b.status === 'won' || b.status === 'lost');
+            const settled = (bets || []).filter(b => ['won', 'lost', 'push'].includes(b.status));
+            const closed = (bets || []).filter(b => ['won', 'lost', 'push', 'closed_profit', 'closed_loss', 'closed_flat'].includes(b.status));
             const wins = settled.filter(b => b.status === 'won').length;
             const openLedger = (bets || []).filter(b => b.status === 'open');
             const livePositions = Array.isArray(livePnl?.positions) ? livePnl.positions : [];
@@ -1708,11 +1717,12 @@
 
             scoped.total_bets = (bets || []).length;
             scoped.settled_bets = settled.length;
+            scoped.closed_bets = closed.length;
             scoped.wins = wins;
-            scoped.losses = settled.length - wins;
-            scoped.win_rate = settled.length ? wins / settled.length : 0;
-            scoped.total_wagered = sumBy(settled, 'amount');
-            scoped.realized_pnl = sumBy(settled, 'result_pnl');
+            scoped.losses = settled.filter(b => b.status === 'lost').length;
+            scoped.win_rate = wins + scoped.losses ? wins / (wins + scoped.losses) : null;
+            scoped.total_wagered = sumBy(closed, 'amount');
+            scoped.realized_pnl = sumBy(closed, 'result_pnl');
             scoped.open_bets = hasLivePositionSnapshot ? livePositions.length : openLedger.length;
             scoped.open_invested = hasLivePositionSnapshot
                 ? sumBy(livePositions, 'invested')
@@ -1781,6 +1791,11 @@
         };
 
         function pnlClass(v) { return v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral'; }
+        function calendarDate(value) {
+            const text = String(value || '');
+            const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+            return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : new Date(text);
+        }
         function fmtPnl(v) { return v == null ? '--' : `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`; }
         function fmtPct(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}%`; }
         function fmtPrice(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}\u00a2`; }
@@ -1841,6 +1856,14 @@
             const id = el.id || el.dataset.animId || (el.dataset.animId = 'av_' + Math.random().toString(36).slice(2, 8));
             const isFirst = !_animatedEls.has(id);
             const state = _animatedEls.get(id) || { current: newVal };
+            if (newVal == null || state.current == null) {
+                if (state.raf) cancelAnimationFrame(state.raf);
+                state.current = newVal;
+                state.raf = null;
+                el.textContent = formatter(newVal);
+                _animatedEls.set(id, state);
+                return;
+            }
             if (isFirst) { state.current = newVal; el.textContent = formatter(newVal); _animatedEls.set(id, state); return; }
             if (state.raf) cancelAnimationFrame(state.raf);
             const start = state.current;
@@ -2020,16 +2043,18 @@
         }
         function emptySummary() {
             return {
-                total_pnl: 0,
-                roi: 0,
-                open_invested: 0,
-                open_bets: 0,
+                _pnl_source: 'unavailable',
+                _profile_source: 'unavailable',
+                total_pnl: null,
+                roi: null,
+                open_invested: null,
+                open_bets: null,
                 wins: 0,
                 losses: 0,
                 win_rate: 0,
                 realized_pnl: 0,
                 settled_bets: 0,
-                unrealized_pnl: 0,
+                unrealized_pnl: null,
                 total_wagered: 0,
                 total_bets: 0,
                 profile_predictions: null,
@@ -2039,12 +2064,14 @@
         }
         function emptyLivePnl() {
             return {
-                total_invested: 0,
-                current_value: 0,
-                unrealized_pnl: 0,
-                realized_pnl: 0,
-                total_pnl: 0,
-                num_positions: 0,
+                _pnl_source: 'unavailable',
+                _pnl_degraded: true,
+                total_invested: null,
+                current_value: null,
+                unrealized_pnl: null,
+                realized_pnl: null,
+                total_pnl: null,
+                num_positions: null,
                 positions: [],
             };
         }
@@ -2070,17 +2097,18 @@
             return (dashboardState.runtimeStatus && dashboardState.runtimeStatus.components && dashboardState.runtimeStatus.components[name]) || null;
         }
         function ufcRefreshComponent() {
-            return runtimeComponent('ufc_refresh_loop');
+            return runtimeComponent('ufc_refresh_loop') || runtimeComponent('refresh_loop');
         }
         function ufcRefreshSeverity(component) {
             const state = String(component?.state || '').toLowerCase();
             if (['degraded', 'dead', 'stale'].includes(state)) return 'negative';
-            if (['running'].includes(state)) return 'positive';
+            if (['running', 'waiting'].includes(state)) return 'positive';
             return 'neutral';
         }
         function ufcRefreshDisplayValue(component) {
             const state = String(component?.state || '').toLowerCase();
             if (state === 'running') return 'Healthy';
+            if (state === 'waiting') return 'Waiting';
             if (state === 'degraded') return 'Degraded';
             if (state === 'dead') return 'Dead';
             if (state === 'stale') return 'Stale';
@@ -2174,17 +2202,26 @@
 
         let _heroCardsRendered = false;
         function renderCards(s, balance) {
-            const cashBalance = balance ? balance.cash_balance : 0;
-            const totalEquity = balance ? balance.total_equity : 0;
+            const cashBalance = balance ? balance.cash_balance : null;
+            const totalEquity = balance ? balance.total_equity : null;
             const profileTotalPnl = finiteNumber(s.profile_total_pnl);
-            const displayTotalPnl = profileTotalPnl ?? finiteNumber(s.total_pnl) ?? 0;
+            const displayTotalPnl = profileTotalPnl ?? finiteNumber(s.total_pnl);
             const pnlGlow = displayTotalPnl > 0 ? 'pnl-glow-positive' : displayTotalPnl < 0 ? 'pnl-glow-negative' : 'pnl-glow-neutral';
             const profilePredictions = finiteNumber(s.profile_predictions);
             const profileVolume = finiteNumber(s.profile_volume);
             const profileBiggestWin = finiteNumber(s.profile_largest_win);
-            const pnlSubtext = s && s._profile_source && s._profile_source !== 'unavailable'
-                ? 'All-time on Polymarket'
-                : `${fmtPct(s.roi)} ROI`;
+            const pnlSubtext = profileTotalPnl != null && ['live', 'stale'].includes(s._profile_source)
+                ? (s._profile_source === 'stale' ? 'Last saved Polymarket profile P&L' : 'All-time on Polymarket')
+                : s._pnl_source === 'unavailable' ? 'Account P&L unavailable'
+                : s._pnl_source === 'stale' ? 'Last saved account P&L' : s.roi == null ? 'Observed account P&L · all markets' : `${fmtPct(s.roi)} ROI`;
+            const exposureSource = finiteNumber(s.positions_value) != null && ['live', 'stale'].includes(s._profile_source)
+                ? s._profile_source : s._pnl_source;
+            const exposureSubtext = exposureSource === 'unavailable'
+                ? 'Account exposure unavailable'
+                : exposureSource === 'stale' ? 'Last saved account exposure' : `${s.open_bets} active positions`;
+            const cashSubtext = balance
+                ? `${fmtMoney(cashBalance)} ${balance._source === 'stale' ? 'last saved cash balance' : 'cash balance'}`
+                : 'Account balance unavailable';
 
             // Update favicon based on P&L
             updateFavicon(displayTotalPnl);
@@ -2200,12 +2237,12 @@
                     <div class="hero-card">
                         <div class="hero-card-label">Open Exposure</div>
                         <div class="hero-card-value" id="animExposure">${esc(fmtMoney(s.open_invested))}</div>
-                        <div class="hero-card-sub">${esc(s.open_bets)} active positions</div>
+                        <div class="hero-card-sub" id="animExposureSub">${esc(exposureSubtext)}</div>
                     </div>
                     <div class="hero-card" id="heroEquity">
                         <div class="hero-card-label">Wallet Equity</div>
                         <div class="hero-card-value" id="animEquity">${esc(fmtMoney(totalEquity))}</div>
-                        <div class="hero-card-sub" id="animCash">${esc(fmtMoney(cashBalance))} cash balance</div>
+                        <div class="hero-card-sub" id="animCash">${esc(cashSubtext)}</div>
                     </div>
                     <div class="hero-card">
                         <div class="hero-card-label">Predictions</div>
@@ -2222,10 +2259,12 @@
                 if (animPnl) animPnl.className = 'hero-card-value ' + pnlClass(displayTotalPnl);
                 const pnlSubEl = document.getElementById('animPnlSub');
                 if (pnlSubEl) pnlSubEl.textContent = pnlSubtext;
-                animateValue(document.getElementById('animExposure'), s.open_invested || 0, v => fmtMoney(v));
-                animateValue(document.getElementById('animEquity'), totalEquity || 0, v => fmtMoney(v));
+                animateValue(document.getElementById('animExposure'), s.open_invested, v => fmtMoney(v));
+                const exposureSubEl = document.getElementById('animExposureSub');
+                if (exposureSubEl) exposureSubEl.textContent = exposureSubtext;
+                animateValue(document.getElementById('animEquity'), totalEquity, v => fmtMoney(v));
                 const cashEl = document.getElementById('animCash');
-                if (cashEl) cashEl.textContent = `${fmtMoney(cashBalance)} cash balance`;
+                if (cashEl) cashEl.textContent = cashSubtext;
                 const predictionsEl = document.getElementById('animPredictions');
                 if (predictionsEl) predictionsEl.textContent = fmtCount(profilePredictions);
             }
@@ -2239,7 +2278,7 @@
                 <div class="mini-card">
                     <div class="mini-card-label">Unrealized</div>
                     <div class="mini-card-value ${pnlClass(s.unrealized_pnl)}">${fmtPnl(s.unrealized_pnl)}</div>
-                    <div class="mini-card-sub">${s.open_bets} open positions</div>
+                    <div class="mini-card-sub">${s._pnl_source === 'unavailable' ? 'Account estimate unavailable' : s._pnl_source === 'stale' ? 'Last saved account snapshot' : `${s.open_bets} open positions`}</div>
                 </div>
                 <div class="mini-card">
                     <div class="mini-card-label">Profile Volume</div>
@@ -2268,7 +2307,7 @@
                     cls = pnlClass(v);
                 }
                 const placedDate = b.placed_at ? new Date(b.placed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-                const eventDate = b.event_date ? new Date(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const eventDate = b.event_date ? calendarDate(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
                 const dateInfo = [placedDate ? `Placed ${placedDate}` : '', eventDate ? `Event ${eventDate}` : ''].filter(Boolean).join(' \u00b7 ');
                 const mobileMetrics = `
                     <div class="mobile-metrics">
@@ -2298,6 +2337,23 @@
             renderAttentionStrip();
         }
 
+        function filteredHistoryRows(bets) {
+            const thirtyDaysAgo = Date.now() - 30 * 86400000;
+            const seenTokens = new Set();
+            return (bets || []).filter(b => {
+                if (b.status !== historyFilter) return false;
+                const actualClose = UFCDisplay.parseTimestamp(b.settled_at, {legacyUtc:true});
+                if (historyFilter !== 'cancelled' && actualClose && actualClose.getTime() < thirtyDaysAgo) return false;
+                const key = b.token_id || `${b.fighter}_${b.opponent}_${b.placed_at}`;
+                if (seenTokens.has(key)) return false;
+                seenTokens.add(key);
+                return true;
+            }).sort((a, b) => {
+                const time = row => UFCDisplay.parseTimestamp(row.settled_at || row.placed_at, {legacyUtc:true})?.getTime() ?? -Infinity;
+                return time(b) - time(a);
+            });
+        }
+
         function renderHistoryTable(bets) {
             const el = document.getElementById('historyTable');
 
@@ -2309,35 +2365,11 @@
                 return;
             }
 
-            // Won / Lost / Cancelled tabs: filter bets from the ledger
-            const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
-            const isCancelledTab = historyFilter === 'cancelled';
-            let filtered;
-            if (isCancelledTab) {
-                filtered = bets.filter(b => b.status === 'cancelled');
-            } else {
-                filtered = bets.filter(b =>
-                    (b.status === 'won' || b.status === 'lost') &&
-                    (!b.settled_at || b.settled_at >= thirtyDaysAgo)
-                );
-                filtered = filtered.filter(b => b.status === historyFilter);
-            }
-
-            // Deduplicate by token_id (bets without order_id can appear twice)
-            const seenTokens = new Set();
-            filtered = filtered.filter(b => {
-                const key = b.token_id || `${b.fighter}_${b.opponent}_${b.placed_at}`;
-                if (seenTokens.has(key)) return false;
-                seenTokens.add(key);
-                return true;
-            });
-
-            filtered = filtered.slice().sort((a, b) =>
-                String(b.settled_at || b.placed_at || '').localeCompare(String(a.settled_at || a.placed_at || ''))
-            );
+            const filtered = filteredHistoryRows(bets);
+            const resultLabels = {won:'Resolved win', lost:'Resolved loss', push:'Resolved push', closed_profit:'Closed gain', closed_loss:'Closed loss', closed_flat:'Closed flat', cancelled:'Cancelled'};
 
             if (!filtered.length) {
-                el.innerHTML = `<div class="empty-state"><div class="empty-icon">--</div>No ${historyFilter} bets yet</div>`;
+                el.innerHTML = `<div class="empty-state"><div class="empty-icon">--</div>No ${esc(resultLabels[historyFilter] || historyFilter)} rows yet</div>`;
                 return;
             }
 
@@ -2346,20 +2378,23 @@
 
             const rows = visible.map(b => {
                 let cls, badge;
-                if (b.status === 'won') { cls = 'positive'; badge = 'badge-won'; }
+                if (b.status === 'won' || b.status === 'closed_profit') { cls = 'positive'; badge = 'badge-won'; }
                 else if (b.status === 'cancelled') { cls = 'neutral'; badge = 'badge-yellow'; }
+                else if (b.status === 'push' || b.status === 'closed_flat') { cls = 'neutral'; badge = 'badge-yellow'; }
                 else { cls = 'negative'; badge = 'badge-lost'; }
                 const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
-                const date = b.settled_at || b.placed_at ? new Date(b.settled_at || b.placed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--';
+                const date = b.settled_at ? `Closed ${UFCDisplay.formatTimestamp(b.settled_at, {legacyUtc:true,year:true})}`
+                    : b.placed_at ? `Opened ${UFCDisplay.formatTimestamp(b.placed_at, {legacyUtc:true,year:true})} · close date unknown` : 'Activity date unknown';
                 const cancelReason = b.cancel_reason ? `<span class="opponent-name" style="color:var(--yellow);font-style:italic">${esc(b.cancel_reason)}</span>` : '';
                 const reasonLine = b.reason ? `<span class="opponent-name" style="color:var(--gold);font-style:italic">${esc(b.reason)}</span>` : '';
+                const matchup = b.opponent ? `vs ${b.opponent}` : b.event || '';
 
                 return `<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span>${reasonLine}${cancelReason}</div></td>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span>${matchup ? `<span class="opponent-name">${esc(matchup)}</span>` : ''}${reasonLine}${cancelReason}</div></td>
                     <td class="right">$${(b.amount || 0).toFixed(2)}</td>
-                    <td class="right"><span class="badge ${badge}">${b.status.toUpperCase()}</span></td>
+                    <td class="right"><span class="badge ${badge}">${esc(resultLabels[b.status] || b.status)}</span></td>
                     <td class="right ${cls}">${b.status === 'cancelled' ? '--' : fmtPnl(b.result_pnl)}</td>
-                    <td class="right" style="color:var(--text-muted)">${date}</td>
+                    <td class="right" style="color:var(--text-muted)">${esc(date)}</td>
                 </tr>`;
             }).join('');
 
@@ -2371,26 +2406,12 @@
             </div>` : '';
 
             el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Amt</th><th class="right">Result</th><th class="right">P&amp;L</th><th class="right">Date</th></tr></thead>
+                <thead><tr><th>Fighter</th><th class="right">Amt</th><th class="right">Status</th><th class="right">P&amp;L</th><th class="right">Activity time</th></tr></thead>
                 <tbody>${rows}</tbody></table>${toggleBtn}`;
         }
 
         function toggleHistoryExpand() {
-            let filtered;
-            if (historyFilter === 'cancelled') {
-                filtered = allBets.filter(b => b.status === 'cancelled');
-            } else {
-                filtered = allBets.filter(b => b.status === 'won' || b.status === 'lost');
-                if (historyFilter !== 'all') filtered = filtered.filter(b => b.status === historyFilter);
-            }
-            // Deduplicate to match renderHistoryTable
-            const seen = new Set();
-            filtered = filtered.filter(b => {
-                const key = b.token_id || `${b.fighter}_${b.opponent}_${b.placed_at}`;
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-            });
+            const filtered = filteredHistoryRows(allBets);
             const totalCount = filtered.length;
 
             if (historyShowCount >= totalCount) {
@@ -2622,7 +2643,7 @@
             const color = traderColor(code);
             const text = cell?.text || 'Pending';
             const metaParts = [];
-            if (cell?.edge != null) metaParts.push(`Edge ${fmtPct(cell.edge)}`);
+            if (cell?.edge != null) metaParts.push(`Edge ${UFCDisplay.formatPoints(cell.edge)}`);
             if (cell?.confidence != null) metaParts.push(`Conf ${fmtPct(cell.confidence)}`);
             if (cell?.bet_placed === true) metaParts.push('Bet placed');
             if (cell?.bet_placed === false) metaParts.push(cell?.order_status ? `Order ${String(cell.order_status).replace(/_/g, ' ')}` : 'Not placed');
@@ -2637,7 +2658,7 @@
                     <span style="color:${color}">${esc(text)}</span>
                 </div>
                 ${metaParts.length ? `<div class="decision-meta">${esc(metaParts.join(' · '))}</div>` : ''}
-                ${cell?.rationale ? `<div class="decision-rationale">${esc(cell.rationale)}</div>` : ''}
+                ${cell?.rationale ? `<div class="decision-rationale">${esc(UFCDisplay.formatNarrative(cell.rationale))}</div>` : ''}
                 ${sourceHtml}
             </div>`;
         }
@@ -2716,7 +2737,7 @@
                     const when = fight.card_date || fight.market_event_date || fight.event_date || '';
                     let fightDate = '--';
                     if (when) {
-                        const p = new Date(when);
+                        const p = calendarDate(when);
                         if (!Number.isNaN(p.valueOf())) {
                             fightDate = p.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                         } else {
@@ -2806,11 +2827,9 @@
             };
             const items = entries.slice().reverse().map(e => {
                 const c = colorMap[e.color] || colorMap.blue;
-                const parts = e.timestamp ? e.timestamp.split(' ') : ['', ''];
-                const date = parts[0] ? parts[0].substring(5) : '';  // MM-DD
-                const time = parts[1] ? parts[1].substring(0, 5) : '';
+                const time = UFCDisplay.formatTimestamp(e.timestamp, {legacyUtc:true});
                 return `<div class="activity-item">
-                    <span class="sig-date">${date} ${time}</span>
+                    <span class="sig-date">${esc(time)}</span>
                     <span class="sig-tag" style="background:${c.bg};color:${c.fg}">${esc(e.tag)}</span>
                     <span class="activity-msg">${esc(e.message)}</span>
                 </div>`;
@@ -2834,7 +2853,7 @@
                 let countdown = '';
                 if (rawDate) {
                     try {
-                        const d = new Date(rawDate);
+                        const d = calendarDate(rawDate);
                         if (!isNaN(d)) {
                             displayDate = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
                             const days = Math.ceil((d.valueOf() - Date.now()) / 86400000);
@@ -3089,10 +3108,14 @@
 
             // Market coverage
             const predCount = dashboardState.predictionMeta?.prediction_count || 0;
-            const posCount = dashboardState.livePnl?.num_positions || 0;
+            const positionSource = dashboardState.livePnl?._pnl_source;
+            const positionsAvailable = positionSource === 'live' || positionSource === 'stale';
+            const posCount = positionsAvailable ? (dashboardState.livePnl?.num_positions || 0) : 'unavailable';
             const posSports = {};
             for (const p of (dashboardState.livePnl?.positions || [])) { posSports[p.sport || 'unknown'] = (posSports[p.sport || 'unknown'] || 0) + 1; }
-            const posSub = Object.entries(posSports).map(([s, n]) => `${n} ${s.toUpperCase()}`).join(', ') || 'None';
+            const posSub = positionsAvailable
+                ? (Object.entries(posSports).map(([s, n]) => `${n} ${s.toUpperCase()}`).join(', ') || 'None')
+                : 'Account positions unavailable';
             items.push({ label: 'Market Coverage', value: `${predCount} predictions · ${posCount} positions`, sub: `Open positions: ${posSub}`, cls: predCount > 0 ? 'neutral' : 'neutral' });
 
             el.innerHTML = items.map(item => `<div class="health-item"><div><div class="health-label">${esc(item.label)}</div><div class="health-value ${item.cls || 'neutral'}">${esc(item.value)}</div><div class="health-sub">${esc(item.sub || '')}</div></div></div>`).join('');
@@ -3104,10 +3127,14 @@
             const el = document.getElementById('openBetsCards');
             // Open Bets intentionally shows every wallet position, regardless of sport.
             const bets = (data && data.bets) || [];
-            document.getElementById('openBetCount').textContent = bets.length;
+            const source = data?._pnl_source;
+            const notice = source === 'unavailable'
+                ? 'Live positions unavailable; saved ledger records may differ from current holdings.'
+                : source === 'stale' ? 'Showing the last saved account snapshot.' : '';
+            document.getElementById('openBetCount').textContent = source === 'unavailable' ? 'unavailable' : bets.length;
 
             if (!bets.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No open bets</div>';
+                el.innerHTML = `<div class="empty-state"><div class="empty-icon">--</div>${notice || 'No open bets'}</div>`;
                 return;
             }
 
@@ -3118,7 +3145,7 @@
                 if (key) prevExpanded.add(key);
             });
 
-            el.innerHTML = bets.map(b => {
+            el.innerHTML = (notice ? `<div class="empty-state">${esc(notice)}</div>` : '') + bets.map(b => {
                 const pnl = b.unrealized_pnl || 0;
                 const pnlPct = b.pnl_pct || 0;
                 const pnlCls = pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : '';
@@ -3132,12 +3159,12 @@
                 const useMarketTitle = marketTitle && (propOutcome || !rawFighter);
                 const fighter = useMarketTitle ? marketTitle : (rawFighter || marketTitle || 'Unknown');
                 const subLine = useMarketTitle ? rawFighter : (rawOpponent ? 'vs ' + rawOpponent : '');
-                const eventDate = b.event_date ? new Date(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const eventDate = b.event_date ? calendarDate(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
                 const isUnmatched = b.unmatched;
                 const betKey = String(b.token_id || (fighter + '|' + (b.event_date || ''))).toLowerCase();
                 const wasExpanded = prevExpanded.has(betKey);
 
-                const edgeStr = b.edge != null ? `${(b.edge * 100).toFixed(1)}%` : '--';
+                const edgeStr = UFCDisplay.formatPoints(b.edge);
                 const modelMetric = b.model_prob != null ? b.model_prob : b.signal_confidence;
                 const modelStr = modelMetric != null ? `${(modelMetric * 100).toFixed(1)}%` : '--';
                 const modelLabel = b.model_label || 'Model';
@@ -3224,10 +3251,10 @@
                 const opponent = o.opponent || '';
                 const marketTitle = o.market_title || '';
                 const marketRef = o.market_id || '';
-                const eventDate = o.event_date ? new Date(o.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const eventDate = o.event_date ? calendarDate(o.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
                 const betKey = (fighter + '|' + (o.event_date || '') + '|limit').toLowerCase();
                 const wasExpanded = prevExpanded.has(betKey);
-                const edgeStr = o.edge != null ? `${(o.edge * 100).toFixed(1)}%` : '--';
+                const edgeStr = UFCDisplay.formatPoints(o.edge);
                 const bidStr = o.bid_price != null ? `$${o.bid_price.toFixed(2)}` : '--';
                 const sizeStr = `$${(o.size_remaining || 0).toFixed(2)}`;
                 const filledStr = o.size_matched > 0 ? `($${o.size_matched.toFixed(2)} filled)` : '';
@@ -3396,7 +3423,7 @@
             }
 
             el.innerHTML = issues.slice(0, 50).map(issue => {
-                const tsStr = issue.timestamp ? new Date(issue.timestamp).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
+                const tsStr = issue.timestamp ? UFCDisplay.formatTimestamp(issue.timestamp, {legacyUtc:true}) : '';
                 return `<div class="issue-item issue-${issue.severity}">
                     <div class="issue-timestamp">${esc(tsStr)}</div>
                     <div class="issue-source src-${issue.severity}">${esc(issue.source)}</div>
@@ -3534,7 +3561,10 @@
             const deferredPromises = [];
             deferredPromises.push(runDeferredFetch(deferredSeq, 'balance', '/api/balance', bal => {
                 if (_lastSummary) renderCards(_lastSummary, bal);
-            }, null, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
+            }, () => {
+                const cashEl = document.getElementById('animCash');
+                if (cashEl) cashEl.textContent = 'Current balance unavailable; displayed value may be stale';
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'limitOrders', '/api/open-limit-orders', data => {
                 renderLimitOrderCards(data);
                 renderIssuesFeed();
@@ -3544,7 +3574,7 @@
                 document.getElementById('limitOrderCards').innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>Limit order data unavailable</div>';
             }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'botActivity', '/api/bot-activity?limit=50', data => {
-                dashboardState.botActivity = (data && data.entries) || data || [];
+                dashboardState.botActivity = Array.isArray(data) ? data : Array.isArray(data?.entries) ? data.entries : [];
                 renderIssuesFeed();
             }, () => {
                 dashboardState.botActivity = [];

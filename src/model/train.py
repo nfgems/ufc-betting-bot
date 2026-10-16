@@ -35,6 +35,11 @@ from src.features.build_features import (
     get_feature_columns_no_odds,
 )
 from src.model.orientation import has_ab_feature_pair, swap_directional_frame
+from src.model.training_preflight import (
+    _dead_train_feature_columns,
+    preflight_training_data,
+    prepare_train_test,
+)
 
 logger = logging.getLogger(__name__)
 SUPPORTED_CALIBRATION_CV = frozenset({
@@ -352,91 +357,6 @@ def _resolve_repo_git_hash() -> str:
     except (FileNotFoundError, subprocess.CalledProcessError):
         return ""
     return completed.stdout.strip()
-
-
-def _dead_train_feature_columns(train_df: pd.DataFrame, feature_cols: list[str]) -> list[str]:
-    """Return declared feature columns that are entirely missing on trainable rows."""
-    dead_columns: list[str] = []
-    for column in feature_cols:
-        if column not in train_df.columns:
-            continue
-        if train_df[column].isna().all():
-            dead_columns.append(column)
-    return dead_columns
-
-
-def prepare_train_test(
-    features_df: pd.DataFrame,
-    cutoff_date: Optional[str] = None,
-    min_fights: int = 2,
-    feature_cols: Optional[list[str]] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    """
-    Split features into train/test sets by date.
-    Filters out fights where either fighter has fewer than min_fights prior bouts.
-
-    If *start_date* is provided, training rows before that date are dropped.
-    If *end_date* is provided, training rows on/after that date are dropped.
-    The test set is unaffected.
-
-    Returns (train_df, test_df, feature_columns).
-    """
-    cutoff = pd.Timestamp(cutoff_date or TRAIN_CUTOFF_DATE)
-    feature_cols = feature_cols or get_feature_columns(features_df)
-
-    # Filter to fights where we have enough data
-    df = features_df.copy()
-    if "a_num_fights" in df.columns and "b_num_fights" in df.columns:
-        df = df[
-            (df["a_num_fights"] >= min_fights) & (df["b_num_fights"] >= min_fights)
-        ]
-
-    # Drop rows with missing target
-    df = df.dropna(subset=["target"])
-
-    # Drop rows where all features are NaN
-    df = df.dropna(subset=feature_cols, how="all")
-
-    if "event_date" not in df.columns:
-        raise ValueError("features_df must include event_date for temporal train/test split")
-    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
-    if df["event_date"].isna().any():
-        raise ValueError("features_df contains unparseable event_date values after filtering")
-    df["_input_order"] = np.arange(len(df))
-    df = df.sort_values(["event_date", "_input_order"], kind="mergesort").drop(columns="_input_order")
-    if not df["event_date"].is_monotonic_increasing:
-        raise ValueError("features_df event_date ordering is not monotonic after temporal sort")
-
-    train = df[df["event_date"] < cutoff].copy()
-    test = df[df["event_date"] >= cutoff].copy()
-
-    # Apply optional lower-bound filter to training data only
-    if start_date:
-        start = pd.Timestamp(start_date)
-        pre_filter_count = len(train)
-        train = train[train["event_date"] >= start].copy()
-        logger.info(
-            f"train_start_date={start.date()}: dropped {pre_filter_count - len(train)} "
-            f"pre-{start.date()} training rows"
-        )
-    if end_date:
-        end = pd.Timestamp(end_date)
-        pre_filter_count = len(train)
-        train = train[train["event_date"] < end].copy()
-        logger.info(
-            f"train_end_date={end.date()}: dropped {pre_filter_count - len(train)} "
-            f"training rows on/after {end.date()}"
-        )
-
-    logger.info(
-        f"Train: {len(train)} fights (before {cutoff.date()}), "
-        f"Test: {len(test)} fights (after {cutoff.date()})"
-    )
-    logger.info(f"Using {len(feature_cols)} features")
-
-    return train, test, feature_cols
 
 
 def _mirror_augment_training_rows(
@@ -971,69 +891,16 @@ def train_all_models(
     feature selection, imputation strategy, and hyperparameters.
     """
     if spec is not None:
-        # Validate the spec's feature contract
-        violations = spec.validate_feature_contract()
-        if violations:
-            for v in violations:
-                logger.error(v)
-            raise ValueError(f"Training spec has {len(violations)} contract violations")
-
-        from src.model.training_spec import (
-            compute_feature_family_coverage,
-            materialize_and_validate_spec_features,
+        prepared = preflight_training_data(
+            features_df, spec, allow_external_transforms=True,
         )
-
+        features_df = prepared.features_df
+        train_df, test_df = prepared.train_df, prepared.test_df
+        feature_cols = prepared.feature_cols
         if not spec.trained_at:
             spec.trained_at = datetime.now().isoformat()
         if not spec.git_hash:
             spec.git_hash = _resolve_repo_git_hash()
-        features_df = materialize_and_validate_spec_features(features_df, spec)
-
-        # Use the spec's ordered feature list after materializing every requested transform.
-        feature_cols = list(spec.feature_cols)
-
-        cutoff = spec.train_cutoff_date
-        train_df, test_df, _ = prepare_train_test(
-            features_df,
-            cutoff_date=cutoff,
-            feature_cols=feature_cols,
-            start_date=spec.train_start_date or None,
-            end_date=getattr(spec, "train_end_date", "") or None,
-        )
-        dead_train_columns = _dead_train_feature_columns(train_df, feature_cols)
-        if dead_train_columns:
-            raise ValueError(
-                f"Training spec '{spec.name}' has dead train-time contract columns "
-                f"for dataset variant '{spec.dataset_variant}': {dead_train_columns}. "
-                "Refusing to train until the dataset or spec is fixed."
-            )
-        required_family_coverage = dict(getattr(spec, "required_feature_family_coverage_pct", {}) or {})
-        if required_family_coverage:
-            coverage_summary = compute_feature_family_coverage(
-                train_df,
-                feature_cols=feature_cols,
-                family_names=list(required_family_coverage.keys()),
-            )
-            coverage_failures = []
-            for family_name, min_pct in required_family_coverage.items():
-                family_summary = coverage_summary.get(family_name)
-                if family_summary is None:
-                    coverage_failures.append(
-                        f"{family_name}: no active feature columns found in the training frame"
-                    )
-                    continue
-                actual_pct = float(family_summary["coverage_pct"])
-                if actual_pct + 1e-9 < float(min_pct):
-                    coverage_failures.append(
-                        f"{family_name}: {actual_pct:.2f}% complete coverage "
-                        f"({family_summary['rows_complete']}/{family_summary['rows_total']}) "
-                        f"< required {float(min_pct):.2f}%"
-                    )
-            if coverage_failures:
-                joined = "; ".join(coverage_failures)
-                raise ValueError(
-                    f"Training spec '{spec.name}' failed required external-family coverage gates: {joined}"
-                )
         impute_strategy = spec.impute_strategy
         xgb_params = spec.xgb_params
         calibration_method = spec.calibration_method

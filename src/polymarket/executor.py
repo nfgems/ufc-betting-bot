@@ -49,6 +49,10 @@ from src.polymarket.tracker import BetLedger, _acquire_file_lock, _release_file_
 logger = logging.getLogger(__name__)
 
 
+class ExecutionGuardRejected(RuntimeError):
+    """A local pre-POST guard proved this prepared order was not submitted."""
+
+
 def _open_orders_failure_log_level(exc: Exception) -> int:
     """Keep wrapper-owned open-order outages from creating duplicate alerts."""
     return (
@@ -101,6 +105,8 @@ def _ledger_entry_blocks_new_order(entry: dict, dry_run: bool) -> bool:
 
 def _order_failure_is_warning(exc: Exception) -> bool:
     """Treat expected API/order rejections as warnings instead of hard errors."""
+    if isinstance(exc, ExecutionGuardRejected):
+        return True
     if is_uncertain_clob_order_submission_error(exc):
         return False
     msg = str(exc).lower()
@@ -1272,43 +1278,17 @@ class OrderExecutor:
         ledger_bet: dict,
         open_orders: list[dict],
     ) -> Optional[dict]:
+        """Attribute an account order only by its recorded durable order ID.
+
+        Manual replacements can have identical token, price and size. Those
+        fields do not prove that an order belongs to this ledger submission.
+        """
         order_id = str(ledger_bet.get("order_id", "") or "").strip()
-        if order_id:
-            for order in open_orders:
-                if _open_order_id(order) == order_id:
-                    return order
-
-        token_id = str(ledger_bet.get("token_id", "") or "").strip()
-        if not token_id:
+        if not order_id:
             return None
-
-        target_price = round(_safe_float(ledger_bet.get("price"), -1.0), 4)
-        target_shares = _safe_float(ledger_bet.get("shares"), 0.0)
-        candidates = []
         for order in open_orders:
-            if str(order.get("asset_id", "") or "").strip() != token_id:
-                continue
-            if round(_safe_float(order.get("price"), -1.0), 4) != target_price:
-                continue
-            candidates.append(order)
-
-        if len(candidates) == 1:
-            return candidates[0]
-
-        if len(candidates) > 1 and target_shares > 0:
-            size_matches = [
-                order
-                for order in candidates
-                if abs(
-                    _safe_float(
-                        order.get("original_size", order.get("size")),
-                        target_shares,
-                    ) - target_shares
-                ) <= 0.01
-            ]
-            if len(size_matches) == 1:
-                return size_matches[0]
-
+            if _open_order_id(order) == order_id:
+                return order
         return None
 
     def _order_has_partial_fill(self, ledger_bet: dict, open_order: dict) -> bool:
@@ -1328,17 +1308,13 @@ class OrderExecutor:
         if original_size <= 0:
             original_size = shares_fallback
 
-        size_matched = _safe_float(order.get("size_matched"), 0.0)
+        reported_matched = _safe_float(order.get("size_matched"), math.nan)
+        fill_quantity_confirmed = math.isfinite(reported_matched) and reported_matched >= 0
+        size_matched = reported_matched if fill_quantity_confirmed else 0.0
         status = _normalize_order_status(
             order.get("status") or order.get("order_status") or order.get("state")
         )
-        filledish = any(
-            token in status
-            for token in ("match", "fill", "execut", "complete")
-        )
-        if filledish and size_matched <= 0 and shares_fallback > 0:
-            size_matched = min(shares_fallback, original_size or shares_fallback)
-
+        # Requested shares and a status label are not actual fill evidence.
         if original_size > 0:
             size_matched = min(size_matched, original_size)
         size_remaining = max(original_size - size_matched, 0.0)
@@ -1348,6 +1324,7 @@ class OrderExecutor:
             "original_size": original_size,
             "size_matched": size_matched,
             "size_remaining": size_remaining,
+            "fill_quantity_confirmed": fill_quantity_confirmed,
         }
 
     def _order_status_is_resting(self, status: str) -> bool:
@@ -1358,11 +1335,34 @@ class OrderExecutor:
 
     def _lookup_closed_clob_order(self, ledger_bet: dict) -> tuple[bool, Optional[dict]]:
         order_id = str(ledger_bet.get("order_id", "") or "").strip()
-        if not order_id or not hasattr(self.clob, "get_order"):
+        if not order_id:
             return False, None
+        if not hasattr(self.clob, "get_order"):
+            return self._lookup_order_from_trade_history(ledger_bet, order_id)
 
         try:
-            return True, _unwrap_clob_order(self.clob.get_order(order_id))
+            order = _unwrap_clob_order(self.clob.get_order(order_id))
+            if not order:
+                return self._lookup_order_from_trade_history(ledger_bet, order_id)
+            returned_id = _open_order_id(order)
+            if returned_id and returned_id != order_id:
+                logger.warning(
+                    "Ignoring mismatched CLOB order response for %s: requested %s, got %s",
+                    ledger_bet.get("fighter", "?"),
+                    order_id,
+                    returned_id,
+                )
+                return False, None
+            # An order's limit price is not its execution price. Recover actual
+            # consideration from uniquely identified confirmed exchange trades.
+            metrics = self._order_fill_metrics(ledger_bet, order)
+            if metrics["size_matched"] > 0 and not self._order_status_is_resting(metrics["status"]):
+                found, trade_order = self._lookup_order_from_trade_history(ledger_bet, order_id)
+                if not found or not trade_order or not math.isclose(
+                        metrics["size_matched"], trade_order["size_matched"], abs_tol=1e-8):
+                    return False, None
+                return found, trade_order
+            return True, order
         except KeyError:
             return self._lookup_order_from_trade_history(ledger_bet, order_id)
         except Exception as e:
@@ -1410,10 +1410,30 @@ class OrderExecutor:
             )
             return False, None
 
-        matched_shares = 0.0
+        if not isinstance(trades, list):
+            return False, None
+        matched_shares, matched_amount = 0.0, 0.0
         saw_non_final_trade = False
-        for trade in trades or []:
+        seen_trade_ids: dict[str, dict] = {}
+        fill_trade_ids = []
+        for trade in trades:
+            if not isinstance(trade, dict):
+                return False, None
+            trade_id = str(trade.get("id") or "").strip()
+            if trade_id and trade_id in seen_trade_ids:
+                if seen_trade_ids[trade_id] != trade:
+                    return False, None
+                continue
+            if trade_id:
+                seen_trade_ids[trade_id] = trade
             trade_status = _normalize_order_status(trade.get("status"))
+            taker_order_id = str(trade.get("taker_order_id") or trade.get("takerOrderId") or "").strip()
+            owned_fills = []
+            if taker_order_id == order_id:
+                trade_token = str(trade.get("asset_id") or trade.get("assetId") or "").strip()
+                if not token_id or trade_token != token_id:
+                    return False, None
+                owned_fills.append((trade.get("size"), trade.get("price")))
             maker_orders = trade.get("maker_orders") or trade.get("makerOrders") or []
             for maker_order in maker_orders:
                 maker_order_id = str(
@@ -1424,6 +1444,10 @@ class OrderExecutor:
                 ).strip()
                 if maker_order_id != order_id:
                     continue
+                maker_token = str(maker_order.get("asset_id") or maker_order.get("assetId")
+                                  or trade.get("asset_id") or trade.get("assetId") or "").strip()
+                if not token_id or maker_token != token_id or taker_order_id == order_id:
+                    return False, None
                 trade_matched = _safe_float(
                     maker_order.get("matched_amount", maker_order.get("matchedAmount")),
                     _safe_float(
@@ -1431,17 +1455,29 @@ class OrderExecutor:
                         0.0,
                     ),
                 )
-                if any(token in trade_status for token in ("confirm", "complete", "success")):
-                    matched_shares += trade_matched
-                elif "fail" not in trade_status:
-                    saw_non_final_trade = True
+                owned_fills.append((trade_matched, maker_order.get("price", trade.get("price"))))
+            if not owned_fills:
+                continue
+            if not trade_id:
+                return False, None
+            if trade_status in {"confirmed", "complete", "completed", "success", "successful"}:
+                for quantity, observed_price in owned_fills:
+                    quantity, observed_price = _safe_float(quantity, math.nan), _safe_float(observed_price, math.nan)
+                    if (not math.isfinite(quantity) or quantity <= 0 or not math.isfinite(observed_price)
+                            or not 0 < observed_price < 1):
+                        return False, None
+                    matched_shares += quantity
+                    matched_amount += quantity * observed_price
+                fill_trade_ids.append(trade_id)
+            elif trade_status != "failed":
+                saw_non_final_trade = True
 
         if saw_non_final_trade:
             return False, None
 
         original_size = _safe_float(ledger_bet.get("shares"), 0.0)
-        if original_size > 0:
-            matched_shares = min(matched_shares, original_size)
+        if original_size <= 0 or matched_shares > original_size + 1e-8:
+            return False, None
 
         # Trade history can confirm fills, but an empty trade set does not prove
         # that an unfilled order was cancelled or disappeared from the book.
@@ -1452,9 +1488,13 @@ class OrderExecutor:
         return True, {
             "id": order_id,
             "status": status,
-            "price": ledger_bet.get("price"),
+            "price": matched_amount / matched_shares,
             "original_size": ledger_bet.get("shares"),
             "size_matched": matched_shares,
+            "actual_fill_amount": matched_amount,
+            "actual_fill_price": matched_amount / matched_shares,
+            "actual_fill_source": "clob_trade_history",
+            "actual_fill_trade_ids": fill_trade_ids,
         }
 
     def _inspect_limit_order_state(
@@ -1493,7 +1533,13 @@ class OrderExecutor:
                 "order_id": resolved_order_id,
                 "reason": None,
             }
-
+        if not self._order_terminal_state_is_confirmed(metrics):
+            return {
+                "state": "unknown",
+                "order": closed_order,
+                "order_id": resolved_order_id,
+                "reason": "terminal status or actual filled quantity unconfirmed",
+            }
         return {
             "state": "closed",
             "order": closed_order,
@@ -1515,7 +1561,7 @@ class OrderExecutor:
         status = metrics["status"]
         if self._order_status_is_resting(status):
             return None
-        if not status and metrics["size_remaining"] > 1e-9:
+        if not self._order_terminal_state_is_confirmed(metrics):
             return None
 
         return {
@@ -1524,6 +1570,18 @@ class OrderExecutor:
             "order_id": _open_order_id(closed_order) or fallback_order_id,
             "reason": status or "not_on_clob",
         }
+
+    @staticmethod
+    def _order_terminal_state_is_confirmed(metrics: dict) -> bool:
+        status = metrics["status"]
+        if not metrics["fill_quantity_confirmed"]:
+            return False
+        if any(token in status for token in ("cancel", "expire", "reject")):
+            return True
+        return metrics["size_matched"] > 0 and (
+            status == "confirmed_via_trades"
+            or any(token in status for token in ("match", "fill", "execut", "complete"))
+        )
 
     def _release_reserved_cash(
         self,
@@ -1868,6 +1926,8 @@ class OrderExecutor:
         reason: str = "",
         metadata: dict | None = None,
     ) -> dict:
+        from src.trading_controls import require_unpaused
+        require_unpaused()
         return self.ledger.add_bet(
             fighter=fighter,
             opponent=opponent,
@@ -1901,6 +1961,9 @@ class OrderExecutor:
         order_id: Optional[str] = None,
     ) -> None:
         target_ledger = self._ledger_for_entry(ledger_bet)
+        original_order_id = str(ledger_bet.get("order_id") or "").strip()
+        if order_id is not None and original_order_id and str(order_id) != original_order_id:
+            raise RuntimeError("CLOB response order id differs from the journalled signed order")
         updates = {
             "placement_state": placement_state,
             "submission_error": submission_error,
@@ -1915,6 +1978,28 @@ class OrderExecutor:
                 bet_id=int(ledger_bet["id"]),
                 action=f"update submission state to {placement_state}",
             )
+
+    def _record_prepared_order_id(self, ledger_bet: dict, order_id: str) -> None:
+        """Persist signed identity before the wrapper is allowed to POST."""
+        if not order_id:
+            raise RuntimeError("Signed order has no durable identity")
+        original = str(ledger_bet.get("order_id") or "").strip()
+        if original and original != order_id:
+            raise RuntimeError("Refusing to replace the original signed order identity")
+        result = self._ledger_for_entry(ledger_bet).update_bet_fields(
+            int(ledger_bet["id"]), order_id=order_id
+        )
+        if not result.ok:
+            raise RuntimeError("Order intent is no longer open; submission aborted")
+        ledger_bet["order_id"] = order_id
+
+    @staticmethod
+    def _require_unpaused() -> None:
+        from src.trading_controls import require_unpaused
+        try:
+            require_unpaused()
+        except RuntimeError as exc:
+            raise ExecutionGuardRejected(str(exc)) from exc
 
     def _cancel_submission_attempt(self, ledger_bet: dict, *, reason: str) -> None:
         target_ledger = self._ledger_for_entry(ledger_bet)
@@ -1953,50 +2038,33 @@ class OrderExecutor:
     ) -> dict:
         placement_state = str(ledger_bet.get("placement_state", "") or "").strip().lower()
         order_id = str(ledger_bet.get("order_id", "") or "").strip()
-        if self.dry_run or order_id or placement_state not in {"pending_submit", "unknown"}:
+        if self.dry_run or placement_state not in {"pending_submit", "unknown"}:
             return ledger_bet
-        if ledger_bet.get("order_type") not in _RESTING_LIMIT_ORDER_TYPES:
-            if placement_state == "pending_submit":
-                self._update_submission_state(
+        if order_id:
+            try:
+                if open_orders is None:
+                    open_orders = self.clob.get_open_orders()
+                state = self._inspect_limit_order_state(ledger_bet, open_orders)
+            except Exception as exc:
+                logger.warning("Cannot confirm original submission %s: %s", order_id, exc)
+                return ledger_bet
+            if state["state"] == "resting":
+                self._update_submission_state(ledger_bet, placement_state="submitted")
+            elif state["state"] == "closed":
+                # The failed/interrupting submit never charged the ephemeral
+                # bankroll. Account cash is refreshed by the ordinary cycle;
+                # releasing a reservation here would invent available money.
+                self._reconcile_closed_limit_order(
                     ledger_bet,
-                    placement_state="unknown",
-                    submission_error=ledger_bet.get("submission_error")
-                    or self._pending_submission_reason(
-                        str(ledger_bet.get("order_type", "order") or "order"),
-                        "could not confirm order on CLOB",
-                    ),
+                    reason=state["reason"],
+                    order_data=state["order"],
+                    ledger=self._ledger_for_entry(ledger_bet),
+                    release_reserved_cash=False,
                 )
             return self._reload_ledger_entry(ledger_bet)
-
-        try:
-            clob_open_orders = open_orders if open_orders is not None else self.clob.get_open_orders()
-        except Exception as exc:
-            logger.log(
-                _open_orders_failure_log_level(exc),
-                "Could not reconcile unresolved %s submission for %s: %s",
-                ledger_bet.get("order_type", "order"),
-                ledger_bet.get("fighter", "?"),
-                exc,
-            )
-            return ledger_bet
-
-        resolved_order = self._resolve_open_clob_order(ledger_bet, clob_open_orders)
-        if resolved_order is not None:
-            resolved_order_id = _open_order_id(resolved_order)
-            if resolved_order_id:
-                self._update_submission_state(
-                    ledger_bet,
-                    placement_state="submitted",
-                    submission_error=None,
-                    order_id=resolved_order_id,
-                )
-                logger.warning(
-                    "Recovered order id %s for %s from the CLOB after an unresolved submission",
-                    resolved_order_id,
-                    ledger_bet.get("fighter", "?"),
-                )
-            return self._reload_ledger_entry(ledger_bet)
-
+        # An account order with matching economics could be the owner's manual
+        # replacement. Without a durable ID, retain the unresolved ledger row
+        # so the existing duplicate gate blocks a new submission across restarts.
         if placement_state == "pending_submit":
             self._update_submission_state(
                 ledger_bet,
@@ -2004,7 +2072,7 @@ class OrderExecutor:
                 submission_error=ledger_bet.get("submission_error")
                 or self._pending_submission_reason(
                     str(ledger_bet.get("order_type", "order") or "order"),
-                    "could not match a resting order on the CLOB",
+                    "durable order id unavailable; account order ownership unconfirmed",
                 ),
             )
         return self._reload_ledger_entry(ledger_bet)
@@ -2065,15 +2133,29 @@ class OrderExecutor:
         order_id = str(ledger_bet.get("order_id", "") or "").strip() or None
 
         metrics = self._order_fill_metrics(ledger_bet, order_data or {})
+        if not self.dry_run and not self._order_terminal_state_is_confirmed(metrics):
+            logger.warning("Keeping unresolved order %s: actual terminal fill quantity unavailable", order_id)
+            return "unchanged"
         size_matched = round(metrics["size_matched"], 2)
 
         if size_matched > 1e-9:
-            filled_amount = round(size_matched * price, 2)
+            actual_amount = _safe_float((order_data or {}).get("actual_fill_amount"), math.nan)
+            observed_price = _safe_float((order_data or {}).get("actual_fill_price"), math.nan)
+            if not self.dry_run and (not math.isfinite(actual_amount) or actual_amount <= 0
+                    or not math.isfinite(observed_price) or not 0 < observed_price < 1
+                    or (order_data or {}).get("actual_fill_source") != "clob_trade_history"):
+                logger.warning("Keeping unresolved order %s: observed actual fill price unavailable", order_id)
+                return "unchanged"
+            filled_amount = round(actual_amount if math.isfinite(actual_amount) else size_matched * price, 2)
             refund_amount = max(round(amount - filled_amount, 2), 0.0)
 
             result = target_ledger.convert_limit_bet_to_position(
                 ledger_bet["id"],
                 filled_shares=size_matched,
+                filled_amount=filled_amount,
+                fill_price=(order_data or {}).get("actual_fill_price"),
+                fill_source=(order_data or {}).get("actual_fill_source"),
+                fill_trade_ids=(order_data or {}).get("actual_fill_trade_ids"),
                 cancel_reason=reason if refund_amount > 0 else None,
             )
             if not result.ok:
@@ -2892,6 +2974,7 @@ class OrderExecutor:
                 existing = [
                     b for b in reconciled
                     if b.get("market_id") == mid
+                    and b.get("status") == "open"
                     and _ledger_entry_blocks_new_order(b, self.dry_run)
                 ]
             if existing:
@@ -3485,6 +3568,8 @@ class OrderExecutor:
                     size=shares,
                     tick_size=tick_size,
                     neg_risk=bool(bet.get("neg_risk")),
+                    on_order_prepared=lambda order_id: self._record_prepared_order_id(pending_bet, order_id),
+                    pre_submit_check=self._require_unpaused,
                 )
                 self._invalidate_live_state_cache()
                 order_info["response"] = response
@@ -3572,6 +3657,8 @@ class OrderExecutor:
                     size=shares,
                     tick_size=tick_size,
                     neg_risk=bool(bet.get("neg_risk")),
+                    on_order_prepared=lambda order_id: self._record_prepared_order_id(pending_bet, order_id),
+                    pre_submit_check=self._require_unpaused,
                 )
                 self._invalidate_live_state_cache()
                 order_info["response"] = response
@@ -3782,6 +3869,7 @@ class OrderExecutor:
                 existing_market = [
                     b for b in reconciled
                     if b.get("market_id") == mid
+                    and b.get("status") == "open"
                     and _ledger_entry_blocks_new_order(b, self.dry_run)
                 ]
             if existing_market:
@@ -4019,6 +4107,8 @@ class OrderExecutor:
                     size=shares,
                     tick_size=tick_size,
                     neg_risk=bool(bet.get("neg_risk")),
+                    on_order_prepared=lambda order_id: self._record_prepared_order_id(pending_bet, order_id),
+                    pre_submit_check=self._require_unpaused,
                 )
                 self._invalidate_live_state_cache()
                 order_info["response"] = response
@@ -4430,12 +4520,17 @@ def assert_live_wallet_exposure_synced(
     *,
     import_ledger_path: Path | None = None,
 ) -> None:
-    """Reconcile live wallet exposure with the trader ledgers.
+    """Assert original ownership without adopting manual holdings or sales.
 
-    Instead of crashing on mismatch, this function:
-    1. Imports untracked wallet positions into the owning ledger (handles manual buys)
-    2. Marks ledger entries as cancelled when wallet position is gone (handles manual sells)
+    Market/token similarity cannot identify a new holding's owner, and absence
+    from the wallet cannot establish sale proceeds. Exact saved submission IDs
+    are recovered separately; mismatches preserve accounting and block entries.
     """
+    from src.live_control import LIVE_MODE_OFF, resolve_live_mode_from_env
+
+    if resolve_live_mode_from_env() == LIVE_MODE_OFF:
+        raise RuntimeError("Live wallet reconciliation is disabled while trading is off")
+
     if markets is None or markets.empty:
         raise RuntimeError("Cannot reconcile live wallet exposure without active market metadata")
 
@@ -4444,13 +4539,13 @@ def assert_live_wallet_exposure_synced(
         raise RuntimeError("Cannot reconcile live wallet exposure: market token mapping is empty")
 
     from src.polymarket.monitor import PositionMonitor
-    from src.polymarket.tracker import load_all_trader_ledgers
+    from src.refresh_live import original_accounting_ledgers
 
     client = clob_client or ClobClientWrapper()
-    ledger = load_all_trader_ledgers()
     ledger_open = [
-        bet for bet in ledger.get_open_bets()
-        if not bet.get("dry_run", True)
+        bet for ledger in original_accounting_ledgers()
+        for bet in ledger.get_open_bets(fresh=True)
+        if bet.get("dry_run") is False
     ]
     tracked_tokens = {
         str(bet.get("token_id", "") or "").strip()
@@ -4467,27 +4562,20 @@ def assert_live_wallet_exposure_synced(
         raise RuntimeError("Cannot reconcile live wallet positions: position API remained unavailable")
     live_position_tokens = {
         str(pos.get("asset", pos.get("token_id", "")) or "").strip()
-        for pos in live_positions
+        for pos in live_positions if _safe_float(pos.get("size"), 0.0) > 1e-9
     }
-
-    # 1. Import untracked positions (manual buys or prior-session bets)
-    imported = _reconcile_import_positions(
-        live_positions,
-        market_token_lookup,
-        tracked_tokens,
-        import_ledger_path=import_ledger_path,
-    )
-
-    # 2. Close ledger entries for positions gone from wallet (manual sells)
-    closed = _reconcile_closed_positions(
-        live_position_tokens, ledger_open,
-    )
-
-    if imported or closed:
-        logger.info(
-            "Wallet/ledger reconciliation: imported %d positions, closed %d stale entries",
-            imported, closed,
-        )
+    unowned = (live_position_tokens & set(market_token_lookup)) - tracked_tokens
+    if unowned:
+        raise RuntimeError("Supported-market wallet holding has no original owner evidence; new orders blocked")
+    confirmed_positions = [row for row in ledger_open
+                           if row.get("placement_state") not in {"pending_submit", "unknown", "submitted", "resting", "pending"}
+                           and (row.get("order_type") not in _RESTING_LIMIT_ORDER_TYPES
+                                or row.get("placement_state") == "filled")]
+    missing = [row for row in confirmed_positions
+               if str(row.get("token_id") or "") in market_token_lookup
+               and str(row.get("token_id") or "") not in live_position_tokens]
+    if missing:
+        raise RuntimeError("Original real position is absent from wallet; settlement/sale evidence required")
 
 
 def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None) -> int:

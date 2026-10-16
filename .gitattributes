@@ -2,3 +2,16 @@
 Dockerfile text eol=lf
 data/raw/ufc_fighters_profile_supplement.csv text eol=lf
 evidence/confirmation_claims/** -text
+
+# Preserve exact deployed bytes, including hash-bound mixed line endings.
+src/** -text
+scripts/** -text
+config/** -text
+tests/** -text
+release-source-manifest.json -text
+requirements.txt -text
+refresh_seed_manifest.json -text
+AGENTS.md -text
+docs/PRACTICAL_MODEL_DATA_RESET_LIVING_HANDOFF.md -text
+docs/MASTER_COMPLETION_AND_PRODUCTION_RELEASE_PLAN.md -text
+docs/REFRESH_TO_LIVE_BETTING_HANDOFF_2026-10-11.md -text

@@ -25,7 +25,16 @@ from src.data.io_utils import (
     write_json_atomically,
 )
 from src.data.live_monitor import event_identity_key
-from src.data.name_utils import normalize_cross_source_name, normalize_ufcstats_id
+from src.data.name_utils import (
+    CURRENT_UFCSTATS_ID_OVERRIDES,
+    normalize_cross_source_name,
+    normalize_person_name,
+    normalize_ufcstats_id,
+)
+from src.data.reviewed_roster_recovery import (
+    reviewed_mma_identity_binding,
+    reviewed_mma_identity_registry_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +73,8 @@ CANDIDATE_COLUMNS = (
     "first_seen_at_utc",
     "last_seen_at_utc",
     "input_fingerprint",
+    "current_member",
+    "membership_generation",
 )
 
 
@@ -515,6 +526,28 @@ def _create_immutable(path: Path, content: bytes) -> None:
             raise ValueError(f"immutable_forward_evidence_collision:{path}")
 
 
+def _canonical_response_metadata(value: object) -> dict | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("invalid_upcoming_response_metadata:not_an_object")
+    if not value:
+        return None
+    try:
+        encoded = json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        normalized = json.loads(encoded)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid_upcoming_response_metadata:not_json_safe") from exc
+    if not isinstance(normalized, dict):
+        raise ValueError("invalid_upcoming_response_metadata:not_an_object")
+    return normalized
+
+
 def _persist_source_responses(
     root: Path,
     responses: Sequence[Mapping[str, object]],
@@ -528,6 +561,9 @@ def _persist_source_responses(
         raw = body if isinstance(body, bytes) else str(body or "").encode("utf-8")
         if not url or not raw:
             continue
+        response_metadata = _canonical_response_metadata(
+            response.get("response_metadata")
+        )
         digest = hashlib.sha256(raw).hexdigest()
         raw_path = root / "raw" / "upcoming" / f"{digest}.html"
         _create_immutable(raw_path, raw)
@@ -537,14 +573,19 @@ def _persist_source_responses(
             "retrieval_time_utc": utc_text(response.get("retrieval_time_utc") or fallback_time),
             "raw_sha256": digest,
         }
-        facts.append(
-            {
-                **identity,
-                "response_id": stable_json_hash(identity),
-                "raw_path": raw_path.as_posix(),
-                "byte_count": len(raw),
-            }
-        )
+        if response_metadata is not None:
+            identity["response_metadata_sha256"] = stable_json_hash(
+                response_metadata
+            )
+        fact = {
+            **identity,
+            "response_id": stable_json_hash(identity),
+            "raw_path": raw_path.as_posix(),
+            "byte_count": len(raw),
+        }
+        if response_metadata is not None:
+            fact["response_metadata"] = response_metadata
+        facts.append(fact)
     append_jsonl_unique(root / "upcoming-response-ledger.jsonl", facts, id_field="response_id")
     return facts
 
@@ -600,7 +641,19 @@ def persist_upcoming_discovery(
         "targets": targets,
         "issues": issues,
         "raw_source_responses": [
-            {key: fact[key] for key in ("response_id", "request_url", "retrieval_time_utc", "raw_sha256", "raw_path")}
+            {
+                key: fact[key]
+                for key in (
+                    "response_id",
+                    "request_url",
+                    "retrieval_time_utc",
+                    "raw_sha256",
+                    "raw_path",
+                    "response_metadata_sha256",
+                    "response_metadata",
+                )
+                if key in fact
+            }
             for fact in raw_facts
         ],
     }
@@ -690,7 +743,21 @@ def _roster_facts(path: Path) -> tuple[dict[str, str], dict[str, set[str]]]:
     boundaries: dict[str, str] = {}
     ids_by_name: dict[str, set[str]] = defaultdict(set)
     for row in roster.to_dict("records"):
-        fighter_id = normalize_ufcstats_id(row.get("ufcstats_url")) or ""
+        recovery_binding = reviewed_mma_identity_binding(row)
+        if (
+            recovery_binding is None
+            and reviewed_mma_identity_registry_record(row) is not None
+        ):
+            continue
+        fighter_id = (
+            recovery_binding["stable_ufcstats_id"]
+            if recovery_binding is not None
+            else CURRENT_UFCSTATS_ID_OVERRIDES.get(
+                normalize_person_name(row.get("official_name"))
+            )
+            or normalize_ufcstats_id(row.get("ufcstats_url"))
+            or ""
+        )
         if not fighter_id:
             continue
         debut = _date_text(row.get("octagon_debut"))
@@ -874,7 +941,30 @@ def publish_pre_ufc_candidate_queue(
     roster_path: Path,
     storage_root: Path = DEFAULT_FORWARD_COLLECTION_ROOT,
     observed_at: object = None,
+    accepted_membership: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    membership_pin = None
+    if accepted_membership is not None:
+        from src.data.provider_membership import load_accepted_rosterwatch_membership
+        if Path(roster_path).resolve() != Path(accepted_membership["path"]).resolve():
+            raise ValueError("Queue roster differs from accepted membership")
+        members = load_accepted_rosterwatch_membership(
+            roster_path, expected_sha256=accepted_membership["sha256"],
+            expected_generation=accepted_membership["generation"],
+        )
+        member_ids = set(members["stable_ufcstats_id"]) - {""}
+        # Keep target shape and only clear nonmember nominations. Past queue
+        # records remain history; a provider/card cannot nominate new members.
+        filtered = []
+        for target in targets:
+            target = dict(target)
+            for side in ("a", "b"):
+                if normalize_ufcstats_id(target.get(f"fighter_{side}_id")) not in member_ids:
+                    target[f"fighter_{side}_id"] = ""
+                    target[f"fighter_{side}"] = ""
+            filtered.append(target)
+        targets = filtered
+        membership_pin = {key: accepted_membership[key] for key in ("sha256", "generation")}
     root = Path(storage_root)
     queue_path = root / "pre-ufc-candidate-queue.csv"
     roster_boundaries = load_roster_debut_boundaries(Path(roster_path))
@@ -890,15 +980,21 @@ def publish_pre_ufc_candidate_queue(
         known_ids_by_name=ids_by_name,
         observed_at=observed_at,
     )
+    if membership_pin is not None:
+        for row in rows:
+            row["current_member"] = row["fighter_id"] in member_ids
+            row["membership_generation"] = membership_pin["generation"]
     write_csv_atomically(pd.DataFrame(rows, columns=CANDIDATE_COLUMNS), queue_path)
     warnings = sorted({_present(issue.get("code")) for issue in issues})
     if not rows:
         warnings.append("pre_ufc_candidate_queue_empty")
     report = {
+        "accepted_membership": membership_pin,
         "schema_version": SCHEMA_VERSION,
         "generated_at_utc": utc_text(observed_at),
         "status": "incomplete" if warnings else "complete",
         "candidate_count": len(rows),
+        "current_member_candidate_count": (sum(row["current_member"] for row in rows) if membership_pin is not None else None),
         "issue_count": len(issues),
         "warning_codes": list(dict.fromkeys(warnings)),
         "queue_path": queue_path.as_posix(),

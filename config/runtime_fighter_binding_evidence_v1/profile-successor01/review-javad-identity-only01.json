@@ -1,0 +1,214 @@
+{
+  "schema": 1,
+  "created_utc": "2026-09-20T23:15:18.010912+00:00",
+  "reviewer": "saved_seven agent independent of source acquisition and root proposal",
+  "review_completed": true,
+  "identity_accepted": false,
+  "runtime_binding_eligible": false,
+  "decision": "WITHHOLD_IDENTITY_BRIDGE_UFCSTATS_BROWSER_CHALLENGE_AND_SELECTED_PROFILE_MISSING",
+  "name": "Javad Mahjoub",
+  "official_route": "https://www.ufc.com/athlete/javad-mahjoub",
+  "selected_id_lead": "e9f9add1481fc11c",
+  "source_evidence": [
+    {
+      "response_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-023\\response.html",
+        "bytes": 76009,
+        "sha256": "d22027e7a539fc5c66807fc891cf620e946481d4147dcea19b36a74ea0ccb15d"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-023\\receipt.json",
+        "bytes": 2012,
+        "sha256": "e8b0501fed1068c517c02ba648c51875aa00cab3b7bd1e6ecaa30846ce5da344"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan03-023\\intent.json",
+        "bytes": 2453,
+        "sha256": "79852f75207ab940b9ff3958db6830c595af5af441f2f7a0cb96a0d0cc7b6f89"
+      },
+      "transport": {
+        "requested_url": "https://www.ufc.com/athlete/javad-mahjoub",
+        "final_url": "https://www.ufc.com/athlete/javad-mahjoub",
+        "status_code": 200,
+        "transport_attempts": 1,
+        "redirect_chain": [],
+        "outcome": "complete_response"
+      }
+    },
+    {
+      "response_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan05-000\\response.html",
+        "bytes": 2998,
+        "sha256": "ccd26b41e40476858a8974364794db230cbd6b26444a107127f9e5224f16a398"
+      },
+      "receipt_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan05-000\\receipt.json",
+        "bytes": 1194,
+        "sha256": "10bc3bfea84db91f4caf59cbdc452a34759f6d4a0ff2f3fde3c4f969b0881485"
+      },
+      "intent_pin": {
+        "path": "C:\\Temp\\v9-remaining-identities-20260920-01\\acquired\\acquisition-plan05-000\\intent.json",
+        "bytes": 1660,
+        "sha256": "c6511695a9efcfef4a66253af9dbc4fce8ce4cdafd1e24e9f93d46f16d404208"
+      },
+      "transport": {
+        "requested_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+        "final_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+        "status_code": 200,
+        "transport_attempts": 1,
+        "redirect_chain": [],
+        "outcome": "complete_response"
+      }
+    }
+  ],
+  "official_profile_facts": {
+    "canonical": [
+      "https://www.ufc.com/athlete/javad-mahjoub"
+    ],
+    "h1": [
+      "Javad Mahjoub"
+    ],
+    "json_ld_person": {
+      "name": "Javad Mahjoub",
+      "url": "https://www.ufc.com/athlete/javad-mahjoub",
+      "birthDate": "1991-05-26"
+    }
+  },
+  "ufcstats_response_semantics": {
+    "http_status": 200,
+    "title": "Loading\u2026",
+    "visible_marker": "Checking your browser\u2026",
+    "contains_requested_fighter_name": false,
+    "contains_dob_field": false,
+    "response_is_profile": false,
+    "challenge_javascript_executed": false
+  },
+  "selected_input_pins": {
+    "roster": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\active_roster\\ufc_active_roster_official.csv",
+      "bytes": 358499,
+      "sha256": "a17cc92fdab735673128425b6330395c19a251d7c7b64e52d80431664f9f7270"
+    },
+    "accepted_roster": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\accepted_active_roster\\accepted-active-roster.csv",
+      "bytes": 357056,
+      "sha256": "f1e7d9fbd00e61a2104e66a3461ba672e180656d18fba18edb8c7d1110d57a73"
+    },
+    "profiles": {
+      "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\profiles\\ufc_fighters_scraped.csv",
+      "bytes": 673721,
+      "sha256": "9d054fb8c03209baedeb44d9e69ef577adef90d81cff38b0e10488c67c00b2eb"
+    }
+  },
+  "selected_records": {
+    "roster": [
+      {
+        "data_row_index": 609,
+        "row": {
+          "official_name": "Javad Mahjoub",
+          "official_athlete_url": "",
+          "nickname": "",
+          "division": "",
+          "record": "",
+          "slug_name": "javad mahjoub",
+          "profile_name": "",
+          "canonical_athlete_url": "",
+          "profile_division": "",
+          "profile_record": "",
+          "profile_status": "status_unknown",
+          "profile_source_tag": "",
+          "birthplace": "",
+          "age": "",
+          "height": "",
+          "reach": "",
+          "weight": "",
+          "octagon_debut": "",
+          "alternate_slug_names": "",
+          "official_profile_fetch_outcome": "",
+          "official_url_identity_valid": "",
+          "official_url_identity_status": "",
+          "official_url_identity_reason": "",
+          "ufcstats_name": "Javad Mahjoub",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+          "ufcstats_resolution": "rosterwatch_automatic_evidence",
+          "combat_sport": "mma",
+          "combat_sport_reason": "rosterwatch_authoritative_membership",
+          "combat_sport_profile_url": "",
+          "coverage_eligible": "False",
+          "active_roster_status_reason": "rosterwatch_authoritative_current",
+          "official_profile_cached_biography_fields": "",
+          "official_profile_biography_restoration_reason": "",
+          "active_roster_live_present": "True",
+          "active_roster_retained_from_previous": "False",
+          "active_roster_retained_at_utc": "",
+          "active_roster_first_missing_at_utc": "",
+          "active_roster_consecutive_missing_syncs": "0",
+          "active_roster_missing_from_live_reason": "",
+          "active_roster_sync_generation_id": "v9-proposed-bf40d42d2a8cce01e59d"
+        }
+      }
+    ],
+    "accepted_roster": [
+      {
+        "data_row_index": 603,
+        "row": {
+          "official_name": "Javad Mahjoub",
+          "official_athlete_url": "",
+          "nickname": "",
+          "division": "",
+          "record": "",
+          "slug_name": "javad mahjoub",
+          "profile_name": "",
+          "canonical_athlete_url": "",
+          "profile_division": "",
+          "profile_record": "",
+          "profile_status": "status_unknown",
+          "profile_source_tag": "",
+          "birthplace": "",
+          "age": "",
+          "height": "",
+          "reach": "",
+          "weight": "",
+          "octagon_debut": "",
+          "alternate_slug_names": "",
+          "official_profile_fetch_outcome": "",
+          "official_url_identity_valid": "",
+          "official_url_identity_status": "",
+          "official_url_identity_reason": "",
+          "ufcstats_name": "Javad Mahjoub",
+          "ufcstats_url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c",
+          "ufcstats_resolution": "rosterwatch_automatic_evidence",
+          "combat_sport": "mma",
+          "combat_sport_reason": "rosterwatch_authoritative_membership",
+          "combat_sport_profile_url": "",
+          "coverage_eligible": "False",
+          "active_roster_status_reason": "rosterwatch_authoritative_current",
+          "official_profile_cached_biography_fields": "",
+          "official_profile_biography_restoration_reason": "",
+          "active_roster_live_present": "True",
+          "active_roster_retained_from_previous": "False",
+          "active_roster_retained_at_utc": "",
+          "active_roster_first_missing_at_utc": "",
+          "active_roster_consecutive_missing_syncs": "0",
+          "active_roster_missing_from_live_reason": "",
+          "active_roster_sync_generation_id": "0f54b9c342a99cae24ca9c88a973d758"
+        }
+      }
+    ],
+    "profiles": []
+  },
+  "supplemental_profile_pin": {
+    "path": "C:\\Temp\\v9-release-preparation-20260919-01\\source\\release_payload\\inputs\\supplemental_profiles\\ufc_fighters_profile_supplement.csv",
+    "bytes": 26516,
+    "sha256": "acb0dea6194394dfc77741ffb2874a98491c599adef60b02ba7ba4736b54093b"
+  },
+  "remaining_gaps": [
+    "The official profile establishes exact current route/name and official DOB1991-05-26. No independent UFCStats profile DOB or dated opponent bridge has been obtained for the selected stable ID.",
+    "Selected primary and supplemental profile records are absent. Even a later accepted external identity bridge would not itself repair selected runtime data."
+  ],
+  "limits": [
+    "HTTP transport success is not semantic identity success.",
+    "Exact source attempt/body/receipt preserved; no retry, challenge execution, additional source request, data alteration or runtime binding performed.",
+    "No method coverage or current timing/freshness authority."
+  ]
+}

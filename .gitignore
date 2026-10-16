@@ -28,9 +28,6 @@ data/operator/gemini_research_cache.json
 # Model pickle files (binary, security risk)
 models/*.pkl
 models/**/*.pkl
-!models/xgboost_model.pkl
-!models/xgboost_no_odds_model.pkl
-!models/logistic_model.pkl
 
 # Kaggle intermediate downloads (reproducible via scripts/)
 data/raw/kaggle_odds/

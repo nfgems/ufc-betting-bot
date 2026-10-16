@@ -13,6 +13,7 @@ not deploy, restart a service, or modify repository canonical artifacts.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
@@ -275,6 +276,19 @@ def _require_manifest_layout(
     if payload.get("manifest_version") != 3 or payload.get("staging_schema_version") != 1:
         raise BundleInstallError("Source must be a rich manifest_version=3 staging bundle")
 
+    if "selected_candidate_schema_version" in payload:
+        from src.model.selected_release import validate_selected_release
+        from src.model.production_bundle import selected_release_trust_kwargs
+        try:
+            validate_selected_release(payload, root, **selected_release_trust_kwargs())
+            if require_core_paths:
+                for field, relative in _CORE_PATH_FIELDS.items():
+                    if Path(str(payload.get(field) or "")).resolve(strict=True) != (root / relative).resolve(strict=True):
+                        raise ValueError(f"Selected release core path is not confined: {field}")
+        except (OSError, TypeError, KeyError, ValueError) as exc:
+            raise BundleInstallError(f"Selected release layout is invalid: {exc}") from exc
+        return
+
     bundle_id = str(payload.get("bundle_id") or "")
     if not _BUNDLE_ID_RE.fullmatch(bundle_id):
         raise BundleInstallError(
@@ -369,6 +383,8 @@ def _require_manifest_layout(
 
 def _required_rich_source_files(payload: dict[str, Any], manifest_name: str) -> set[str]:
     """Return the exact portable file allowlist declared by a rich v3 bundle."""
+    if "selected_candidate_schema_version" in payload:
+        return {manifest_name, *(str(record["path"]) for record in payload["release_file_inventory"])}
     snapshot = payload["immutable_training_snapshot"]
     source = payload["source_identity"]
     audit = payload["training_invocation"]["independent_audit_snapshot"]
@@ -473,6 +489,11 @@ def _verify_declared_file_identity(
 
 def _verify_rich_file_identities(root: Path, payload: dict[str, Any]) -> None:
     """Generically bind every copied rich-v3 file without selection-specific constants."""
+    if "selected_candidate_schema_version" in payload:
+        from src.model.selected_release import validate_selected_release
+        from src.model.production_bundle import selected_release_trust_kwargs
+        validate_selected_release(payload, root, **selected_release_trust_kwargs())
+        return
     artifacts = payload["model_artifacts"]
     for label in _MODEL_FILENAMES:
         _verify_declared_file_identity(
@@ -1292,6 +1313,69 @@ def _record_for_release(target_root: Path, release_id: str, *, rich: bool) -> di
     }
 
 
+def _record_for_predecessor_evidence(
+    target_root: Path, release_id: str, *, rich: bool,
+) -> dict[str, Any]:
+    """Validate old rich-release bytes for preservation, never for execution.
+
+    Selected releases and legacy runtime captures retain their strict reader.
+    Only a nonselected rich-v3 predecessor may be retained without passing the
+    current model/data semantics. Its complete receipt/tree and declared core
+    identities still have to agree; a semantic defect cannot excuse corruption.
+    """
+    release_rel = Path(RELEASES_DIR_NAME) / release_id
+    unresolved = target_root / release_rel
+    _assert_path_components_no_links(unresolved, label="Predecessor release root")
+    root = unresolved.resolve(strict=True)
+    if not root.is_dir() or not root.is_relative_to(
+        (target_root / RELEASES_DIR_NAME).resolve(strict=True)
+    ):
+        raise BundleInstallError("Predecessor release path escapes its store")
+    _assert_no_symlinks(root, label="Predecessor evidence release")
+    receipt = _validate_receipt(root)
+    manifest_path = root / INSTALLED_MANIFEST_NAME
+    payload = _load_json_object(manifest_path, label="Predecessor evidence manifest")
+    if (
+        receipt.get("release_kind") != "rich_v3"
+        or "selected_candidate_schema_version" in payload
+    ):
+        return _record_for_release(target_root, release_id, rich=rich)
+    if payload.get("bundle_id") != receipt.get("bundle_id"):
+        raise BundleInstallError("Predecessor manifest and receipt bundle_id disagree")
+    _require_manifest_layout(root, payload)
+    if Path(str(payload.get("rich_release_root") or "")).resolve(strict=True) != root:
+        raise BundleInstallError("Predecessor rich_release_root is not its immutable root")
+    for role, field in (
+        ("primary", "model_sha256"),
+        ("no_odds", "no_odds_model_sha256"),
+        ("logistic", "logistic_model_sha256"),
+    ):
+        expected = payload.get(field)
+        if not isinstance(expected, str) or not _SHA256_RE.fullmatch(expected):
+            raise BundleInstallError(f"Predecessor {role} model fingerprint is invalid")
+        if _sha256_file(root / "models" / _MODEL_FILENAMES[role]) != expected:
+            raise BundleInstallError(f"Predecessor {role} model bytes differ from manifest")
+    _require_lookup_identity(
+        _lookup_identity(root / "processed"),
+        {
+            "fights_sha256": payload.get("processed_fights_sha256"),
+            "features_sha256": payload.get("processed_features_sha256"),
+            "fights_bytes": payload.get("processed_fights_bytes"),
+            "features_bytes": payload.get("processed_features_bytes"),
+        },
+        label="Predecessor immutable seed",
+    )
+    return {
+        "release_id": root.name,
+        "bundle_id": payload["bundle_id"],
+        "manifest_sha256": _sha256_file(manifest_path),
+        "receipt_sha256": _sha256_file(root / RECEIPT_NAME),
+        "tree_aggregate_sha256": receipt["tree_inventory"]["aggregate_sha256"],
+        "release_path": release_rel.as_posix(),
+        "manifest_path": (release_rel / INSTALLED_MANIFEST_NAME).as_posix(),
+    }
+
+
 def _lookup_seed_fields_for_release(
     target_root: Path,
     release_record: Mapping[str, object],
@@ -1769,12 +1853,31 @@ def _validate_record(
     label: str,
     expected_lookup_role: str,
 ) -> dict[str, Any]:
+    return _validate_record_with_reader(
+        target_root, record, label=label, expected_lookup_role=expected_lookup_role,
+        release_reader=_record_for_release,
+    )
+
+
+def _validate_predecessor_evidence_record(
+    target_root: Path, record: object, *, label: str, expected_lookup_role: str,
+) -> dict[str, Any]:
+    return _validate_record_with_reader(
+        target_root, record, label=label, expected_lookup_role=expected_lookup_role,
+        release_reader=_record_for_predecessor_evidence,
+    )
+
+
+def _validate_record_with_reader(
+    target_root: Path, record: object, *, label: str, expected_lookup_role: str,
+    release_reader,
+) -> dict[str, Any]:
     if not isinstance(record, dict):
         raise BundleInstallError(f"{label} release pointer is not an object")
     release_id = str(record.get("release_id") or "")
     if not release_id or Path(release_id).name != release_id:
         raise BundleInstallError(f"{label} release id is unsafe")
-    actual_core = _record_for_release(target_root, release_id, rich=False)
+    actual_core = release_reader(target_root, release_id, rich=False)
     lookup_root = _lookup_root_from_record(target_root, record)
     actual = {
         **actual_core,
@@ -1857,6 +1960,23 @@ def _validate_record(
 
 
 def _read_validated_state(target_root: Path, *, required: bool) -> dict[str, Any] | None:
+    return _read_state_with_record_validator(
+        target_root, required=required, record_validator=_validate_record,
+    )
+
+
+def _read_selected_predecessor_state(target_root: Path) -> dict[str, Any]:
+    """Read preservation-only state for the selected paused handover."""
+    state = _read_state_with_record_validator(
+        target_root, required=True, record_validator=_validate_predecessor_evidence_record,
+    )
+    assert state is not None
+    return state
+
+
+def _read_state_with_record_validator(
+    target_root: Path, *, required: bool, record_validator,
+) -> dict[str, Any] | None:
     state_path = target_root / STATE_NAME
     if not state_path.exists():
         if required:
@@ -1865,7 +1985,7 @@ def _read_validated_state(target_root: Path, *, required: bool) -> dict[str, Any
     state = _load_json_object(state_path, label="Active bundle state")
     if state.get("schema_version") != STATE_SCHEMA_VERSION:
         raise BundleInstallError("Unsupported active bundle state schema")
-    active = _validate_record(
+    active = record_validator(
         target_root,
         state.get("active"),
         label="Active",
@@ -1874,7 +1994,7 @@ def _read_validated_state(target_root: Path, *, required: bool) -> dict[str, Any
     rollback_raw = state.get("rollback")
     rollback = None
     if rollback_raw is not None:
-        rollback = _validate_record(
+        rollback = record_validator(
             target_root,
             rollback_raw,
             label="Rollback",
@@ -2180,6 +2300,209 @@ def _require_candidate_predecessor(
     return approved_identity
 
 
+def _predecessor_identity_assessment(target: Path, state: dict[str, Any]) -> dict[str, Any]:
+    """Record the real data-quality findings without admitting an old runtime.
+
+    The unchanged identity guard only reads CSVs; preserving rejected bytes
+    does not require unpickling old models or declaring full semantics valid.
+    """
+    from src.model.production_bundle import _processed_identity_integrity_guard
+
+    releases = {}
+    for role in ("active", "rollback"):
+        record = state.get(role)
+        if record is None:
+            continue
+        processed = target / record["release_path"] / "processed"
+        assessment = _processed_identity_integrity_guard(processed)
+        releases[role] = {
+            "release_id": record["release_id"],
+            "scope": "immutable_release_seed",
+            "processed_identity_ok": bool(assessment["ok"]),
+            "processed_identity_violations": list(assessment["violations"]),
+            "full_runtime_semantics": "not_claimed",
+            "execution_authorized": False,
+        }
+    return {"schema_version": 1, "purpose": "preservation_only", "releases": releases}
+
+
+def _selected_predecessor_capture_once(
+    target: Path, *, candidate_bundle_id: str, candidate_manifest_sha256: str,
+) -> dict[str, Any]:
+    """Read the exact existing state without requiring its old bot to be healthy."""
+    pointer = target / STATE_NAME
+    before = pointer.read_bytes()
+    state = _read_selected_predecessor_state(target)
+    assessment = _predecessor_identity_assessment(target, state)
+    active = state["active"]
+    manifest_path = target / active["manifest_path"]
+    manifest = _load_json_object(manifest_path, label="Captured predecessor manifest")
+    models = {role: manifest[field] for role, field in (
+        ("primary", "model_sha256"), ("no_odds", "no_odds_model_sha256"),
+        ("logistic", "logistic_model_sha256"),
+    )}
+    lookup = _lookup_root_from_record(target, active)
+    runtime_path = lookup / _RUNTIME_MANIFEST_NAME
+    runtime_record = None
+    processed = lookup
+    runtime_payload = None
+    if runtime_path.exists():
+        _assert_path_components_no_links(runtime_path, label="Captured runtime manifest")
+        runtime_bytes = runtime_path.read_bytes()
+        try:
+            runtime_payload = json.loads(runtime_bytes)
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise BundleInstallError("Captured runtime manifest is invalid JSON") from exc
+        if not isinstance(runtime_payload, dict):
+            raise BundleInstallError("Captured runtime manifest must be an object")
+        for role, field in (("primary", "model_sha256"), ("no_odds", "no_odds_model_sha256"),
+                            ("logistic", "logistic_model_sha256")):
+            if runtime_payload.get(field) != models[role]:
+                raise BundleInstallError("Captured runtime model identity differs from immutable release")
+        for field in ("model_path", "no_odds_model_path", "logistic_model_path"):
+            path = Path(str(runtime_payload.get(field) or ""))
+            if not path.is_absolute() or path.resolve(strict=True) != Path(manifest[field]).resolve(strict=True):
+                raise BundleInstallError("Captured runtime model path differs from immutable release")
+            _assert_path_components_no_links(path, label="Captured runtime model")
+        processed = Path(str(runtime_payload.get("processed_dir") or ""))
+        if not processed.is_absolute() or ".." in processed.parts:
+            raise BundleInstallError("Captured runtime processed directory must be explicit and confined")
+        _assert_path_components_no_links(processed, label="Captured runtime processed directory")
+        processed = processed.resolve(strict=True)
+        if not processed.is_relative_to(lookup):
+            raise BundleInstallError("Captured runtime processed directory escapes its active lookup")
+        runtime_record = {"sha256": hashlib.sha256(runtime_bytes).hexdigest(), "bytes": len(runtime_bytes)}
+    elif _is_link_like(runtime_path):
+        raise BundleInstallError("Captured runtime manifest cannot be a broken link")
+    identity = _lookup_identity(processed)
+    expected = _identity_from_seed_fields(_lookup_seed_fields_for_release(target, active))
+    if runtime_payload is not None:
+        expected = {"fights_sha256": runtime_payload.get("processed_fights_sha256"),
+                    "features_sha256": runtime_payload.get("processed_features_sha256"),
+                    "fights_bytes": runtime_payload.get("processed_fights_bytes"),
+                    "features_bytes": runtime_payload.get("processed_features_bytes")}
+    _require_lookup_identity(identity, expected, label="Captured current predecessor generation")
+    if pointer.read_bytes() != before:
+        raise BundleInstallError("Active pointer changed while capturing predecessor")
+    return {
+        "schema_version": 2, "kind": "selected_paused_predecessor_capture",
+        "candidate_bundle_id": candidate_bundle_id, "candidate_manifest_sha256": candidate_manifest_sha256,
+        "store_root": str(target), "active_state": state,
+        "active_pointer": {"sha256": hashlib.sha256(before).hexdigest(), "bytes": len(before),
+                           "base64": base64.b64encode(before).decode("ascii")},
+        "active_manifest": {"sha256": _sha256_file(manifest_path), "bytes": manifest_path.stat().st_size},
+        "model_sha256": models, "processed_dir": str(processed), "lookup_identity": identity,
+        "runtime_manifest": runtime_record,
+        "predecessor_validation": assessment,
+        "recovery_mode": "paused", "automatic_resume_permitted": False,
+    }
+
+
+def capture_selected_predecessor(
+    *, target_root: Path, candidate_bundle_id: str, candidate_manifest_sha256: str,
+) -> dict[str, Any]:
+    """Return stable, read-only predecessor evidence; do not save or lock the store."""
+    if not _BUNDLE_ID_RE.fullmatch(candidate_bundle_id) or not _SHA256_RE.fullmatch(candidate_manifest_sha256):
+        raise BundleInstallError("Exact candidate bundle ID and manifest SHA256 are required")
+    target = _safe_target_root(target_root)
+    _validate_store_top_level(target, allow_empty=False)
+    before = _selected_predecessor_capture_once(target, candidate_bundle_id=candidate_bundle_id,
+                                               candidate_manifest_sha256=candidate_manifest_sha256)
+    after = _selected_predecessor_capture_once(target, candidate_bundle_id=candidate_bundle_id,
+                                              candidate_manifest_sha256=candidate_manifest_sha256)
+    if before != after:
+        raise BundleInstallError("Predecessor changed during read-only capture")
+    return before
+
+
+def _require_selected_capture(
+    source: ValidatedSource, target: Path, capture_path: Path | None, expected_sha256: str | None,
+) -> tuple[dict[str, Any], bytes]:
+    policy = source.payload.get("previous_rollback_identity", {})
+    if policy.get("recovery_mode") != "paused" or policy.get("automatic_resume_permitted") is not False:
+        raise BundleInstallError("Selected promotion requires paused recovery without automatic old-system resume")
+    if capture_path is None or not isinstance(expected_sha256, str) or not _SHA256_RE.fullmatch(expected_sha256):
+        raise BundleInstallError("Selected promotion requires a SHA256-pinned predecessor capture")
+    path = Path(capture_path)
+    if not path.is_absolute() or not path.is_file():
+        raise BundleInstallError("Predecessor capture must be an explicit existing file")
+    _assert_path_components_no_links(path, label="Predecessor capture")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise BundleInstallError("Predecessor capture SHA256 mismatch")
+    try:
+        captured = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise BundleInstallError("Predecessor capture is invalid JSON") from exc
+    current = capture_selected_predecessor(target_root=target, candidate_bundle_id=source.bundle_id,
+                                          candidate_manifest_sha256=source.manifest_sha256)
+    if captured != current:
+        raise BundleInstallError("Predecessor capture is stale or does not match the exact candidate/store")
+    return captured, raw
+
+
+def _publish_selected_predecessor_evidence(
+    target: Path, source: ValidatedSource, capture_path: Path, capture_sha256: str,
+) -> Path:
+    """Seal an exact disconnected evidence copy; it is never an executable rollback."""
+    captured, capture_bytes = _require_selected_capture(source, target, capture_path, capture_sha256)
+    lookups = (target / LOOKUPS_DIR_NAME).resolve(strict=True)
+    final = lookups / ("s-capture-" + capture_sha256[:20])
+    pointer_bytes = base64.b64decode(captured["active_pointer"]["base64"], validate=True)
+    files = {*_LOOKUP_FILENAMES, STATE_NAME, "predecessor-capture.json"}
+    if captured["runtime_manifest"] is not None:
+        files.add(_RUNTIME_MANIFEST_NAME)
+
+    def verify(root: Path, *, sealed: bool = False) -> None:
+        _assert_no_symlinks(root, label="Paused predecessor evidence")
+        if {p.name for p in root.iterdir()} != files:
+            raise BundleInstallError("Paused predecessor evidence has an unexpected file set")
+        _require_lookup_identity(_lookup_identity(root), captured["lookup_identity"], label="Paused predecessor evidence")
+        if ((root / STATE_NAME).read_bytes() != pointer_bytes
+                or (root / "predecessor-capture.json").read_bytes() != capture_bytes):
+            raise BundleInstallError("Paused predecessor pointer/capture bytes changed")
+        if captured["runtime_manifest"] is not None:
+            runtime = root / _RUNTIME_MANIFEST_NAME
+            if {"sha256": _sha256_file(runtime), "bytes": runtime.stat().st_size} != captured["runtime_manifest"]:
+                raise BundleInstallError("Paused predecessor runtime bytes changed")
+        if sealed and os.name != "nt":
+            owner = (os.geteuid(), os.getegid())
+            if owner[0] == 100:
+                raise BundleInstallError("The application role cannot own predecessor evidence")
+            for path in (root, *root.iterdir()):
+                metadata = path.stat()
+                expected_mode = 0o555 if path.is_dir() else 0o444
+                if ((metadata.st_uid, metadata.st_gid) != owner
+                        or stat.S_IMODE(metadata.st_mode) != expected_mode):
+                    raise BundleInstallError("Paused predecessor evidence seal or installer ownership differs")
+
+    if final.exists():
+        verify(final, sealed=True)
+        return final
+    temporary = Path(tempfile.mkdtemp(prefix=".paused-evidence-", dir=lookups))
+    try:
+        for filename in _LOOKUP_FILENAMES:
+            shutil.copy2(Path(captured["processed_dir"]) / filename, temporary / filename)
+        (temporary / STATE_NAME).write_bytes(pointer_bytes)
+        (temporary / "predecessor-capture.json").write_bytes(capture_bytes)
+        if captured["runtime_manifest"] is not None:
+            current_lookup = _lookup_root_from_record(target, captured["active_state"]["active"])
+            shutil.copy2(current_lookup / _RUNTIME_MANIFEST_NAME, temporary / _RUNTIME_MANIFEST_NAME)
+        verify(temporary)
+        _require_selected_capture(source, target, capture_path, capture_sha256)
+        _fsync_tree(temporary)
+        _seal_immutable_release(temporary)
+        os.rename(temporary, final)
+        _fsync_directory(lookups)
+        verify(final, sealed=True)
+        return final
+    except Exception:
+        if temporary.exists():
+            _make_owned_tree_deletable(temporary)
+            shutil.rmtree(temporary)
+        raise
+
+
 def initialize_store(
     *,
     source_root: Path,
@@ -2332,6 +2655,8 @@ def promote_bundle(
     expected_active_bundle_id: str,
     expected_active_release_id: str,
     expected_active_manifest_sha256: str,
+    predecessor_capture: Path | None = None,
+    expected_predecessor_capture_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Atomically activate one release while retaining the complete current release."""
     source = _validate_source(
@@ -2341,7 +2666,12 @@ def promote_bundle(
     )
     target = _safe_target_root(target_root, source_root=source.root)
     _validate_store_top_level(target, allow_empty=False)
-    preflight = _read_validated_state(target, required=True)
+    selected_version = source.payload.get("selected_candidate_schema_version")
+    selected_handover = type(selected_version) is int and selected_version in (1, 2)
+    preflight = (
+        _read_selected_predecessor_state(target)
+        if selected_handover else _read_validated_state(target, required=True)
+    )
     assert preflight is not None
     _require_expected_release(
         preflight["active"],
@@ -2350,6 +2680,35 @@ def promote_bundle(
         expected_manifest_sha256=expected_active_manifest_sha256,
         label="Active predecessor",
     )
+    if selected_handover:
+        _require_selected_capture(source, target, predecessor_capture, expected_predecessor_capture_sha256)
+        assert predecessor_capture is not None and expected_predecessor_capture_sha256 is not None
+        if _release_id(source.bundle_id, source.manifest_sha256) == preflight["active"]["release_id"]:
+            raise BundleInstallError("Selected candidate is already active; use resolve without promotion")
+        with _store_lock(target):
+            current = _read_selected_predecessor_state(target)
+            if current != preflight:
+                raise BundleInstallError("Active state changed after selected promotion preflight")
+            _require_selected_capture(source, target, predecessor_capture, expected_predecessor_capture_sha256)
+            release = _publish_release(source, target_root=target)
+            seed_fields = _lookup_seed_fields_for_release(target, release)
+            new_active = _publish_active_lookup(
+                target, release, source_lookup_root=target / str(release["release_path"]) / "processed",
+                expected_identity=_identity_from_seed_fields(seed_fields),
+            )
+            evidence = _publish_selected_predecessor_evidence(
+                target, source, predecessor_capture, expected_predecessor_capture_sha256,
+            )
+            # The full old pointer (including its earlier rollback) is preserved
+            # exactly in sealed evidence. It is not an executable fallback.
+            _require_selected_capture(source, target, predecessor_capture, expected_predecessor_capture_sha256)
+            state = _state_payload(action="promote", active=new_active, rollback=None)
+            _atomic_write_json(target / STATE_NAME, state)
+        return {**resolve_store(target_root=target), "recovery_mode": "paused",
+                "automatic_resume_permitted": False, "predecessor_evidence_path": str(evidence),
+                "predecessor_capture_sha256": expected_predecessor_capture_sha256}
+    if predecessor_capture is not None or expected_predecessor_capture_sha256 is not None:
+        raise BundleInstallError("External predecessor capture is only supported for selected candidates")
     approved_predecessor_identity = _require_candidate_predecessor(
         source.payload,
         active_manifest_path=(target / preflight["active"]["manifest_path"]).resolve(
@@ -2569,6 +2928,15 @@ def _build_parser() -> argparse.ArgumentParser:
     promote.add_argument("--expected-active-bundle-id", required=True)
     promote.add_argument("--expected-active-release-id", required=True)
     promote.add_argument("--expected-active-manifest-sha256", required=True)
+    promote.add_argument("--predecessor-capture", type=Path)
+    promote.add_argument("--expected-predecessor-capture-sha256")
+
+    capture = subparsers.add_parser(
+        "capture-predecessor", help="Read exact selected-candidate predecessor evidence as JSON without store writes.",
+    )
+    capture.add_argument("--target-root", type=Path, required=True)
+    capture.add_argument("--candidate-bundle-id", required=True)
+    capture.add_argument("--candidate-manifest-sha256", required=True)
 
     rollback = subparsers.add_parser(
         "rollback",
@@ -2647,6 +3015,15 @@ def main(argv: list[str] | None = None) -> int:
             expected_active_bundle_id=args.expected_active_bundle_id,
             expected_active_release_id=args.expected_active_release_id,
             expected_active_manifest_sha256=args.expected_active_manifest_sha256,
+            predecessor_capture=args.predecessor_capture,
+            expected_predecessor_capture_sha256=args.expected_predecessor_capture_sha256,
+        )
+    elif args.command == "capture-predecessor":
+        if os.environ.get("UFC_STARTUP_MODE") != "paused":
+            raise BundleInstallError("Read-only predecessor capture CLI requires explicit UFC_STARTUP_MODE=paused")
+        result = capture_selected_predecessor(
+            target_root=args.target_root, candidate_bundle_id=args.candidate_bundle_id,
+            candidate_manifest_sha256=args.candidate_manifest_sha256,
         )
     elif args.command == "rollback":
         result = rollback_bundle(

@@ -7,10 +7,29 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+
+def resolve_startup_mode(environ=None) -> str:
+    """An explicit paused release must never fall through to ordinary startup."""
+    values = os.environ if environ is None else environ
+    mode = str(values.get("UFC_STARTUP_MODE", "running"))
+    if mode not in {"running", "paused"}:
+        raise ValueError("UFC_STARTUP_MODE must be exactly running or paused")
+    return mode
+
+
+UFC_STARTUP_MODE = resolve_startup_mode()
+if UFC_STARTUP_MODE == "running":
+    load_dotenv()
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
+
+# An explicit refresh namespace selects the final published data/model pair for
+# the trading consumer. It must never silently fall back to legacy data.
+UFC_INCREMENTAL_REFRESH_ROOT = str(os.getenv("UFC_INCREMENTAL_REFRESH_ROOT", "") or "").strip()
+UFC_INCREMENTAL_REFRESH_BASELINE = str(os.getenv("UFC_INCREMENTAL_REFRESH_BASELINE", "/app/release_payload") or "").strip()
+REFRESH_TRADING_OBSERVATION_MAX_AGE_SECONDS = 120
+REFRESH_TRADING_POLL_SECONDS = 300
 
 
 def _path_from_env(name: str, default: Path) -> Path:
@@ -23,6 +42,33 @@ def _same_path(left: Path, right: Path) -> bool:
         os.path.abspath(os.fspath(right))
     )
 
+
+
+def validate_rosterwatch_identity_review_path(
+    path: Path | str, *, raw_data_dir: Path | str
+) -> Path:
+    """Keep configurable review filenames inside the raw generation transaction."""
+    review = Path(path).resolve()
+    state_root = (Path(raw_data_dir) / "rosterwatch").resolve()
+    protected_names = {
+        "rosterwatch_state.json",
+        "rosterwatch_membership_ledger.csv",
+        "rosterwatch_legacy_reconciliation_ledger.csv",
+        "rosterwatch_recurring_reconciliation_ledger.csv",
+        "rosterwatch_owner_registry.csv",
+        "rosterwatch_delta_log.jsonl",
+    }
+    if (
+        not _same_path(review.parent, state_root)
+        or review.suffix.casefold() != ".json"
+        or review.name.casefold() in protected_names
+        or review.is_dir()
+    ):
+        raise ValueError(
+            "ROSTERWATCH_IDENTITY_REVIEW_PATH must be a separate .json file directly "
+            "inside RAW_DATA_DIR/rosterwatch and must not replace membership state or evidence"
+        )
+    return review
 
 def _normalize_hosted_logs_dir(
     logs_dir: Path,
@@ -203,6 +249,58 @@ LOGS_DIR = _logs_dir_from_env(
     hosted_volume_mount=_HOSTED_VOLUME_MOUNT,
 )
 
+# Owner-approved UFC data-update calendar.  The weekday/timezone values are
+# deliberately fixed policy rather than environment-tunable knobs; only the
+# durable state location and the eventual v7 promotion month vary by runtime.
+UFC_UPDATE_SCHEDULE_TIMEZONE = "America/New_York"
+UFC_UPDATE_TUESDAY_ISO_WEEKDAY = 2
+UFC_UPDATE_WEDNESDAY_ISO_WEEKDAY = 3
+UFC_UPDATE_SCHEDULE_LOCAL_HOUR = 11
+UFC_UPDATE_SCHEDULE_LOCAL_MINUTE = 0
+UFC_UPDATE_SCHEDULE_STATE_PATH = _path_from_env(
+    "UFC_UPDATE_SCHEDULE_STATE_PATH",
+    LOGS_DIR / "ufc_update_schedule_state.json",
+)
+UFC_UPDATE_CLAIM_STALE_AFTER_SECONDS = max(
+    _safe_int_env("UFC_UPDATE_CLAIM_STALE_AFTER_SECONDS", "21600"),
+    3600,
+)
+UFC_V7_PROMOTION_MONTH_UTC = str(
+    os.getenv("UFC_V7_PROMOTION_MONTH_UTC", "") or ""
+).strip()
+
+# Optional successor authority; no policy, approval index or production path is
+# selected by default. Byte counts/hashes must come from an independent approval.
+UFC_MONTHLY_POLICY_PATH = str(os.getenv("UFC_MONTHLY_POLICY_PATH", "") or "").strip()
+UFC_MONTHLY_POLICY_BYTES = str(os.getenv("UFC_MONTHLY_POLICY_BYTES", "") or "").strip()
+UFC_MONTHLY_POLICY_SHA256 = str(os.getenv("UFC_MONTHLY_POLICY_SHA256", "") or "").strip()
+UFC_MONTHLY_REQUEST_INDEX_PATH = str(os.getenv("UFC_MONTHLY_REQUEST_INDEX_PATH", "") or "").strip()
+UFC_MONTHLY_REQUEST_INDEX_BYTES = str(os.getenv("UFC_MONTHLY_REQUEST_INDEX_BYTES", "") or "").strip()
+UFC_MONTHLY_REQUEST_INDEX_SHA256 = str(os.getenv("UFC_MONTHLY_REQUEST_INDEX_SHA256", "") or "").strip()
+# Explicit independently accepted evaluator originals and separate saved/report
+# roots. Empty values select no producer and confer no execution authority.
+UFC_MONTHLY_EVALUATOR_TEMPLATE_PATH = str(os.getenv("UFC_MONTHLY_EVALUATOR_TEMPLATE_PATH", "") or "").strip()
+UFC_MONTHLY_EVALUATOR_TEMPLATE_BYTES = str(os.getenv("UFC_MONTHLY_EVALUATOR_TEMPLATE_BYTES", "") or "").strip()
+UFC_MONTHLY_EVALUATOR_TEMPLATE_SHA256 = str(os.getenv("UFC_MONTHLY_EVALUATOR_TEMPLATE_SHA256", "") or "").strip()
+UFC_MONTHLY_EVALUATOR_INPUT_ROOT = str(os.getenv("UFC_MONTHLY_EVALUATOR_INPUT_ROOT", "") or "").strip()
+UFC_MONTHLY_EVALUATOR_OUTPUT_ROOT = str(os.getenv("UFC_MONTHLY_EVALUATOR_OUTPUT_ROOT", "") or "").strip()
+
+# Roster Watch identity visibility and bounded recheck policy. Pending identity
+# never blocks a complete membership scan; it withholds the affected fight.
+PENDING_IDENTITY_MAX_AGE_DAYS = max(_safe_int_env("PENDING_IDENTITY_MAX_AGE_DAYS", "60"), 0)
+PENDING_IDENTITY_MAX_COUNT = max(_safe_int_env("PENDING_IDENTITY_MAX_COUNT", "10"), 0)
+ROSTERWATCH_IDENTITY_REQUEST_CAP = max(_safe_int_env("ROSTERWATCH_IDENTITY_REQUEST_CAP", "40"), 0)
+# An optional candidate-local capture manifest supplies deterministic identity
+# lookups. Acquisition is separately controlled; the matcher never opens HTTP.
+ROSTERWATCH_IDENTITY_CAPTURE_FILENAME = "rosterwatch_identity_captures.json"
+ROSTERWATCH_IDENTITY_REVIEW_PATH = validate_rosterwatch_identity_review_path(
+    _path_from_env(
+        "ROSTERWATCH_IDENTITY_REVIEW_PATH",
+        RAW_DATA_DIR / "rosterwatch" / "rosterwatch_identity_review.json",
+    ),
+    raw_data_dir=RAW_DATA_DIR,
+)
+
 # Persistent runtime retention. Railway volume storage is usage-billed, so all
 # high-frequency append-only files need explicit bounds.
 RUNTIME_LOG_MAX_BYTES = max(
@@ -214,6 +312,13 @@ EXECUTION_AUDIT_MAX_BYTES = max(
     _safe_int_env("EXECUTION_AUDIT_MAX_BYTES", str(100 * 1024 * 1024)),
     1,
 )
+# Independent binding pins for ordinary verified observation collection.
+# No current authority is invented when these are not explicitly configured.
+METHOD_ODDS_REVIEWED_BINDINGS_PATH = Path(os.getenv("METHOD_ODDS_REVIEWED_BINDINGS_PATH", str(RAW_DATA_DIR / "method_odds" / "reviewed_bindings.json")))
+METHOD_ODDS_REVIEWED_BINDINGS_SHA256 = os.getenv("METHOD_ODDS_REVIEWED_BINDINGS_SHA256", "").strip().lower()
+RANKINGS_REVIEWED_BINDINGS_PATH = Path(os.getenv("RANKINGS_REVIEWED_BINDINGS_PATH", str(RAW_DATA_DIR / "kaggle_rankings" / "reviewed_bindings.json")))
+RANKINGS_REVIEWED_BINDINGS_SHA256 = os.getenv("RANKINGS_REVIEWED_BINDINGS_SHA256", "").strip().lower()
+
 RANKINGS_SNAPSHOT_RETENTION_DAYS = max(
     _safe_int_env("RANKINGS_SNAPSHOT_RETENTION_DAYS", "400"),
     0,
@@ -312,7 +417,8 @@ BETSAPI_RAW_DIR = RAW_DATA_DIR / "betsapi"
 BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"
 BETSAPI_MMA_PROCESSED_DIR = PROCESSED_DATA_DIR / "betsapi" / "mma"
 
-# Ensure directories exist
+# A paused release reads immutable inputs and writes diagnostics to stdout.
+# In particular it must not initialize any existing mounted runtime state.
 _config_logger = _logging.getLogger(__name__)
 _required_dir_failures = []
 
@@ -325,6 +431,8 @@ for _d in [
     BETSAPI_MMA_RAW_DIR,
     BETSAPI_MMA_PROCESSED_DIR,
 ]:
+    if UFC_STARTUP_MODE == "paused":
+        continue
     try:
         _d.mkdir(parents=True, exist_ok=True)
     except OSError as _e:

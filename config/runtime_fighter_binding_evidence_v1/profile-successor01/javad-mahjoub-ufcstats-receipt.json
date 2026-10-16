@@ -1,0 +1,76 @@
+{
+  "at_utc": "2026-09-05T17:47:46.892981+00:00",
+  "challenge_detected": false,
+  "complete": true,
+  "completed_at_utc": "2026-09-05T17:47:47.141184+00:00",
+  "cumulative_ordinal": 38,
+  "error": null,
+  "event": "request_completed",
+  "form_sha256": null,
+  "host": "ufcstats.com",
+  "method": "GET",
+  "ordinal": 3,
+  "plan_id": "u36a1-source-acquisition-02",
+  "prior_sends": 35,
+  "raw": {
+    "bytes": 12491,
+    "path": "C:/Temp/u36a1/network/source02/capture/003-body.bin",
+    "sha256": "42323b152ad9ee556f3caab1e3ec38074031b75917af117e1708df11baf4f5ad"
+  },
+  "request_headers": {
+    "Accept": "text/html",
+    "Accept-Encoding": "identity",
+    "Connection": "close",
+    "Cookie": "_fmc=<redacted>",
+    "User-Agent": "UFCIdentityResearch/1.0 (bounded public-page identity acquisition)"
+  },
+  "response_headers": [
+    [
+      "Server",
+      "nginx/1.10.1"
+    ],
+    [
+      "Vary",
+      "Accept-Encoding"
+    ],
+    [
+      "Cache-Control",
+      "public, max-age=900"
+    ],
+    [
+      "Content-Type",
+      "text/html;charset=utf-8"
+    ],
+    [
+      "Date",
+      "Sat, 05 Sep 2026 17:45:26 GMT"
+    ],
+    [
+      "Status",
+      "200 OK"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "X-Frame-Options",
+      "SAMEORIGIN"
+    ],
+    [
+      "Content-Length",
+      "12491"
+    ]
+  ],
+  "semantic_evidence_eligible": true,
+  "status": 200,
+  "url": "http://ufcstats.com/fighter-details/e9f9add1481fc11c"
+}

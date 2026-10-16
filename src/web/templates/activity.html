@@ -391,6 +391,7 @@
     </div>
 
     <div class="container">
+        {% include "refresh_status.html" %}
         <div class="page-title">Bot Activity Log</div>
         <div class="page-subtitle">Recent activity from bot.log and live runtime alerts</div>
         <div class="page-status" id="refreshStatus">Refreshing activity…</div>
@@ -398,16 +399,16 @@
         <div class="alerts-panels is-hidden" id="alertsPanel">
             <div class="alerts-panel alerts-panel-errors">
                 <div class="alerts-panel-header">
-                    <span class="alerts-panel-title">Active Errors</span>
-                    <span class="alerts-panel-meta" id="errorAlertsPanelMeta">managed until recovery; others last 72h</span>
+                    <span class="alerts-panel-title">Recorded Errors</span>
+                    <span class="alerts-panel-meta" id="errorAlertsPanelMeta">Saved alerts; current runtime is shown above</span>
                     <span class="alerts-panel-count" id="errorAlertsPanelCount">0 errors</span>
                 </div>
                 <div class="alerts-panel-list" id="errorAlertsPanelList"></div>
             </div>
             <div class="alerts-panel alerts-panel-warnings">
                 <div class="alerts-panel-header">
-                    <span class="alerts-panel-title">Active Warnings</span>
-                    <span class="alerts-panel-meta" id="warningAlertsPanelMeta">managed until recovery; others last 72h</span>
+                    <span class="alerts-panel-title">Recorded Warnings</span>
+                    <span class="alerts-panel-meta" id="warningAlertsPanelMeta">Saved alerts; current runtime is shown above</span>
                     <span class="alerts-panel-count" id="warningAlertsPanelCount">0 warnings</span>
                 </div>
                 <div class="alerts-panel-list" id="warningAlertsPanelList"></div>
@@ -448,6 +449,7 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='dashboard-format.js') }}"></script>
     <script>
         const ACTIVITY_LIMIT = 1000;
         const ACTIVITY_PAGE_SIZE = 250;
@@ -500,7 +502,7 @@
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
         function formatClock(d) {
-            return d.toLocaleTimeString([], { hour12: false });
+            return UFCDisplay.formatTimestamp(d);
         }
 
         function sportLabel(sport) {
@@ -523,13 +525,13 @@
             const bits = [];
             if (lastSnapshot.host) bits.push(lastSnapshot.host);
             if (currentSportFilter === 'all') {
-                if (lastSnapshot.lastEntry) bits.push(`log through ${lastSnapshot.lastEntry}`);
+                if (lastSnapshot.lastEntry) bits.push(`log through ${UFCDisplay.formatTimestamp(lastSnapshot.lastEntry, {legacyUtc:true})}`);
             } else {
                 const scopedLastEntry = latestSelectedSportEntry();
-                if (scopedLastEntry) bits.push(`${sportLabel(currentSportFilter)} through ${scopedLastEntry}`);
-                if (lastSnapshot.logMtime) bits.push(`global log through ${lastSnapshot.logMtime}`);
+                if (scopedLastEntry) bits.push(`${sportLabel(currentSportFilter)} through ${UFCDisplay.formatTimestamp(scopedLastEntry, {legacyUtc:true})}`);
+                if (lastSnapshot.logMtime) bits.push(`global log through ${UFCDisplay.formatTimestamp(lastSnapshot.logMtime, {legacyUtc:true})}`);
             }
-            if (lastSnapshot.serverTime) bits.push(`server ${lastSnapshot.serverTime}`);
+            if (lastSnapshot.serverTime) bits.push(`server ${UFCDisplay.formatTimestamp(lastSnapshot.serverTime, {legacyUtc:true})}`);
             return bits.join(' • ');
         }
 
@@ -541,15 +543,15 @@
                 el.classList.remove('stale');
                 const freshBits = [`Live data from ${lastSnapshot.host}`];
                 if (currentSportFilter === 'all') {
-                    if (lastSnapshot.lastEntry) freshBits.push(`log through ${lastSnapshot.lastEntry}`);
+                    if (lastSnapshot.lastEntry) freshBits.push(`log through ${UFCDisplay.formatTimestamp(lastSnapshot.lastEntry, {legacyUtc:true})}`);
                 } else {
                     const scopedLastEntry = latestSelectedSportEntry();
                     if (scopedLastEntry) {
-                        freshBits.push(`${sportLabel(currentSportFilter)} through ${scopedLastEntry}`);
+                        freshBits.push(`${sportLabel(currentSportFilter)} through ${UFCDisplay.formatTimestamp(scopedLastEntry, {legacyUtc:true})}`);
                     } else {
                         freshBits.push(`no recent ${sportLabel(currentSportFilter).toLowerCase()} entries`);
                     }
-                    if (lastSnapshot.logMtime) freshBits.push(`global log through ${lastSnapshot.logMtime}`);
+                    if (lastSnapshot.logMtime) freshBits.push(`global log through ${UFCDisplay.formatTimestamp(lastSnapshot.logMtime, {legacyUtc:true})}`);
                 }
                 if (lastSuccessfulRefresh) freshBits.push(`refreshed ${formatClock(lastSuccessfulRefresh)}`);
                 el.textContent = freshBits.join(' • ');
@@ -628,7 +630,7 @@
                     ? '<span class="activity-note">Handled</span>'
                     : '';
                 return `<div class="activity-row">
-                    <span class="activity-timestamp">${esc(e.timestamp || '')}</span>
+                    <span class="activity-timestamp">${esc(UFCDisplay.formatTimestamp(e.timestamp, {legacyUtc:true,year:true}))}</span>
                     <span class="activity-level ${levelCls}">${esc(e.level || '?')}</span>
                     ${handled}
                     <span class="activity-source">${esc(e.source || '')}</span>
@@ -707,10 +709,10 @@
                     ? `<span class="alert-occurrence" title="Coalesced occurrences">×${esc(occurrences)}</span>`
                     : '';
                 const recoveryNote = recovered
-                    ? `<span class="alert-recovery-note">Recovered ${esc(e.recovered_at || '')}${e.recovery_message ? ` — ${esc(e.recovery_message)}` : ''}</span>`
+                    ? `<span class="alert-recovery-note">Recovered ${esc(UFCDisplay.formatTimestamp(e.recovered_at, {legacyUtc:true,year:true}))}${e.recovery_message ? ` — ${esc(e.recovery_message)}` : ''}</span>`
                     : '';
                 return `<div class="activity-row${recovered ? ' alert-recovered' : ''}">
-                    <span class="activity-timestamp">${esc(e.last_seen || e.timestamp || '')}</span>
+                    <span class="activity-timestamp">${esc(UFCDisplay.formatTimestamp(e.last_seen || e.timestamp, {legacyUtc:true,year:true}))}</span>
                     <span class="activity-level ${levelCls}">${esc(e.level || '?')}</span>
                     ${occurrenceBadge}
                     <span class="activity-source">${esc(e.source || '')}</span>
@@ -741,7 +743,7 @@
                 ? payload.recovered_entries
                 : entries.filter(e => String(e && e.status || '') === 'recovered');
             const retentionLabel = formatRetentionLabel(payload && payload.retention_hours);
-            const activeRetentionLabel = `managed until recovery; others ${retentionLabel}`;
+            const activeRetentionLabel = `Saved alerts (${retentionLabel}); older managed records retained`;
             if (errorMetaEl) errorMetaEl.textContent = activeRetentionLabel;
             if (warningMetaEl) warningMetaEl.textContent = activeRetentionLabel;
             if (recoveredMetaEl) recoveredMetaEl.textContent = `explicitly recovered, ${retentionLabel}`;
@@ -765,8 +767,8 @@
                 if (errorCountEl) errorCountEl.textContent = formatAlertCount(errors, 'error', 'errors');
                 if (warningCountEl) warningCountEl.textContent = formatAlertCount(warns, 'warning', 'warnings');
 
-                errorList.innerHTML = renderAlertRows(errorEntries, `No active errors in ${retentionLabel}`);
-                warningList.innerHTML = renderAlertRows(warningEntries, `No active warnings in ${retentionLabel}`);
+                errorList.innerHTML = renderAlertRows(errorEntries, `No recorded errors in ${retentionLabel}`);
+                warningList.innerHTML = renderAlertRows(warningEntries, `No recorded warnings in ${retentionLabel}`);
             }
 
             if (recoveredPanel && recoveredList) {
