@@ -2,15 +2,49 @@
   "schema_version": 1,
   "base_manifest_sha256": "e94810e7422da2bc958d8c1b0a9cdff93cbb41891c6acb71b48684282834f464",
   "status": "declared",
-  "description": "Add safe account-read failure diagnostics and mode-neutral warnings; retry and trading policies unchanged.",
+  "description": "Preserve account-read diagnostics; account for independently verified original entry cash debits and exact fill quantities, preserving gross records and settled history. Unknown cost postpones financial finalization. Betting strategy and sizing rules unchanged.",
   "files": {
+    "src/polymarket/client.py": {
+      "bytes": 89858,
+      "sha256": "8de3cfe50494e76d4080ed27a84b8ba9fd6ec72f0a1c65f29c50491e9b587741"
+    },
+    "src/polymarket/executor.py": {
+      "bytes": 190755,
+      "sha256": "42babc6a7c8c59b2a9cb497cc4c517993ee049ce62a2bbfb2d078a5282e5972a"
+    },
     "src/polymarket/readonly_account.py": {
       "bytes": 15025,
       "sha256": "08c9033cde1ff22e1c280373261cbfc1bef5676737d00a8c0cc6f12d78431f9f"
     },
+    "src/polymarket/tracker.py": {
+      "bytes": 57658,
+      "sha256": "c7a1c495614bf369381f1ea3a449805bd68ffc75ba58227b15956e687e9b91aa"
+    },
+    "src/refresh_live.py": {
+      "bytes": 22929,
+      "sha256": "84e13813305b5f0a2388404bfd9a5901a211ef10886088ea296fc2bddcfe6e6a"
+    },
     "src/trading_worker.py": {
       "bytes": 20085,
       "sha256": "46bd82fa81a797ac16af2f3d5c71e313795d27adc387f434610688f3a81f9a68"
+    },
+    "src/web/app.py": {
+      "bytes": 290073,
+      "sha256": "bcb9567dd1b52cfe605f926baf878802c5a1745d7f7195a68ec28e5343252fb7"
+    },
+    "src/web/refresh_dashboard.py": {
+      "bytes": 23144,
+      "sha256": "ea00e5894c78d81e0fd13d1f877a77fb7ec34466c4a58346a41ee3cd95bc2ac4"
+    },
+    "src/web/templates/dashboard.html": {
+      "bytes": 175547,
+      "sha256": "9372db72342c156f417bd25f6d6fc20eb4e11a7f4b1e54cbc0d40476690e946d"
+    }
+  },
+  "additions": {
+    "src/polymarket/fill_cashflow.py": {
+      "bytes": 8325,
+      "sha256": "0b38d85c45f8ac9e5f667ff22e05bcadecb435a5c08e2a39f98bf39f812d5042"
     }
   }
 }

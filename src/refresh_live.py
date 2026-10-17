@@ -356,6 +356,56 @@ def _maintain_original_accounting(clob):
                 reconciled += 1
     if unresolved:
         raise RuntimeError("Original real submission ownership/fill remains unresolved; new orders blocked")
+    # Original gross evidence remains unchanged. Cash cost is established only
+    # by exact exchange-trade and activity linkage before financial finalization.
+    from src.polymarket.fill_cashflow import (
+        CashDebitUnavailable, fill_binding, observed_cash_debit, verified_cash_debit,
+    )
+    cash_confirmed = cash_unknown = 0
+    for ledger in ledgers:
+        if ledger.path.resolve() not in enabled:
+            continue
+        executor.ledger = ledger
+        for row in ledger.get_open_bets(fresh=True):
+            if row.get("dry_run") is not False or not _has_actual_fill(row):
+                continue
+            try:
+                verified_cash_debit(row)
+                cash_confirmed += 1
+                continue
+            except CashDebitUnavailable:
+                pass
+            binding = fill_binding(row)
+            require_unpaused()
+            marked = ledger.record_cash_debit(row["id"], expected_binding=binding,
+                fields={"cash_debit_status": "unknown",
+                        "cash_debit_unknown_reason": "observed_activity_not_yet_confirmed"})
+            if not marked.ok:
+                cash_unknown += 1
+                continue
+            try:
+                placed = datetime.fromisoformat(str(row.get("placed_at") or "").replace("Z", "+00:00"))
+                if placed.tzinfo is None:
+                    raise CashDebitUnavailable("original_placement_time_unavailable")
+                found, order = executor._lookup_order_from_trade_history(row, str(row.get("order_id") or ""))
+                if not found or not order:
+                    raise CashDebitUnavailable("original_trade_set_unavailable")
+                activity = clob.get_trade_activity(start=max(0, int(placed.timestamp()) - 300),
+                                                   end=int(datetime.now(timezone.utc).timestamp()))
+                fields = observed_cash_debit(row, order, activity)
+            except Exception as exc:
+                fields = {"cash_debit_status": "unknown", "cash_debit_unknown_reason":
+                          str(exc) if isinstance(exc, CashDebitUnavailable)
+                          else "cash_debit_read_unavailable"}
+            require_unpaused()
+            saved = ledger.record_cash_debit(row["id"], expected_binding=binding, fields=fields)
+            try:
+                if not saved.ok:
+                    raise CashDebitUnavailable("cash_debit_enrichment_not_saved")
+                verified_cash_debit(saved.bet)
+                cash_confirmed += 1
+            except CashDebitUnavailable:
+                cash_unknown += 1
     class RealPositions:
         def __init__(self, ledger): self.ledger = ledger
         def get_open_bets(self, *, fresh=False):
@@ -369,4 +419,6 @@ def _maintain_original_accounting(clob):
             settled += auto_settle_from_polymarket(RealPositions(ledger), clob_client=clob)
     return {"original_ledger_count": len(ledgers), "recovered_original_submissions": reconciled,
             "settled_original_real_positions": settled, "unresolved_original_submissions": 0,
-            "manual_positions_adopted": 0}
+            "manual_positions_adopted": 0,
+            "original_open_cash_debits_confirmed": cash_confirmed,
+            "original_open_cash_debits_unknown": cash_unknown}

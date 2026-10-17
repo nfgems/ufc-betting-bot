@@ -38,6 +38,8 @@ _REDACT = frozenset({
     "wallet_address", "address", "proxy_target", "ip", "transactionHash", "transaction_hash",
     "orderId", "order_ids", "trade_id", "trade_ids", "taker_order_id", "maker_address", "taker_address",
     "owner_address", "txHash", "privateKey", "api_secret", "api_passphrase", "passphrase", "signature", "signedOrder",
+    "actual_fill_trade_ids", "actual_fill_trade_components", "actual_cash_debit_evidence",
+    "actual_cash_debit_evidence_sha256",
 })
 _REDACT_NORMALIZED = frozenset(re.sub(r"[^a-z0-9]", "", key.lower()) for key in _REDACT)
 

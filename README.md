@@ -12,7 +12,7 @@ ghcr.io/nfgems/ufc-betting-bot@sha256:6068bb7d8941e32dd4bf6a4f1c00fc9bc22148aa9c
 
 Railway service `ufc-bot` in project `ufc-betting-bot`, environment `production`, was verified online on October 16 with deployment `c48776b2-475a-45d3-bc85-1faca04d4c6c` and its persistent volume at `/app/logs`.
 
-The October 17 account-read diagnostics fix is declared in [source-change-manifest.json](source-change-manifest.json). Retry and trading policies are unchanged. Deployment status comes from the [CI production job and its release receipt](https://github.com/nfgems/ufc-betting-bot/actions/workflows/ci.yml), which records the tested Git commit, immutable image and successful Railway deployment.
+The account-read diagnostics and [observed entry-cost accounting](docs/FEE_ACCOUNTING.md) corrections are declared in [source-change-manifest.json](source-change-manifest.json). Betting strategy and sizing rules are unchanged; future accounting includes verified fees while preserving original fills and settled history. Deployment status comes from the [CI production job and its release receipt](https://github.com/nfgems/ufc-betting-bot/actions/workflows/ci.yml), which records the tested Git commit, immutable image and successful Railway deployment.
 
 Read [Current release](docs/CURRENT_RELEASE.md) for reproduction and preservation details, and [release-source-manifest.json](release-source-manifest.json) for the original deployed source hashes. The [canonical living handoff](docs/PRACTICAL_MODEL_DATA_RESET_LIVING_HANDOFF.md) records dated deployment evidence and remaining work; its newest entries come first.
 
@@ -60,7 +60,7 @@ docker build --network none -t ufc-saved-source:test .
 
 Authenticate to GHCR through your normal credential mechanism before building. Docker must be able to obtain the pinned base image; `--network none` disables networking for build steps, not registry access.
 
-The source verifier checks 285 repository files. The image verifier also checks the provenance record inherited from the base, for 286 runtime files. Preserve raw source/config bytes: line-ending conversion can invalidate these hashes. The Dockerfile copies versioned source over the pinned image and verifies it; it does not copy local models, credentials, betting ledgers, or datasets.
+The source verifier checks the 285 original repository files plus explicitly declared additions. The image verifier also checks the provenance record inherited from the base. Preserve raw source/config bytes: line-ending conversion can invalidate these hashes. The Dockerfile copies versioned source over the pinned image and verifies it; it does not copy local models, credentials, betting ledgers, or datasets.
 
 A clone plus `pip install` is not a complete reproduction of the accepted production model/data payload. Historical metadata under [models/](models/) is retained for reference; `models/current_production_model.json` describes the older August 4 bundle and is not the current combined service's accepted-model authority.
 

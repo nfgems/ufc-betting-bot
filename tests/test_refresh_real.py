@@ -137,18 +137,18 @@ def test_only_enabled_confirmed_real_fills_can_settle(monkeypatch, tmp_path):
     def settle(view, **kw):
         rows = view.get_open_bets(fresh=True)
         seen.extend(row["id"] for row in rows)
-        for row in rows:
-            view.settle_bet(row["id"], False)
-        return len(rows)
+        return sum(view.settle_bet(row["id"], False).ok for row in rows)
     monkeypatch.setattr(tracker, "auto_settle_from_polymarket", settle)
     result = refresh_live._maintain_original_accounting(SimpleNamespace())
     rows = tracker.BetLedger(enabled).bets
     assert seen == [real["id"]]
-    assert rows[0]["status"] == "lost" and rows[0]["result_pnl"] == -3.62
+    assert rows[0]["status"] == "open" and rows[0]["result_pnl"] is None
+    assert rows[0]["cash_debit_status"] == "unknown"
     assert rows[1]["id"] == paper["id"] and rows[1]["status"] == "open"
     assert rows[2]["id"] == legacy["id"] and rows[2]["status"] == "open"
     assert dormant.read_bytes() == before
-    assert result["settled_original_real_positions"] == 1
+    assert result["settled_original_real_positions"] == 0
+    assert result["original_open_cash_debits_unknown"] == 1
 
 
 def market(when):

@@ -3521,7 +3521,7 @@
 
                 // Render sparkline from P&L history
                 if (history.length > 2) {
-                    const sparkVals = history.slice(-30).map(h => h.total_pnl || 0);
+                    const sparkVals = history.slice(-30).map(h => finiteNumber(h.total_pnl)).filter(v => v !== null);
                     const sparkColor = (sparkVals[sparkVals.length - 1] || 0) >= 0 ? '#00d68f' : '#ff2d2d';
                     setTimeout(() => renderSparkline('sparkPnl', sparkVals, sparkColor), 50);
                 }

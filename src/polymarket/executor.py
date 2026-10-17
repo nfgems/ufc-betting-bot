@@ -1416,6 +1416,7 @@ class OrderExecutor:
         saw_non_final_trade = False
         seen_trade_ids: dict[str, dict] = {}
         fill_trade_ids = []
+        fill_components = []
         for trade in trades:
             if not isinstance(trade, dict):
                 return False, None
@@ -1469,14 +1470,30 @@ class OrderExecutor:
                     matched_shares += quantity
                     matched_amount += quantity * observed_price
                 fill_trade_ids.append(trade_id)
+                # Cashflow linkage retains exact strings, independent of the
+                # legacy rounded gross fill fields. Maker allocation is left
+                # unknown by the bounded cashflow resolver.
+                fill_components.append({
+                    "trade_id": trade_id, "order_id": order_id, "token_id": token_id,
+                    "role": "taker" if taker_order_id == order_id else "maker",
+                    "side": str(trade.get("side") or "").upper(),
+                    "shares": str(owned_fills[0][0]), "price": str(owned_fills[0][1]),
+                    "transaction_hash": str(trade.get("transaction_hash")
+                                            or trade.get("transactionHash") or "").lower(),
+                })
             elif trade_status != "failed":
                 saw_non_final_trade = True
 
         if saw_non_final_trade:
             return False, None
 
-        original_size = _safe_float(ledger_bet.get("shares"), 0.0)
-        if original_size <= 0 or matched_shares > original_size + 1e-8:
+        # Conversion retains the submitted size separately and rounds the
+        # position's display shares. Re-reading a fractional fill must compare
+        # against the original request, not that rounded holding quantity.
+        size_field = ("requested_shares" if ledger_bet.get("order_type") == "filled_limit"
+                      and "requested_shares" in ledger_bet else "shares")
+        original_size = _safe_float(ledger_bet.get(size_field), 0.0)
+        if not math.isfinite(original_size) or original_size <= 0 or matched_shares > original_size + 1e-8:
             return False, None
 
         # Trade history can confirm fills, but an empty trade set does not prove
@@ -1485,16 +1502,26 @@ class OrderExecutor:
             return False, None
 
         status = "confirmed_via_trades"
+        owned_transactions = {part["transaction_hash"] for part in fill_components}
+        activity_conflicts = any(
+            str(trade.get("id") or "") not in fill_trade_ids
+            and str(trade.get("asset_id") or trade.get("assetId") or "") == token_id
+            and str(trade.get("transaction_hash") or trade.get("transactionHash") or "").lower()
+                in owned_transactions
+            for trade in trades
+        )
         return True, {
             "id": order_id,
             "status": status,
             "price": matched_amount / matched_shares,
-            "original_size": ledger_bet.get("shares"),
+            "original_size": original_size,
             "size_matched": matched_shares,
             "actual_fill_amount": matched_amount,
             "actual_fill_price": matched_amount / matched_shares,
             "actual_fill_source": "clob_trade_history",
             "actual_fill_trade_ids": fill_trade_ids,
+            "actual_fill_trade_components": fill_components,
+            "actual_fill_activity_conflicts": activity_conflicts,
         }
 
     def _inspect_limit_order_state(

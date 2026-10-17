@@ -285,7 +285,10 @@ def test_exact_filled_quantity_recovers_position_and_keeps_original_ids(tmp_path
     assert recovered["placement_state"] == "filled"
     assert recovered["actual_filled_shares"] == 12.5
     assert recovered["actual_fill_amount"] == 6.25
-    assert BetLedger(executor.ledger.path).get_summary()["open_invested"] == 6.25
+    summary = BetLedger(executor.ledger.path).get_summary()
+    assert summary["open_invested"] is None
+    assert summary["open_cash_cost_unknown_count"] == 1
+    assert recovered["cash_debit_status"] == "unknown"
     assert executor.bankroll.available_cash == 500.0  # no invented reservation refund
 
 

@@ -1490,6 +1490,28 @@ class ClobClientWrapper:
         with _clob_transport_lock:
             return self._client.get_trades(params=params)
 
+    def get_trade_activity(self, *, start: int, end: int) -> list[dict]:
+        """Bounded complete read of observed account BUY debits; never a write."""
+        if type(start) is not int or type(end) is not int or not 0 <= start <= end:
+            raise ValueError("Invalid account activity time bounds")
+        self._ensure_client()
+        rows = []
+        for page in range(10):
+            batch = request_data_api_json(f"{POLYMARKET_DATA_API_URL}/activity", params={
+                "user": self.proxy_address, "start": start, "end": end,
+                "type": "TRADE", "side": "BUY", "limit": 500, "offset": page * 500,
+            }, timeout=15, attempts=1)
+            if not isinstance(batch, list) or len(batch) > 500:
+                raise ValueError("Account activity page was not a bounded list")
+            for row in batch:
+                if (not isinstance(row, dict) or type(row.get("timestamp")) is not int
+                        or not start <= row["timestamp"] <= end):
+                    raise ValueError("Account activity time window could not be confirmed")
+                rows.append(dict(row))
+            if len(batch) < 500:
+                return rows
+        raise ValueError("Account activity exceeded bounded complete-read limit")
+
     def get_balance_allowance(
         self,
         *,

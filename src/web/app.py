@@ -4534,6 +4534,9 @@ def api_trader_breakdown():
             "total_pnl": summary["total_pnl"],
             "total_wagered": summary["total_wagered"],
             "roi": summary["roi"],
+            "cash_cost_basis_complete": summary["cash_cost_basis_complete"],
+            "open_cash_cost_unknown_count": summary["open_cash_cost_unknown_count"],
+            "settled_cash_cost_unknown_count": summary["settled_cash_cost_unknown_count"],
         })
 
     return jsonify(breakdown)

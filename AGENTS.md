@@ -12,8 +12,8 @@ runtime hashes to establish what is live. Private handoffs stay local.
 # Current saved production source - October 16, 2026 (historical baseline)
 
 The saved production baseline is the immutable deployed 6068bb7d application
-release. This checkout also contains the separately declared account-read logging change
-declared in source-change-manifest.json. Read docs/CURRENT_RELEASE.md and both
+release. This checkout also contains separately declared account-read logging and
+observed entry-cost changes in source-change-manifest.json. Read docs/CURRENT_RELEASE.md and both
 source manifests first.
 Private operational handoffs named below are excluded from the current source
 tree; preserve their local copies in the owner's workspace. Earlier published

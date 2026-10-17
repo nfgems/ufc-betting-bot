@@ -3,9 +3,12 @@
 `release-source-manifest.json` preserves the exact October 16 deployed source
 hashes, immutable image `6068bb7d8941e32dd4bf6a4f1c00fc9bc22148aa9cb23a6c45d146d37fedab94`
 and deployment `c48776b2-475a-45d3-bc85-1faca04d4c6c`. That manifest is unchanged.
-The account-read diagnostics overlay is declared separately in
-`source-change-manifest.json`. It adds safe failure-stage/HTTP-status diagnostics
-and mode-neutral warnings; retry, sizing and trading policies remain unchanged.
+The account-read diagnostics and observed entry-cost overlays are declared
+separately in `source-change-manifest.json`. Diagnostics retain safe failure-stage
+and HTTP-status fields. Accounting uses independently matched cash debits, including
+observed entry charges, for original open real fills and future settlement.
+Original gross fill records and already-settled history remain intact. Missing or
+ambiguous cost delays financial finalization. See [Fee accounting](FEE_ACCOUNTING.md).
 
 A source manifest proves bytes, not rollout. The [CI production job](https://github.com/nfgems/ufc-betting-bot/actions/workflows/ci.yml)
 and its `railway-release-<commit>` artifact identify the commit, immutable image,
@@ -18,8 +21,8 @@ The production Dockerfile inherits the original private image, accepted
 model/data payload, seed and source-request provenance record. It copies only
 versioned source and writes build identity. It never copies local models,
 ledgers, credentials or live data. `python tools/verify_release_source.py`
-checks all 285 repository source files against the baseline plus declared
-overlay. Image verification checks all 286 runtime files, including inherited
+checks the 285 original repository source files plus explicitly declared additions
+against the baseline and overlay. Image verification also checks inherited
 provenance. The source status `declared_overlay` makes no deployment claim.
 
 Build locally with `docker build --network none -t ufc-saved-source:test .`
@@ -31,8 +34,9 @@ dependencies before publication and deployment. See [Deployment workflow](DEPLOY
 
 Historical source/tests, proposals and operational handoffs remain preserved
 in the owner's local archive branches and backups. They are not an approved
-release queue. The separate fee-accounting proposal remains unapplied; historical
-fee repair and model/data research are outside this automation release.
+release queue. The accepted fee-accounting correction is declared in this source;
+use release/runtime evidence above to establish deployment. Historical fee repair
+and model/data research remain outside this release.
 Private handoffs are excluded from the current tree; older published Git history
 still contains earlier notes. Preserve ignored datasets, original observations,
 authority/consumption records and closed experiments at their original paths.

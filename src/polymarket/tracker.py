@@ -15,12 +15,16 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
 from src.config import LOGS_DIR, INITIAL_BANKROLL
 from src.live_control import LIVE_MODE_OFF, resolve_live_mode_from_env
 from src.strategy.value import calculate_closing_line_value
+from src.polymarket.fill_cashflow import (
+    CashDebitUnavailable, fill_binding, verified_cash_debit, verified_fill_shares,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -403,7 +407,14 @@ def _has_confirmed_position(bet: dict) -> bool:
     return True
 
 
-def _settlement_amount(bet: dict) -> float:
+def _settlement_amount(bet: dict) -> Optional[float]:
+    requires_observed_cost = (bet.get("status") == "open" and _has_actual_fill(bet)
+                              and not _is_crypto_5m_bet(bet))
+    if ("cash_debit_status" in bet or requires_observed_cost) and bet.get("dry_run") is False:
+        try:
+            return float(verified_cash_debit(bet))
+        except CashDebitUnavailable:
+            return None
     return _first_positive_float(
         bet.get("actual_fill_amount"),
         bet.get("fill_amount"),
@@ -412,6 +423,8 @@ def _settlement_amount(bet: dict) -> float:
 
 
 def _settlement_shares(bet: dict) -> float:
+    if bet.get("cash_debit_status") == "confirmed" and bet.get("dry_run") is False:
+        return float(verified_fill_shares(bet))
     return _first_positive_float(
         bet.get("actual_filled_shares"),
         bet.get("filled_shares"),
@@ -437,15 +450,33 @@ def _build_summary_from_bets(bets: list[dict] | tuple[dict, ...]) -> dict:
     open_bets = _open_bets_from(bets)
     funded = _funded_open_bets(bets)
 
-    total_wagered = sum(_settlement_amount(b) for b in settled)
-    realized_pnl = sum(b["result_pnl"] for b in settled if b["result_pnl"] is not None)
+    settled_costs = [_settlement_amount(b) for b in settled]
+    total_wagered = sum(value for value in settled_costs if value is not None)
+    realized_pnl, settled_unknown = 0.0, 0
+    for bet, cost in zip(settled, settled_costs):
+        if "cash_debit_status" in bet and bet.get("dry_run") is False:
+            try:
+                exact = (verified_fill_shares(bet) if bet["status"] == "won"
+                         else Decimal(0)) - verified_cash_debit(bet)
+                if (bet.get("result_pnl_cost_source") != "observed_cash_debit"
+                        or str(exact) != bet.get("result_pnl_exact")):
+                    raise CashDebitUnavailable("settled_pnl_provenance_conflict")
+                realized_pnl += float(exact)
+            except CashDebitUnavailable:
+                settled_unknown += 1
+        elif bet.get("result_pnl") is not None:
+            realized_pnl += bet["result_pnl"]
     wins = sum(1 for b in settled if b["status"] == "won")
 
     # Only count funded (confirmed-fill) bets in exposure/unrealized P&L
     unrealized_pnl = 0.0
     open_invested = 0.0
+    unknown_costs = 0
     for bet in funded:
         invested = _settlement_amount(bet)
+        if invested is None:
+            unknown_costs += 1
+            continue
         shares = _settlement_shares(bet)
         open_invested += invested
         if bet["cur_price"] is not None:
@@ -465,12 +496,15 @@ def _build_summary_from_bets(bets: list[dict] | tuple[dict, ...]) -> dict:
         "wins": wins,
         "losses": len(settled) - wins,
         "win_rate": wins / len(settled) if settled else 0.0,
-        "total_wagered": total_wagered,
-        "realized_pnl": realized_pnl,
-        "unrealized_pnl": unrealized_pnl,
-        "total_pnl": realized_pnl + unrealized_pnl,
-        "roi": realized_pnl / total_wagered if total_wagered > 0 else 0.0,
-        "open_invested": open_invested,
+        "total_wagered": None if settled_unknown else total_wagered,
+        "realized_pnl": None if settled_unknown else realized_pnl,
+        "unrealized_pnl": None if unknown_costs else unrealized_pnl,
+        "total_pnl": None if unknown_costs or settled_unknown else realized_pnl + unrealized_pnl,
+        "roi": None if settled_unknown else realized_pnl / total_wagered if total_wagered > 0 else 0.0,
+        "open_invested": None if unknown_costs else open_invested,
+        "cash_cost_basis_complete": not (unknown_costs or settled_unknown),
+        "open_cash_cost_unknown_count": unknown_costs,
+        "settled_cash_cost_unknown_count": settled_unknown,
         "avg_clv": sum(valid_clv) / len(valid_clv) if valid_clv else None,
         "clv_sample_size": len(valid_clv),
         "pct_positive_clv": (
@@ -774,6 +808,8 @@ class BetLedger:
                 if bet.get("status") != "open":
                     return LedgerMutationResult(status="not_open", bet=dict(bet)), False
                 amount = _settlement_amount(bet)
+                if amount is None:
+                    return LedgerMutationResult(status="cash_debit_unknown", bet=dict(bet)), False
                 shares = _settlement_shares(bet)
                 bet["status"] = "won" if won else "lost"
                 bet["settled_at"] = datetime.now(timezone.utc).isoformat()
@@ -783,6 +819,11 @@ class BetLedger:
                     )  # shares pay out $1 each on win
                 else:
                     bet["result_pnl"] = -round(amount, 2)
+                if bet.get("cash_debit_status") == "confirmed" and bet.get("dry_run") is False:
+                    exact_cost = verified_cash_debit(bet)
+                    exact_pnl = (verified_fill_shares(bet) if won else Decimal(0)) - exact_cost
+                    bet["result_pnl_exact"] = str(exact_pnl)
+                    bet["result_pnl_cost_source"] = "observed_cash_debit"
                 return LedgerMutationResult(status="updated", bet=dict(bet)), True
             return LedgerMutationResult(status="not_found"), False
         result = self._mutate_locked(_settle)
@@ -795,6 +836,46 @@ class BetLedger:
             f"P&L: ${result.bet['result_pnl']:+.2f}"
         )
         return result
+
+    def record_cash_debit(self, bet_id: int, *, expected_binding: dict,
+                          fields: dict) -> LedgerMutationResult:
+        """Enrich one open original real fill under its existing mutation lock."""
+        def _record(bets):
+            for bet in bets:
+                if bet.get("id") != bet_id:
+                    continue
+                if bet.get("status") != "open" or bet.get("dry_run") is not False:
+                    return LedgerMutationResult(status="not_open_real", bet=dict(bet)), False
+                if fill_binding(bet) != expected_binding:
+                    return LedgerMutationResult(status="fill_changed", bet=dict(bet)), False
+                if bet.get("cash_debit_status") == "confirmed":
+                    try:
+                        verified_cash_debit(bet)
+                    except CashDebitUnavailable:
+                        return LedgerMutationResult(status="cash_debit_conflict", bet=dict(bet)), False
+                    if (fields.get("cash_debit_status") == "unknown"
+                            or fields.get("actual_cash_debit_evidence_sha256")
+                                == bet.get("actual_cash_debit_evidence_sha256")):
+                        return LedgerMutationResult(status="updated", bet=dict(bet)), False
+                    return LedgerMutationResult(status="cash_debit_conflict", bet=dict(bet)), False
+                allowed = {"cash_debit_status", "cash_debit_unknown_reason", "actual_cash_debit",
+                           "actual_additional_charge", "actual_gross_consideration_exact",
+                           "actual_filled_shares_exact",
+                           "actual_cash_debit_evidence", "actual_cash_debit_evidence_sha256"}
+                if set(fields) - allowed or fields.get("cash_debit_status") not in {"unknown", "confirmed"}:
+                    return LedgerMutationResult(status="invalid_cash_debit", bet=dict(bet)), False
+                if fields["cash_debit_status"] == "confirmed":
+                    try:
+                        verified_cash_debit({**bet, **fields})
+                    except CashDebitUnavailable:
+                        return LedgerMutationResult(status="invalid_cash_debit", bet=dict(bet)), False
+                changed = any(bet.get(key) != value for key, value in fields.items())
+                bet.update(fields)
+                if fields["cash_debit_status"] == "confirmed":
+                    bet.pop("cash_debit_unknown_reason", None)
+                return LedgerMutationResult(status="updated", bet=dict(bet)), changed
+            return LedgerMutationResult(status="not_found"), False
+        return self._mutate_locked(_record)
 
     def cancel_bet(
         self,
@@ -872,6 +953,9 @@ class BetLedger:
                 bet["actual_filled_shares"] = shares
                 bet["actual_fill_amount"] = amount
                 bet["actual_fill_source"] = fill_source or "clob_order_reconciliation"
+                if bet.get("dry_run") is False and not _is_crypto_5m_bet(bet):
+                    bet["cash_debit_status"] = "unknown"
+                    bet["cash_debit_unknown_reason"] = "observed_activity_not_yet_confirmed"
                 if fill_price is not None:
                     bet["actual_fill_price"] = float(fill_price)
                 if fill_trade_ids is not None:
@@ -1013,6 +1097,8 @@ def _clear_screen():
 
 def _format_pnl(value: float) -> str:
     """Format P&L with color indicators."""
+    if value is None:
+        return "unknown"
     if value > 0:
         return f"+${value:.2f}"
     elif value < 0:
@@ -1117,9 +1203,10 @@ def _print_dashboard(
     print(f"  Realized P&L:    {_format_pnl(summary['realized_pnl']):>12}")
     print(f"  Unrealized P&L:  {_format_pnl(summary['unrealized_pnl']):>12}")
     print(f"  Total P&L:       {_format_pnl(summary['total_pnl']):>12}")
-    if summary['total_wagered'] > 0:
+    if summary['total_wagered'] is not None and summary['total_wagered'] > 0:
         print(f"  ROI:             {summary['roi']:>11.1%}")
-    print(f"  Total wagered:   {'${:.2f}'.format(summary['total_wagered']):>12}")
+    wagered = "unknown" if summary['total_wagered'] is None else '${:.2f}'.format(summary['total_wagered'])
+    print(f"  Total wagered:   {wagered:>12}")
     print(f"  Win rate:        {summary['win_rate']:>11.1%}  "
           f"({summary['wins']}W / {summary['losses']}L)")
 
@@ -1197,6 +1284,7 @@ def _print_dashboard(
 
 def _print_pnl_trend(values: list[float]) -> None:
     """Print a simple ASCII P&L trend chart."""
+    values = [value for value in values if value is not None]
     if not values:
         return
 

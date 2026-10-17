@@ -153,6 +153,58 @@ def test_wallet_roi_never_uses_mixed_history_and_unknown_account_is_not_zero(das
         assert actual["total_pnl"] is actual["positions_value"] is actual["open_bets"] is None
 
 
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_fee_accounting_is_preserved_in_active_public_reads_without_private_evidence(dashboard, monkeypatch, confirmed):
+    from flask import jsonify
+    from src.polymarket.tracker import BetLedger
+    from src.polymarket.fill_cashflow import fill_binding, observed_cash_debit
+    _app, client, legacy, _public, logs = dashboard
+    ledger = BetLedger(logs / "bet_ledger_single.json")
+    row = ledger.add_bet(fighter="Fixture A", opponent="Fixture B", side="a", amount=1,
+        price=.5, shares=2, token_id="private-fee-token", market_id="fixture-market",
+        model_prob=.8, market_prob=.5, edge=.3, decimal_odds=2, dry_run=False,
+        order_type="filled_limit", placement_state="filled", order_id="private-fee-order")
+    ledger.update_bet_fields(row["id"], actual_fill_amount=1, actual_filled_shares=2,
+        actual_fill_price=.5, actual_fill_source="clob_trade_history",
+        actual_fill_trade_ids=["private-fee-trade"], cur_price=.5)
+    row = ledger.get_bets(fresh=True)[0]
+    if confirmed:
+        fields = observed_cash_debit(row, {"actual_fill_trade_components": [{
+            "trade_id":"private-fee-trade", "order_id":"private-fee-order", "token_id":"private-fee-token",
+            "role":"taker", "side":"BUY", "shares":"2", "price":".5", "transaction_hash":"private-fee-tx"}]},
+            [{"type":"TRADE", "side":"BUY", "asset":"private-fee-token", "transactionHash":"private-fee-tx",
+              "size":"2", "price":".5", "usdcSize":"1.02345", "timestamp":1792100000}])
+        assert ledger.record_cash_debit(row["id"], expected_binding=fill_binding(row), fields=fields).ok
+    pin = ledger.path.read_bytes(), ledger.path.stat().st_mtime_ns
+    monkeypatch.setattr(legacy, "api_summary", lambda: jsonify({"total_pnl":22,
+        "_pnl_source":"live", "_profile_source":"live"}))
+    monkeypatch.setattr(legacy, "api_profile_bets", lambda: jsonify({"bets":[], "summary":{
+        "total_pnl":22, "_pnl_source":"live", "_profile_source":"live"}}))
+    for url in ("/api/summary", "/api/profile-bets"):
+        payload = client.get(url).json
+        summary = payload if url.endswith("summary") else payload["summary"]
+        assert summary["total_pnl"] == 22  # Independent observed wallet total retained.
+        accounting = summary["original_real_ledger_summary"]
+        assert accounting["cash_cost_basis_complete"] is confirmed
+        if confirmed:
+            assert accounting["open_invested"] == 1.02345
+            assert accounting["total_pnl"] == pytest.approx(-.02345)
+        else:
+            assert accounting["open_invested"] is accounting["total_pnl"] is None
+            assert accounting["open_cash_cost_unknown_count"] == 1
+    breakdown = client.get("/api/trader-breakdown").json
+    single = next(item for item in breakdown if item["trader"] == "S")
+    assert single["cash_cost_basis_complete"] is confirmed
+    if not confirmed:
+        assert single["total_pnl"] is None
+    public_bets = client.get("/api/bets").data.decode()
+    assert "private-fee-" not in public_bets
+    assert "actual_cash_debit_evidence" not in public_bets
+    if confirmed:
+        assert '1.02345' in public_bets
+    assert (ledger.path.read_bytes(), ledger.path.stat().st_mtime_ns) == pin
+
+
 def test_unavailable_profile_keeps_history_separate_and_does_not_invent_account_pnl(dashboard, monkeypatch):
     from flask import jsonify
     _app, client, legacy, _public, _logs = dashboard

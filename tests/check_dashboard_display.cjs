@@ -46,6 +46,17 @@ function loadFunction(page, name) {
     vm.runInContext(tail.slice(0,next+1),context);
 }
 loadFunction('dashboard','renderSignificantActions');
+// Active shared-wallet cards retain the separately verified bot accounting;
+// legacy row arithmetic must not replace unknown costs with gross amounts/zero.
+context.SPORT_FILTER = 'ufc';
+loadFunction('dashboard','buildScopedSummary');
+for (const cost of [null, 1.02345]) {
+    const summary = {accounting_scope:'shared_wallet_with_original_real_ledger_history_separate',
+        total_pnl:22, original_real_ledger_summary:{open_invested:cost,
+        total_pnl:cost === null ? null : -.02345, cash_cost_basis_complete:cost !== null}};
+    assert.equal(context.buildScopedSummary(summary, [{status:'open',amount:1,shares:2,cur_price:.5}], {}), summary);
+    assert.equal(summary.original_real_ledger_summary.open_invested, cost);
+}
 context.renderSignificantActions([{timestamp:'2026-10-12T01:52:00+00:00',tag:'CHECK',message:'No new bets',color:'blue'}]);
 assert.match(elements.get('sigActions').innerHTML,/Oct 11.*9:52.*PM EDT/);
 assert.doesNotMatch(elements.get('sigActions').innerHTML,/T01:52/);

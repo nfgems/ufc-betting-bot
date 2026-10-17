@@ -122,3 +122,128 @@ def test_source_change_metadata_is_validated(release, override, message):
     _changes(release, **override)
     with pytest.raises(ValueError, match=message):
         verify(release)
+
+
+def test_explicit_addition_is_verified_without_changing_baseline(release):
+    baseline = (release / 'release-source-manifest.json').read_bytes()
+    new_source = b'def cashflow():\n    return None\n'
+    (release / 'src' / 'cashflow.py').write_bytes(new_source)
+    _changes(release, additions={'src/cashflow.py': _record(new_source)})
+    result = verify(release)
+    assert result['source_changes'] == ['src/cashflow.py', 'src/example.py']
+    assert result['source_additions'] == ['src/cashflow.py']
+    assert result['checked_files'] == 3
+    (release / 'private').mkdir()
+    (release / 'private' / 'provenance.json').write_bytes(b'private')
+    assert verify(release, image=True)['checked_files'] == 4
+    assert (release / 'release-source-manifest.json').read_bytes() == baseline
+
+
+def test_addition_only_overlay_is_supported(release):
+    new_source = b'new source\n'
+    (release / 'src' / 'cashflow.py').write_bytes(new_source)
+    _changes(release, files={}, additions={'src/cashflow.py': _record(new_source)})
+    (release / 'src' / 'example.py').write_bytes(b'original source\n')
+    assert verify(release)['source_changes'] == ['src/cashflow.py']
+
+
+@pytest.mark.parametrize('damage', ['missing', 'changed', 'undeclared_sibling'])
+def test_addition_does_not_weaken_exact_source_inventory(release, damage):
+    new_source = b'new source\n'
+    path = release / 'src' / 'cashflow.py'
+    path.write_bytes(new_source)
+    _changes(release, additions={'src/cashflow.py': _record(new_source)})
+    if damage == 'missing':
+        path.unlink()
+        message = 'cashflow.py: missing'
+    elif damage == 'changed':
+        path.write_bytes(b'changed without updating pin')
+        message = 'cashflow.py: bytes differ'
+    else:
+        (release / 'src' / 'another.py').write_bytes(new_source)
+        message = 'another.py: unexpected source file'
+    with pytest.raises(ValueError, match=message):
+        verify(release)
+
+
+@pytest.mark.parametrize('name', ['src/example.py', 'src/EXAMPLE.py', 'config/stable.json'])
+def test_additions_cannot_replace_or_alias_baseline_files(release, name):
+    _changes(release, additions={name: _record(b'new')})
+    with pytest.raises(ValueError, match='replaces or aliases an existing file'):
+        verify(release)
+
+
+def test_additions_cannot_alias_each_other_by_case(release):
+    _changes(release, additions={'src/New.py': _record(b'new'), 'src/new.py': _record(b'new')})
+    with pytest.raises(ValueError, match='replaces or aliases an existing file'):
+        verify(release)
+
+
+@pytest.mark.parametrize('name', [
+    'private/provenance.json', 'private/new.json', 'models/new.pkl', 'tests/new.py',
+    'requirements.txt', 'src',
+])
+def test_additions_are_limited_to_verified_runtime_directories(release, name):
+    _changes(release, additions={name: _record(b'new')})
+    with pytest.raises(ValueError, match='within src, scripts or config'):
+        verify(release)
+
+
+@pytest.mark.parametrize('name', [
+    '../new.py', '/src/new.py', 'src/../new.py', 'src\\new.py',
+    'src//new.py', 'src/./new.py', 'C:/src/new.py', 'src/new.py:stream',
+    'src/new.py.', 'src/new.py ',
+])
+def test_additions_reject_escaping_and_noncanonical_paths(release, name):
+    _changes(release, additions={name: _record(b'new')})
+    with pytest.raises(ValueError, match='path escapes or aliases'):
+        verify(release)
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_additions_reject_symlink_aliases(release, outside):
+    target = ((release.parent / (release.name + '-outside.py')) if outside
+              else (release / 'src' / 'example.py'))
+    if outside:
+        target.write_bytes(b'outside source')
+    link = release / 'src' / 'linked.py'
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip('This platform does not permit creating a test symlink')
+    _changes(release, additions={'src/linked.py': _record(target.read_bytes())})
+    with pytest.raises(ValueError, match='path escapes or aliases'):
+        verify(release)
+
+
+@pytest.mark.parametrize('record', [
+    {'bytes': True, 'sha256': 'a' * 64},
+    {'bytes': 1, 'sha256': 'invalid'},
+    {'bytes': 1, 'sha256': 'a' * 64, 'provided_by': 'pinned_base_image'},
+])
+def test_addition_hash_records_are_exact_and_repository_owned(release, record):
+    _changes(release, additions={'src/new.py': record})
+    with pytest.raises(ValueError, match='invalid source-change hash record'):
+        verify(release)
+
+
+def test_addition_cannot_replace_runtime_inherited_file(release):
+    baseline_path = release / 'release-source-manifest.json'
+    baseline = json.loads(baseline_path.read_bytes())
+    baseline['files']['config/inherited.json'] = _record(b'private', provided_by='pinned_base_image')
+    baseline_path.write_text(json.dumps(baseline), encoding='utf-8')
+    _changes(release, additions={'config/inherited.json': _record(b'changed')})
+    with pytest.raises(ValueError, match='replaces or aliases an existing file'):
+        verify(release)
+
+
+def test_undeclared_directory_symlink_cannot_hide_runtime_files(release):
+    target = release / 'hidden'
+    target.mkdir()
+    (target / 'hidden.py').write_bytes(b'not declared')
+    try:
+        (release / 'src' / 'hidden').symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip('This platform does not permit creating a test symlink')
+    with pytest.raises(ValueError, match='source symlink is not permitted'):
+        verify(release)
