@@ -10,3 +10,8 @@ COPY requirements.txt refresh_seed_manifest.json release-source-manifest.json /a
 COPY source-change-manifest.json /app/
 COPY tools/verify_release_source.py /tmp/verify_release_source.py
 RUN python /tmp/verify_release_source.py --root /app --image
+
+# Trace a tested release to Git without granting the public repo private-package access.
+ARG SOURCE_COMMIT=local-unpublished
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
+RUN SOURCE_COMMIT="$SOURCE_COMMIT" python -c 'import json,os,re; from pathlib import Path; commit=os.environ["SOURCE_COMMIT"]; assert commit=="local-unpublished" or re.fullmatch("[0-9a-f]{40}",commit); Path("/app/release-build.json").write_text(json.dumps({"git_commit":commit})+"\n")'

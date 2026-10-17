@@ -2,7 +2,7 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot, with data collection, live-compatible feature engineering, model evaluation, backtesting, and a Flask dashboard.
 
-## Current release — October 16, 2026
+## Saved baseline and deployment workflow — October 17, 2026
 
 This checkout preserves the source baseline from the deployed Railway image:
 
@@ -12,18 +12,18 @@ ghcr.io/nfgems/ufc-betting-bot@sha256:6068bb7d8941e32dd4bf6a4f1c00fc9bc22148aa9c
 
 Railway service `ufc-bot` in project `ufc-betting-bot`, environment `production`, was verified online on October 16 with deployment `c48776b2-475a-45d3-bc85-1faca04d4c6c` and its persistent volume at `/app/logs`.
 
-The October 17 account-read diagnostics fix is saved as an undeployed source change in [source-change-manifest.json](source-change-manifest.json). Retry and trading policies are unchanged.
+The October 17 account-read diagnostics fix is declared in [source-change-manifest.json](source-change-manifest.json). Retry and trading policies are unchanged. Deployment status comes from the [CI production job and its release receipt](https://github.com/nfgems/ufc-betting-bot/actions/workflows/ci.yml), which records the tested Git commit, immutable image and successful Railway deployment.
 
 Read [Current release](docs/CURRENT_RELEASE.md) for reproduction and preservation details, and [release-source-manifest.json](release-source-manifest.json) for the original deployed source hashes. The [canonical living handoff](docs/PRACTICAL_MODEL_DATA_RESET_LIVING_HANDOFF.md) records dated deployment evidence and remaining work; its newest entries come first.
 
-- Production starts `/bin/bash /app/refresh-entrypoint.sh`, which launches `src.combined_service` under the application account. One supervisor owns the refresh worker and one separate UFC trading consumer.
+- Railway starts `/bin/bash /app/entrypoint.sh` (byte-identical to `refresh-entrypoint.sh`), which launches `src.combined_service` under the application account. One supervisor owns the refresh worker and one separate UFC trading consumer.
 - The combined service reads an accepted data/prediction publication and verifies its model and data hashes. Models, accepted baseline data, seed, and one required provenance record are inherited from the pinned private image.
 - The October 11 activation enabled guarded real UFC trading. Subsequent dashboard and market-coverage releases preserved that configuration. BTC profiles and automatic model training/promotion remain disabled.
 - The October 16 coverage fix displays observed Polymarket quotes for the full published card, including saved-only predictions without current bookmaker odds. Missing bookmaker inputs stay missing; saved timestamps and execution eligibility remain distinct.
 - Dashboard probability gaps display as percentages, with explanatory help text. Current, saved, stale, and unavailable observations are labeled separately.
 - Deployment and readiness evidence does not establish future order fills, settlement, or profitability. The handoff retains the limits of each verification.
 
-A source commit or push does not authorize a Railway deployment. The live service is pinned to its image; source publication and runtime changes are separate operations.
+Pushes to `main` now run public checks, test the private production image offline, and deploy its immutable digest through the protected production job. Treat `main` as a release branch. PRs do not receive private image or Railway credentials. See [Deployment workflow](docs/DEPLOYMENT_WORKFLOW.md) for verification and rollback; a green public-check job alone does not prove deployment.
 
 ## Runtime layout
 

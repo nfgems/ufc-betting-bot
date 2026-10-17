@@ -16,6 +16,7 @@
 !legacy-entrypoint.sh
 !tools/
 !tools/verify_release_source.py
+!tools/deploy_railway_image.py
 !Dockerfile.ci
 !Dockerfile.ci.dockerignore
 **/__pycache__/

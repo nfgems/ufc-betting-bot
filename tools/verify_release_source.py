@@ -1,4 +1,4 @@
-"""Verify the deployed source baseline and declared, undeployed source changes."""
+"""Verify source bytes; deployment status requires a separate release receipt."""
 from __future__ import annotations
 import argparse
 import hashlib
@@ -15,8 +15,8 @@ def _source_changes(root: Path, manifest: dict, manifest_bytes: bytes) -> dict:
         raise ValueError('Source-change manifest requires schema_version 1')
     if changes.get('base_manifest_sha256') != hashlib.sha256(manifest_bytes).hexdigest():
         raise ValueError('Source-change manifest does not match the saved release manifest')
-    if changes.get('status') != 'undeployed':
-        raise ValueError('Source changes must be explicitly marked undeployed')
+    if changes.get('status') not in {'undeployed', 'declared'}:
+        raise ValueError('Source changes must be marked declared or undeployed, never deployed')
     if not isinstance(changes.get('description'), str) or not changes['description'].strip():
         raise ValueError('Source-change manifest requires a description')
     files = changes.get('files')
@@ -62,7 +62,7 @@ def verify(root: Path, *, image: bool = False) -> dict:
             continue
         data = path.read_bytes()
         if len(data) != record['bytes'] or hashlib.sha256(data).hexdigest() != record['sha256']:
-            declared_source = 'declared undeployed source' if name in changes else 'saved deployed release'
+            declared_source = 'declared source overlay' if name in changes else 'saved deployed release'
             errors.append(name + ': bytes differ from ' + declared_source)
         checked += 1
     for directory in ('src', 'scripts', 'config'):
@@ -75,7 +75,7 @@ def verify(root: Path, *, image: bool = False) -> dict:
         raise ValueError('\n'.join(errors))
     return {'passed': True, 'checked_files': checked, 'inherited_only': inherited,
             'reference_image': manifest['reference_image'],
-            'source_status': 'undeployed' if changes else 'saved_deployed_release',
+            'source_status': 'declared_overlay' if changes else 'saved_deployed_release',
             'source_changes': sorted(changes)}
 
 if __name__ == '__main__':

@@ -41,7 +41,7 @@ def _changes(root, **overrides):
         'schema_version': 1,
         'base_manifest_sha256': hashlib.sha256(
             (root / 'release-source-manifest.json').read_bytes()).hexdigest(),
-        'status': 'undeployed',
+        'status': 'declared',
         'description': 'Synthetic source change',
         'files': {'src/example.py': _record(data)},
     }
@@ -61,7 +61,7 @@ def test_declared_changes_preserve_baseline_and_private_image_checks(release):
     baseline = (release / 'release-source-manifest.json').read_bytes()
     _changes(release)
     result = verify(release)
-    assert result['source_status'] == 'undeployed'
+    assert result['source_status'] == 'declared_overlay'
     assert result['source_changes'] == ['src/example.py']
     assert result['reference_image'] == 'example.invalid/image@sha256:fixture'
     assert (release / 'release-source-manifest.json').read_bytes() == baseline
@@ -112,7 +112,7 @@ def test_source_changes_are_bound_to_original_manifest(release):
 
 @pytest.mark.parametrize('override, message', [
     ({'schema_version': 2}, 'schema_version 1'),
-    ({'status': 'deployed'}, 'explicitly marked undeployed'),
+    ({'status': 'deployed'}, 'marked declared or undeployed'),
     ({'description': ''}, 'requires a description'),
     ({'files': {}}, 'requires declared files'),
     ({'files': {'src/example.py': {'bytes': -1, 'sha256': 'invalid'}}}, 'invalid source-change hash'),

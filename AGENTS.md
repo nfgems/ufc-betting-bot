@@ -1,7 +1,18 @@
-# Current saved production source - October 16, 2026
+# Deployment workflow - October 17, 2026
+
+The owner authorized restoring GitHub main push-to-Railway releases. The CI
+production job deploys only after public checks and exact-image offline tests.
+Main is now a deployment branch: do not push unreviewed proposals, research or
+unrelated changes there. Pull requests retain public, credential-free checks.
+See docs/DEPLOYMENT_WORKFLOW.md for release evidence and code-only rollback.
+The original baseline manifest below stays immutable. Source overlays declare
+bytes, not deployment status; use the successful release receipt and actual
+runtime hashes to establish what is live. Private handoffs stay local.
+
+# Current saved production source - October 16, 2026 (historical baseline)
 
 The saved production baseline is the immutable deployed 6068bb7d application
-release. This checkout also contains an undeployed account-read logging change
+release. This checkout also contains the separately declared account-read logging change
 declared in source-change-manifest.json. Read docs/CURRENT_RELEASE.md and both
 source manifests first.
 Private operational handoffs named below are excluded from the current source
@@ -11,8 +22,8 @@ A public checkout does not authorize recreating private observations,
 running historical research, changing production or requesting new source data.
 Preserve the original release manifest, unchanged source/config bytes and
 immutable private image; declare authorized source changes separately.
-Source publication does not authorize a production deployment.
-The active startup is /bin/bash /app/refresh-entrypoint.sh.
+The restored main deployment workflow above supersedes the earlier publication-only boundary.
+Railway configures /bin/bash /app/entrypoint.sh; refresh-entrypoint.sh is byte-identical.
 The earlier project instructions follow for context.
 
 ---

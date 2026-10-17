@@ -32,3 +32,73 @@ jobs:
           node tests/verify_dashboard_history_template.js
       - name: Verify checks leave tracked files unchanged
         run: git diff --exit-code
+
+  production:
+    name: Deploy tested main to Railway
+    needs: saved-production-source
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'nfgems/ufc-betting-bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://ufc-bot-production.up.railway.app
+    concurrency:
+      group: ufc-railway-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      IMAGE_TAG: ghcr.io/nfgems/ufc-betting-bot:git-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install the pinned Railway CLI
+        run: npm install --global @railway/cli@5.23.3
+      - name: Check release identity and current production
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: python tools/deploy_railway_image.py prepare --commit "$GITHUB_SHA" --report "$RUNNER_TEMP/railway-release.json"
+      - name: Authenticate private registry in the production job only
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          test -n "$GHCR_TOKEN"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username nfgems --password-stdin
+      - name: Build the source-only production image
+        run: docker build --network none --build-arg "SOURCE_COMMIT=$GITHUB_SHA" -t "$IMAGE_TAG" .
+      - name: Verify installed source and test exact production dependencies offline
+        run: |
+          docker run --rm --network none --entrypoint python "$IMAGE_TAG" /tmp/verify_release_source.py --root /app --image
+          mkdir -p tests/.pytest-runtime
+          docker run --rm --network none --entrypoint python \
+            -e LIVE_TRADING_MODE=off -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/app \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/tests,dst=/app/tests,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/tools,dst=/app/tools,readonly" \
+            --tmpfs /app/tests/.pytest-runtime --tmpfs /app/logs --tmpfs /tmp -w /app "$IMAGE_TAG" \
+            -c "import compileall,pytest; assert compileall.compile_dir('src',quiet=1); raise SystemExit(pytest.main(['-q','-p','no:cacheprovider','tests']))"
+      - name: Publish tested image and resolve immutable digest
+        id: image
+        run: |
+          docker push "$IMAGE_TAG"
+          image=$(docker image inspect "$IMAGE_TAG" --format '{{index .RepoDigests 0}}')
+          [[ "$image" =~ ^ghcr.io/nfgems/ufc-betting-bot@sha256:[a-f0-9]{64}$ ]]
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: Remove registry login
+        if: always()
+        run: docker logout ghcr.io
+      - name: Deploy once and verify Railway activation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RELEASE_IMAGE: ${{ steps.image.outputs.image }}
+        run: python tools/deploy_railway_image.py deploy --commit "$GITHUB_SHA" --image "$RELEASE_IMAGE" --report "$RUNNER_TEMP/railway-release.json"
+      - name: Save release and rollback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: railway-release-${{ github.sha }}
+          path: ${{ runner.temp }}/railway-release.json
+          if-no-files-found: ignore
+          retention-days: 90

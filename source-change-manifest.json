@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "base_manifest_sha256": "e94810e7422da2bc958d8c1b0a9cdff93cbb41891c6acb71b48684282834f464",
-  "status": "undeployed",
+  "status": "declared",
   "description": "Add safe account-read failure diagnostics and mode-neutral warnings; retry and trading policies unchanged.",
   "files": {
     "src/polymarket/readonly_account.py": {
