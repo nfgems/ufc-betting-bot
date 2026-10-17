@@ -10,6 +10,7 @@ COPY config ./config
 COPY tests ./tests
 COPY entrypoint.sh refresh-entrypoint.sh legacy-entrypoint.sh ./
 COPY refresh_seed_manifest.json release-source-manifest.json ./
+COPY source-change-manifest.json ./
 COPY tools/verify_release_source.py ./tools/verify_release_source.py
 RUN python tools/verify_release_source.py
 ENV LIVE_TRADING_MODE=off PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/checks

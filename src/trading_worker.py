@@ -178,7 +178,8 @@ class TradingWorker:
                                         host="0.0.0.0", startup_source="refresh-consumer")
             startup_verified = True
         from src.polymarket.readonly_account import (ReadOnlyClobClient, inspect_account,
-                                                    inspect_original_accounting)
+                                                    inspect_original_accounting,
+                                                    account_read_diagnostics)
         from src.polymarket.executor import POLYMARKET_MIN_ORDER_USD
         from src.strategy.duo_trader import WalletBankrollBasis
         if self.client is None:
@@ -200,11 +201,14 @@ class TradingWorker:
             account_summary["read_only"] = True
         except Exception as exc:
             failures.append("account_read_unavailable")
+            diagnostics = account_read_diagnostics(exc)
             account_summary = {"connected": False, "cash_confirmed": False,
                                "positions_complete": False, "open_orders_complete": False,
-                               "empty_account_proved": False, "error_class": type(exc).__name__,
-                               "orders_disabled": True}
-            logger.warning("Orders-disabled account reads unavailable (%s)", type(exc).__name__)
+                               "empty_account_proved": False, **diagnostics,
+                               "read_only": True}
+            logger.warning("Account reads unavailable (stage=%s, error=%s, http_status=%s)",
+                           diagnostics["read_stage"], diagnostics["error_class"],
+                           diagnostics["http_status"] if diagnostics["http_status"] is not None else "unknown")
         try:
             accounting = accounting_reader(self.real_logs_dir, account)
         except Exception as exc:
@@ -242,7 +246,7 @@ class TradingWorker:
             result = {"status": "degraded", "reason": "market_or_prediction_cycle_unavailable",
                       "error_class": type(exc).__name__}
             failures.append("market_or_prediction_cycle_unavailable")
-            logger.warning("Orders-disabled monitoring cycle unavailable (%s)", type(exc).__name__)
+            logger.warning("Trading evaluation unavailable (%s)", type(exc).__name__)
         if not real and (result.get("trading_enabled") is True or result.get("orders_disabled") is False):
             raise RuntimeError("Orders-disabled cycle returned incompatible trading state")
         if not real and (result.get("trading_enabled") is not False or result.get("orders_disabled") is not True

@@ -1,4 +1,4 @@
-"""Strict account inspection for the orders-disabled refresh worker.
+"""Strict read-only account inspection for the guarded refresh worker.
 
 This adapter may derive an existing API key with the normal authenticated GET.
 It never creates credentials, signs/submits an order, cancels or redeems. The SDK
@@ -6,6 +6,7 @@ itself is wrapped with an explicit read allowlist as a second boundary.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
@@ -24,6 +25,44 @@ logger = logging.getLogger(__name__)
 
 class AccountReadUnavailable(RuntimeError):
     """A complete authenticated account observation could not be established."""
+
+
+class AccountReadFailure(AccountReadUnavailable):
+    """A failed snapshot stage with its original exception retained internally."""
+
+    def __init__(self, stage):
+        self.stage = stage
+        super().__init__("Account snapshot read unavailable")
+
+
+@contextmanager
+def _account_read_stage(stage):
+    try:
+        yield
+    except Exception as exc:
+        raise AccountReadFailure(stage) from exc
+
+
+def account_read_diagnostics(exc):
+    """Return fixed stage/class/status fields without vendor exception text."""
+    wrapped = isinstance(exc, AccountReadFailure)
+    stage = exc.stage if wrapped and exc.stage in {"cash", "positions", "open_orders"} else "unknown"
+    cause = exc.__cause__ if wrapped and exc.__cause__ is not None else exc
+    http_status, current, seen = None, cause, set()
+    for _ in range(8):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        status = getattr(current, "status_code", None)
+        if status is None:
+            status = getattr(getattr(current, "response", None), "status_code", None)
+        if isinstance(status, str) and len(status) == 3 and status.isascii() and status.isdecimal():
+            status = int(status)
+        if type(status) is int and 100 <= status <= 599:
+            http_status = status
+            break
+        current = current.__cause__
+    return {"read_stage": stage, "error_class": type(cause).__name__, "http_status": http_status}
 
 
 class AccountWritesDisabled(RuntimeError):
@@ -97,7 +136,7 @@ class ReadOnlyClobClient(ClobClientWrapper):
         client.set_api_creds(credentials)
         self._api_creds = credentials
         self._client = _ReadOnlySdk(client)
-        logger.info("Orders-disabled authenticated account client initialized")
+        logger.info("Read-only authenticated account client initialized")
 
     def get_positions(self, *, limit=500):
         """Paginate strictly; a missing, malformed or truncated page is unknown."""
@@ -170,19 +209,24 @@ class AccountObservation:
 def inspect_account(client):
     """Return a strict complete snapshot; unavailable never means an empty wallet."""
     from src.strategy.duo_trader import _open_buy_order_reserved_cash
-    cash = client.get_cash_balance_details(allow_onchain_fallback=False)
-    if not isinstance(cash, dict) or cash.get("source") != "clob":
-        raise AccountReadUnavailable("Authenticated CLOB cash could not be confirmed")
-    amount = _nonnegative(cash.get("balance"), "cash")
-    positions = client.get_positions()
-    orders = client.get_open_orders()
-    if not isinstance(positions, list) or not isinstance(orders, list):
-        raise AccountReadUnavailable("Complete position/order lists were not confirmed")
-    value = sum(_nonnegative(row.get("currentValue"), "position value") for row in positions)
-    try:
-        reserve = sum(_open_buy_order_reserved_cash(row) for row in orders)
-    except (TypeError, ValueError, KeyError) as exc:
-        raise AccountReadUnavailable("Open-order cash reservations could not be confirmed") from exc
+    with _account_read_stage("cash"):
+        cash = client.get_cash_balance_details(allow_onchain_fallback=False)
+        if not isinstance(cash, dict) or cash.get("source") != "clob":
+            raise AccountReadUnavailable("Authenticated CLOB cash could not be confirmed")
+        amount = _nonnegative(cash.get("balance"), "cash")
+    with _account_read_stage("positions"):
+        positions = client.get_positions()
+        if not isinstance(positions, list):
+            raise AccountReadUnavailable("Complete position list was not confirmed")
+        value = sum(_nonnegative(row.get("currentValue"), "position value") for row in positions)
+    with _account_read_stage("open_orders"):
+        orders = client.get_open_orders()
+        if not isinstance(orders, list):
+            raise AccountReadUnavailable("Complete order list was not confirmed")
+        try:
+            reserve = sum(_open_buy_order_reserved_cash(row) for row in orders)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise AccountReadUnavailable("Open-order cash reservations could not be confirmed") from exc
     summary = {
         "connected": True, "cash_confirmed": True, "positions_complete": True,
         "open_orders_complete": True, "position_count": len(positions),

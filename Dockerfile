@@ -7,5 +7,6 @@ COPY scripts/ /app/scripts/
 COPY config/ /app/config/
 COPY --chmod=755 entrypoint.sh refresh-entrypoint.sh legacy-entrypoint.sh /app/
 COPY requirements.txt refresh_seed_manifest.json release-source-manifest.json /app/
+COPY source-change-manifest.json /app/
 COPY tools/verify_release_source.py /tmp/verify_release_source.py
 RUN python /tmp/verify_release_source.py --root /app --image

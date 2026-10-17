@@ -4,7 +4,7 @@ Machine-learning UFC fight prediction and Polymarket execution bot, with data co
 
 ## Current release — October 16, 2026
 
-This checkout saves the application source from the deployed Railway image:
+This checkout preserves the source baseline from the deployed Railway image:
 
 ```text
 ghcr.io/nfgems/ufc-betting-bot@sha256:6068bb7d8941e32dd4bf6a4f1c00fc9bc22148aa9cb23a6c45d146d37fedab94
@@ -12,7 +12,9 @@ ghcr.io/nfgems/ufc-betting-bot@sha256:6068bb7d8941e32dd4bf6a4f1c00fc9bc22148aa9c
 
 Railway service `ufc-bot` in project `ufc-betting-bot`, environment `production`, was verified online on October 16 with deployment `c48776b2-475a-45d3-bc85-1faca04d4c6c` and its persistent volume at `/app/logs`.
 
-Read [Current release](docs/CURRENT_RELEASE.md) for reproduction and preservation details, and [release-source-manifest.json](release-source-manifest.json) for exact runtime source hashes. The [canonical living handoff](docs/PRACTICAL_MODEL_DATA_RESET_LIVING_HANDOFF.md) records dated deployment evidence and remaining work; its newest entries come first.
+The October 17 account-read diagnostics fix is saved as an undeployed source change in [source-change-manifest.json](source-change-manifest.json). Retry and trading policies are unchanged.
+
+Read [Current release](docs/CURRENT_RELEASE.md) for reproduction and preservation details, and [release-source-manifest.json](release-source-manifest.json) for the original deployed source hashes. The [canonical living handoff](docs/PRACTICAL_MODEL_DATA_RESET_LIVING_HANDOFF.md) records dated deployment evidence and remaining work; its newest entries come first.
 
 - Production starts `/bin/bash /app/refresh-entrypoint.sh`, which launches `src.combined_service` under the application account. One supervisor owns the refresh worker and one separate UFC trading consumer.
 - The combined service reads an accepted data/prediction publication and verifies its model and data hashes. Models, accepted baseline data, seed, and one required provenance record are inherited from the pinned private image.

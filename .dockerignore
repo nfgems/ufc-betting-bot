@@ -14,6 +14,7 @@
 !legacy-entrypoint.sh
 !refresh_seed_manifest.json
 !release-source-manifest.json
+!source-change-manifest.json
 **/__pycache__
 **/*.pyc
 **/*.pkl

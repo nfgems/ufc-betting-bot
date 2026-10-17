@@ -1,13 +1,16 @@
 # Current saved production source - October 16, 2026
 
-This source matches the immutable deployed 6068bb7d application release.
-Read docs/CURRENT_RELEASE.md and release-source-manifest.json first.
+The saved production baseline is the immutable deployed 6068bb7d application
+release. This checkout also contains an undeployed account-read logging change
+declared in source-change-manifest.json. Read docs/CURRENT_RELEASE.md and both
+source manifests first.
 Private operational handoffs named below are excluded from the current source
 tree; preserve their local copies in the owner's workspace. Earlier published
 Git history still contains those notes; this cleanup does not erase that history.
 A public checkout does not authorize recreating private observations,
 running historical research, changing production or requesting new source data.
-Preserve the raw hash-bound source/config bytes and immutable private image.
+Preserve the original release manifest, unchanged source/config bytes and
+immutable private image; declare authorized source changes separately.
 Source publication does not authorize a production deployment.
 The active startup is /bin/bash /app/refresh-entrypoint.sh.
 The earlier project instructions follow for context.

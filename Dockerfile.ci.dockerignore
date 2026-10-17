@@ -10,6 +10,7 @@
 !tests/**
 !refresh_seed_manifest.json
 !release-source-manifest.json
+!source-change-manifest.json
 !entrypoint.sh
 !refresh-entrypoint.sh
 !legacy-entrypoint.sh

@@ -11,6 +11,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from src import trading_worker
 from src.polymarket import readonly_account
@@ -43,6 +44,53 @@ def test_account_unavailable_or_fallback_never_means_empty(cash):
     client = SimpleNamespace(get_cash_balance_details=lambda **kw: cash)
     with pytest.raises(readonly_account.AccountReadUnavailable):
         readonly_account.inspect_account(client)
+
+
+@pytest.mark.parametrize("stage, method", [
+    ("cash", "get_cash_balance_details"),
+    ("positions", "get_positions"),
+    ("open_orders", "get_open_orders"),
+])
+def test_account_read_failure_identifies_stage_and_wrapped_http_status(stage, method):
+    response = requests.Response()
+    response.status_code = 429
+    vendor_error = requests.HTTPError("https://vendor.invalid/?token=secret", response=response)
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("vendor response contains secret") from vendor_error
+    client = SimpleNamespace(get_cash_balance_details=lambda **kw: {"source": "clob", "balance": 100},
+                             get_positions=lambda: [], get_open_orders=lambda: [])
+    setattr(client, method, unavailable)
+    with pytest.raises(readonly_account.AccountReadUnavailable) as raised:
+        readonly_account.inspect_account(client)
+    details = readonly_account.account_read_diagnostics(raised.value)
+    assert details == {"read_stage": stage, "error_class": "RuntimeError", "http_status": 429}
+    assert "secret" not in json.dumps(details)
+
+
+@pytest.mark.parametrize("stage, value", [
+    ("cash", {"source": "unavailable", "balance": 0}),
+    ("positions", [{"currentValue": float("nan")}]),
+    ("open_orders", None),
+])
+def test_unconfirmed_account_values_retain_stage_without_inventing_http_status(stage, value):
+    client = SimpleNamespace(
+        get_cash_balance_details=lambda **kw: value if stage == "cash" else {"source": "clob", "balance": 100},
+        get_positions=lambda: value if stage == "positions" else [],
+        get_open_orders=lambda: value if stage == "open_orders" else [],
+    )
+    with pytest.raises(readonly_account.AccountReadUnavailable) as raised:
+        readonly_account.inspect_account(client)
+    details = readonly_account.account_read_diagnostics(raised.value)
+    assert details["read_stage"] == stage and details["http_status"] is None
+
+
+@pytest.mark.parametrize("status", [None, True, 99, 600, 503.5, "secret", "503?token=secret"])
+def test_account_diagnostics_reject_invalid_status_and_cyclic_causes(status):
+    error = RuntimeError("private vendor details")
+    error.status_code = status
+    error.__cause__ = error
+    assert readonly_account.account_read_diagnostics(error) == {
+        "read_stage": "unknown", "error_class": "RuntimeError", "http_status": None}
 
 
 def test_mutating_client_methods_and_sdk_are_denied_before_network():
@@ -205,6 +253,50 @@ def test_account_failure_runs_monitor_with_zero_basis_and_degraded(tmp_path):
     assert report["blocking_conditions"] == ["account_read_unavailable"]
     assert json.loads((worker.state_dir / "status.json").read_text())["ready"] is False
     assert "credential secret" not in (worker.state_dir / "latest.json").read_text()
+
+
+@pytest.mark.parametrize("real", [False, True])
+def test_account_http_failure_logs_safe_diagnostics_and_next_cycle_recovers(monkeypatch, tmp_path, caplog, real):
+    from src import live_control
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real" if real else "off")
+    monkeypatch.setattr(live_control, "assert_real_trading_allowed", lambda **kw: {"ready": True})
+    response = requests.Response()
+    response.status_code = 503
+    response.url = "https://vendor.invalid/positions?user=private-wallet"
+    response._content = b"private-response-body"
+    def failed_positions():
+        raise requests.HTTPError("vendor-secret " + response.url, response=response)
+    client = SimpleNamespace(get_cash_balance_details=lambda **kw: {"source": "clob", "balance": 100},
+                             get_positions=failed_positions, get_open_orders=lambda: [])
+    seen = []
+    def cycle(args):
+        seen.append(args)
+        return {"status": "evaluated", "orders_disabled": not real, "trading_enabled": real,
+                "accepted_generation": "final", "real_submissions": 0}
+    worker = _worker(tmp_path, account_reader=readonly_account.inspect_account, cycle_runner=cycle)
+    worker.client = client
+    with caplog.at_level(logging.WARNING, logger="src.trading_worker"):
+        report = worker.run_once()
+    assert "Account reads unavailable (stage=positions, error=HTTPError, http_status=503)" in caplog.text
+    assert "Orders-disabled" not in caplog.text
+    assert report["account"]["read_stage"] == "positions"
+    assert report["account"]["http_status"] == 503
+    assert report["account"]["error_class"] == "HTTPError"
+    assert report["account"]["read_only"] is True
+    assert not report["trading_enabled"] and not report["accounting_reconciled"]
+    assert "account_read_unavailable" in report["blocking_conditions"]
+    assert json.loads((worker.state_dir / "status.json").read_text())["ready"] is False
+    assert len(seen) == (0 if real else 1)
+    if not real:
+        assert seen[0].bankroll_basis.available_cash == seen[0].bankroll_basis.total_equity == 0
+    retained = caplog.text + "".join(path.read_text() for path in worker.state_dir.rglob("*.json"))
+    for private in ("vendor-secret", "private-wallet", "vendor.invalid", "private-response-body"):
+        assert private not in retained
+    client.get_positions = lambda: []
+    recovered = worker.run_once()
+    assert not recovered["blocking_conditions"] and recovered["accounting_reconciled"]
+    assert recovered["trading_enabled"] is real
+    assert json.loads((worker.state_dir / "status.json").read_text())["ready"] is True
 
 
 def test_worker_market_failure_is_durable_and_next_cycle_recovers(tmp_path):
