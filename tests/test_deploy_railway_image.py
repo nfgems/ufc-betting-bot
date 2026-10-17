@@ -135,18 +135,18 @@ def test_exactly_one_mutation_then_digest_and_health_verified(monkeypatch, prepa
     monkeypatch.setattr(release, "snapshot", lambda **kwargs: next(snapshots))
     health_calls, commands = [], []
     monkeypatch.setattr(release, "healthy", lambda: health_calls.append(True) or True)
-    def run(command):
+    def run(command, *, input_json=None):
         commands.append(command)
         # Intent is durable before mutation, so a lost response cannot replay it.
         assert json.loads(path.read_text())["status"] == "source_update_requested"
-        return {"id": release.SERVICE, "image": NEW, "password": "PRIVATE-SECRET"}
+        assert input_json == {"services": {release.SERVICE: {"source": {"image": NEW}}}}
+        return {"committed": True, "environmentId": release.ENVIRONMENT, "password": "PRIVATE-SECRET"}
     monkeypatch.setattr(release, "command_json", run)
     result = release.deploy(COMMIT, NEW, path)
     assert result["status"] == "verified"
     assert result["before"]["image"] == OLD
     assert result["after"]["deployment"]["id"] == "candidate"
-    assert commands == [["railway", "service", "source", "connect", *release.TARGET,
-                         "--image", NEW, "--json"]]
+    assert commands == [["railway", "environment", "edit", *release.ENVIRONMENT_TARGET, "--json"]]
     assert len(health_calls) == 1
     assert "PRIVATE-SECRET" not in path.read_text()
     with pytest.raises(release.ReleaseError, match="already consumed"):
@@ -156,7 +156,7 @@ def test_exactly_one_mutation_then_digest_and_health_verified(monkeypatch, prepa
 def test_lost_mutation_response_consumes_receipt_without_retry(monkeypatch, prepared):
     path, before = prepared
     commands = []
-    def run(command):
+    def run(command, **kwargs):
         commands.append(command)
         raise release.ReleaseError("Release CLI command could not complete")
     monkeypatch.setattr(release, "command_json", run)
@@ -182,8 +182,8 @@ def test_failed_or_competing_rollout_never_redeploys_or_restores_state(monkeypat
     states = iter([before, after])
     monkeypatch.setattr(release, "snapshot", lambda **kwargs: next(states))
     commands = []
-    monkeypatch.setattr(release, "command_json", lambda command: commands.append(command) or {
-        "id": release.SERVICE, "image": NEW})
+    monkeypatch.setattr(release, "command_json", lambda command, **kwargs: commands.append(command) or {
+        "committed": True, "environmentId": release.ENVIRONMENT})
     with pytest.raises(release.ReleaseError):
         release.deploy(COMMIT, NEW, path)
     assert len(commands) == 1
@@ -264,8 +264,8 @@ def test_prior_and_split_reads_converge_without_repeating_mutation(monkeypatch, 
     monkeypatch.setattr(release, "snapshot", read)
     monkeypatch.setattr(release, "healthy", lambda: True)
     commands = []
-    monkeypatch.setattr(release, "command_json", lambda command: commands.append(command) or {
-        "id": release.SERVICE, "image": NEW})
+    monkeypatch.setattr(release, "command_json", lambda command, **kwargs: commands.append(command) or {
+        "committed": True, "environmentId": release.ENVIRONMENT})
     assert release.deploy(COMMIT, NEW, path)["status"] == "verified"
     assert clock[0] == 20
     assert len(commands) == 1
@@ -283,8 +283,8 @@ def test_propagation_grace_expires_at_thirty_seconds(monkeypatch, prepared, spli
         return before
     monkeypatch.setattr(release, "snapshot", read)
     commands = []
-    monkeypatch.setattr(release, "command_json", lambda command: commands.append(command) or {
-        "id": release.SERVICE, "image": NEW})
+    monkeypatch.setattr(release, "command_json", lambda command, **kwargs: commands.append(command) or {
+        "committed": True, "environmentId": release.ENVIRONMENT})
     with pytest.raises(release.ReleaseError, match="after acknowledgement"):
         release.deploy(COMMIT, NEW, path, interval=11)
     assert clock[0] == 30
@@ -302,9 +302,73 @@ def test_config_change_during_split_reads_fails_without_grace(monkeypatch, prepa
         return before
     monkeypatch.setattr(release, "snapshot", read)
     commands = []
-    monkeypatch.setattr(release, "command_json", lambda command: commands.append(command) or {
-        "id": release.SERVICE, "image": NEW})
+    monkeypatch.setattr(release, "command_json", lambda command, **kwargs: commands.append(command) or {
+        "committed": True, "environmentId": release.ENVIRONMENT})
     with pytest.raises(release.ReleaseError, match="configuration changed"):
         release.deploy(COMMIT, NEW, path)
     assert clock[0] == 0
     assert len(commands) == 1
+
+
+def test_sparse_patch_is_sent_on_stdin_without_extra_fields(monkeypatch):
+    patch = {"services": {release.SERVICE: {"source": {"image": NEW}}}}
+    command = ["railway", "environment", "edit", *release.ENVIRONMENT_TARGET, "--json"]
+    calls = []
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps({
+            "committed": True, "environmentId": release.ENVIRONMENT}), stderr="")
+    monkeypatch.setattr(release.subprocess, "run", run)
+    result = release.command_json(command, input_json=patch)
+    assert result["committed"] is True
+    assert len(calls) == 1
+    assert calls[0][0][1:] == command[1:]
+    assert json.loads(calls[0][1]["input"]) == patch
+    assert NEW not in calls[0][0]
+    assert "--stage" not in calls[0][0]
+
+
+@pytest.mark.parametrize("ack", [
+    {"committed": False, "message": "No changes to apply"},
+    {"committed": True, "environmentId": "other"},
+    {"committed": "true", "environmentId": release.ENVIRONMENT},
+])
+def test_noop_or_wrong_environment_acknowledgement_is_rejected(monkeypatch, prepared, ack):
+    path, _ = prepared
+    calls = []
+    monkeypatch.setattr(release, "command_json", lambda command, **kwargs: calls.append(command) or ack)
+    with pytest.raises(release.ReleaseError, match="acknowledgement"):
+        release.deploy(COMMIT, NEW, path)
+    assert len(calls) == 1
+    assert json.loads(path.read_text())["status"] == "verification_failed"
+
+
+@pytest.mark.parametrize("vendor_text,category", [
+    ("Project tokens are not supported here PRIVATE-SECRET", "project_token_scope_unsupported"),
+    ("Not authorized: PRIVATE-SECRET", "authentication_rejected"),
+    ("Too many requests PRIVATE-SECRET", "rate_limited"),
+    ("Unexpected argument PRIVATE-SECRET", "invalid_arguments"),
+    ("Error sending request PRIVATE-SECRET", "network_failure"),
+    ("Service not found PRIVATE-SECRET", "target_not_found"),
+    ("Unrecognized vendor response PRIVATE-SECRET", "command_rejected"),
+])
+def test_command_error_reports_only_static_operation_and_category(monkeypatch, vendor_text, category):
+    monkeypatch.setattr(release.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=1, stdout="", stderr=vendor_text))
+    with pytest.raises(release.CommandError) as error:
+        release.command_json(["railway", "environment", "edit", *release.ENVIRONMENT_TARGET, "--json"],
+                             input_json={"services": {release.SERVICE: {"source": {"image": NEW}}}})
+    assert error.value.details == {"operation": "railway_environment_image_patch",
+                                   "category": category, "exit_code": 1}
+    assert "PRIVATE-SECRET" not in str(error.value)
+
+
+def test_safe_command_error_is_preserved_in_failed_receipt(monkeypatch, prepared):
+    path, _ = prepared
+    def run(command, **kwargs):
+        raise release.CommandError("railway_environment_image_patch", "authentication_rejected", 1)
+    monkeypatch.setattr(release, "command_json", run)
+    with pytest.raises(release.CommandError):
+        release.deploy(COMMIT, NEW, path)
+    assert json.loads(path.read_text())["failure"] == {
+        "operation": "railway_environment_image_patch", "category": "authentication_rejected", "exit_code": 1}

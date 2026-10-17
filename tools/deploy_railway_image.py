@@ -2,6 +2,7 @@
 
 The prepare receipt must precede the private image build. Deploy refuses a stale
 Git commit, concurrent Railway change, staged configuration, or active rollout.
+The mutation is one environment-scoped sparse patch containing source.image only.
 CLI responses can contain registry credentials: they are parsed in memory and
 never logged, attached to errors, or copied into the public release receipt.
 """
@@ -28,12 +29,20 @@ VOLUME = "a9c56c45-be3f-4ff6-b0e8-208204bb2712"
 REPOSITORY = "nfgems/ufc-betting-bot"
 IMAGE_PREFIX = "ghcr.io/nfgems/ufc-betting-bot@sha256:"
 URL = "https://ufc-bot-production.up.railway.app"
-TARGET = ["--project", PROJECT, "--environment", ENVIRONMENT, "--service", SERVICE]
+ENVIRONMENT_TARGET = ["--project", PROJECT, "--environment", ENVIRONMENT]
 TERMINAL_FAILURES = {"FAILED", "CRASHED", "REMOVED", "SKIPPED"}
 
 
 class ReleaseError(RuntimeError):
     """An intentionally credential-free release failure."""
+
+
+class CommandError(ReleaseError):
+    """Only static operation/category names and an exit code may be reported."""
+
+    def __init__(self, operation, category, exit_code=None):
+        self.details = {"operation": operation, "category": category, "exit_code": exit_code}
+        super().__init__(f"{operation}: {category}; raw CLI output withheld")
 
 
 class PropagationPending(ReleaseError):
@@ -59,18 +68,53 @@ def valid_image(value):
     ) is not None
 
 
-def command_json(command):
+def command_operation(command):
+    for prefix, operation in (
+        (["railway", "environment", "edit"], "railway_environment_image_patch"),
+        (["railway", "environment", "config"], "railway_environment_read"),
+        (["railway", "status"], "railway_status_read"),
+        (["gh", "api"], "github_api_read"),
+    ):
+        if command[:len(prefix)] == prefix:
+            return operation
+    return "external_cli"
+
+
+def failure_category(output):
+    # Never return a vendor message or extracted value. Output may contain secrets.
+    text = output.lower()
+    if "project token" in text and any(value in text for value in ("not supported", "unsupported", "cannot")):
+        return "project_token_scope_unsupported"
+    if any(value in text for value in ("unauthorized", "not authorized", "invalid token", "token not found")):
+        return "authentication_rejected"
+    if "rate limit" in text or "too many requests" in text:
+        return "rate_limited"
+    if any(value in text for value in ("unexpected argument", "unrecognized subcommand", "invalid value")):
+        return "invalid_arguments"
+    if any(value in text for value in ("error sending request", "connection refused", "connection reset", "timed out")):
+        return "network_failure"
+    if any(value in text for value in ("project not found", "service not found", "environment not found")):
+        return "target_not_found"
+    return "command_rejected"
+
+
+def command_json(command, *, input_json=None):
+    operation = command_operation(command)
     executable = shutil.which(command[0]) or command[0]
     try:
         result = subprocess.run([executable, *command[1:]], capture_output=True,
-                                text=True, timeout=90)
-    except (OSError, subprocess.TimeoutExpired):
-        raise ReleaseError("Release CLI command could not complete") from None
-    require(result.returncode == 0, "Release CLI command failed; raw output withheld")
+                                text=True, timeout=90,
+                                input=json.dumps(input_json) if input_json is not None else None)
+    except subprocess.TimeoutExpired:
+        raise CommandError(operation, "timeout") from None
+    except OSError:
+        raise CommandError(operation, "process_start_failed") from None
+    if result.returncode != 0:
+        raise CommandError(operation, failure_category(result.stdout + result.stderr), result.returncode)
     try:
         return json.loads(result.stdout)
     except (TypeError, ValueError):
-        raise ReleaseError("Release CLI returned invalid JSON; raw output withheld") from None
+        raise CommandError(operation, "invalid_json") from None
 
 
 def check_main(commit):
@@ -237,10 +281,14 @@ def deploy(commit, image, path, *, timeout=900, interval=10):
     # Consume before sending: timeout/retry must not trigger a duplicate mutation.
     save(path, receipt)
     try:
-        response = command_json(["railway", "service", "source", "connect",
-                                 *TARGET, "--image", image, "--json"])
-        require(response.get("id") == SERVICE and response.get("image") == image,
-                "Unexpected source-update acknowledgement; inspect Railway before retrying")
+        # CLI v5.23.3 environment edit reads JSON stdin before flags and issues
+        # one environmentPatchCommit(environmentId, patch). It does not commit
+        # the environment's existing staged patch. Missing fields are omitted.
+        response = command_json(["railway", "environment", "edit",
+                                 *ENVIRONMENT_TARGET, "--json"],
+                                input_json={"services": {SERVICE: {"source": {"image": image}}}})
+        require(response.get("committed") is True and response.get("environmentId") == ENVIRONMENT,
+                "Unexpected environment-patch acknowledgement; inspect Railway before retrying")
         deadline = time.monotonic() + timeout
         propagation_deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
@@ -278,8 +326,10 @@ def deploy(commit, image, path, *, timeout=900, interval=10):
                     return receipt
             time.sleep(interval)
         raise ReleaseError("Timed out waiting for candidate deployment and readiness; inspect Railway")
-    except Exception:
+    except Exception as error:
         receipt.update(status="verification_failed", failed_at=now())
+        if isinstance(error, CommandError):
+            receipt["failure"] = error.details
         save(path, receipt)
         summarize(receipt)
         raise

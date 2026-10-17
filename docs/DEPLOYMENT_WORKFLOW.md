@@ -14,7 +14,9 @@ Only reviewed release changes belong on `main`. A push runs the `CI` workflow:
    production dependencies with orders off and synthetic temporary state.
 4. Only a tested image is published under `git-<full commit>`. Its registry digest
    becomes the Railway source. The helper rechecks main and production before a
-   single source update, then waits for that image's deployment and health/readiness.
+   single environment-scoped sparse update of `source.image`, then waits for that
+   image's deployment and health/readiness. It uses the existing production project
+   token; no service-wide source reconnection or broader account token is needed.
    It performs no forced refresh, order, account write, volume restore or extra restart.
 
 The private GHCR package stays private and unlinked to this public repository.
