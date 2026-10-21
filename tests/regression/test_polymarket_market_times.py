@@ -153,6 +153,117 @@ def test_find_ufc_events_fresh_read_bypasses_short_success_cache(monkeypatch):
     assert trading_snapshot[0]["price"] == "0.45"
 
 
+def test_successful_fresh_gamma_read_recovers_persisted_incident_after_restart_once(monkeypatch, tmp_path, caplog):
+    from src.web.alert_store import DurableAlertHandler, load_alert_incidents, record_alert
+    path = tmp_path / "alerts.jsonl"
+    record_alert(path, level="WARNING", source="src.polymarket.markets", message="Prior Gamma failure",
+                 incident_key=polymarket_markets._GAMMA_EVENTS_INCIDENT_KEY)
+    calls = []
+    def successful(*args, **kwargs):
+        calls.append(kwargs)
+        return _GammaEventsResponse([])
+    monkeypatch.setattr(polymarket_markets.requests, "get", successful)
+    handler = DurableAlertHandler(path)
+    polymarket_markets.logger.addHandler(handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="src.polymarket.markets"):
+            assert polymarket_markets.find_ufc_events(require_fresh=True) == []
+            assert polymarket_markets.find_ufc_events(require_fresh=True) == []
+        incident, = load_alert_incidents(path, 72)
+        assert incident["status"] == "recovered" and incident["recovery_count"] == 1
+        assert len(calls) == 2 and len(path.read_text().splitlines()) == 2
+    finally:
+        polymarket_markets.logger.removeHandler(handler)
+
+
+def test_cached_gamma_read_cannot_recover_incident_without_new_network_evidence(monkeypatch, tmp_path, caplog):
+    from src.web.alert_store import DurableAlertHandler, load_alert_incidents, record_alert
+    monkeypatch.setattr(polymarket_markets.requests, "get", lambda *args, **kwargs: _GammaEventsResponse([]))
+    polymarket_markets.find_ufc_events()
+    path = tmp_path / "alerts.jsonl"
+    record_alert(path, level="WARNING", source="src.polymarket.markets", message="Another observer failed",
+                 incident_key=polymarket_markets._GAMMA_EVENTS_INCIDENT_KEY)
+    handler = DurableAlertHandler(path)
+    polymarket_markets.logger.addHandler(handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="src.polymarket.markets"):
+            polymarket_markets.find_ufc_events()
+        incident, = load_alert_incidents(path, 72)
+        assert incident["status"] == "active" and incident["recovery_count"] == 0
+    finally:
+        polymarket_markets.logger.removeHandler(handler)
+
+
+def test_delayed_gamma_success_cannot_clear_a_later_failed_fetch(monkeypatch, tmp_path, caplog):
+    from src.web.alert_store import DurableAlertHandler, load_alert_incidents
+    success_logging = threading.Event()
+    release_success_logging = threading.Event()
+    failure_requested = threading.Event()
+    failure_completed = threading.Event()
+    errors = []
+    original_info = polymarket_markets.logger.info
+    original_sequence = polymarket_markets._next_gamma_events_request_sequence
+    def delayed_info(message, *args, **kwargs):
+        if message == "Found %s UFC events on Polymarket" and threading.current_thread().name == "gamma-success":
+            success_logging.set()
+            assert release_success_logging.wait(timeout=2)
+        return original_info(message, *args, **kwargs)
+    def sequence():
+        value = original_sequence()
+        if threading.current_thread().name == "gamma-failure":
+            failure_requested.set()
+        return value
+    def fetch(*args, **kwargs):
+        if threading.current_thread().name == "gamma-success":
+            return _GammaEventsResponse([])
+        raise polymarket_markets.requests.Timeout("later failure")
+    def succeed():
+        try:
+            polymarket_markets.find_ufc_events(require_fresh=True)
+        except Exception as exc:
+            errors.append(exc)
+    def fail():
+        try:
+            polymarket_markets.find_ufc_events(require_fresh=True)
+        except polymarket_markets.GammaEventsUnavailableError:
+            pass
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            failure_completed.set()
+    monkeypatch.setattr(polymarket_markets.logger, "info", delayed_info)
+    monkeypatch.setattr(polymarket_markets, "_next_gamma_events_request_sequence", sequence)
+    monkeypatch.setattr(polymarket_markets.requests, "get", fetch)
+    monkeypatch.setattr(polymarket_markets.time, "sleep", lambda _: None)
+    path = tmp_path / "alerts.jsonl"
+    handler = DurableAlertHandler(path)
+    polymarket_markets.logger.addHandler(handler)
+    success = threading.Thread(target=succeed, name="gamma-success")
+    failure = threading.Thread(target=fail, name="gamma-failure")
+    try:
+        with caplog.at_level(logging.INFO, logger="src.polymarket.markets"):
+            success.start()
+            assert success_logging.wait(timeout=2)
+            failure.start()
+            assert failure_requested.wait(timeout=2)
+            # The second fetch must remain blocked until the first recovery is
+            # recorded. Without serialization it finishes and is then cleared.
+            failed_before_recovery = failure_completed.wait(timeout=.2)
+            release_success_logging.set()
+            success.join(timeout=2)
+            failure.join(timeout=2)
+        assert not success.is_alive() and not failure.is_alive() and not errors
+        assert failed_before_recovery is False
+        incident, = load_alert_incidents(path, 72)
+        assert incident["status"] == "active" and incident["recovery_count"] == 0
+    finally:
+        release_success_logging.set()
+        success.join(timeout=2)
+        if failure.ident is not None:
+            failure.join(timeout=2)
+        polymarket_markets.logger.removeHandler(handler)
+
+
 def test_fresh_read_retries_after_older_refresh_completes(monkeypatch):
     fetch_started = threading.Event()
     release_fetch = threading.Event()

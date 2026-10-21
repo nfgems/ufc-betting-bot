@@ -266,7 +266,6 @@ def find_ufc_events(
                     f"{failure_message}"
                 )
 
-        had_failure = recent_failure is not None
         fetch_started_at = time.monotonic()
         try:
             events = _fetch_ufc_events_uncached(limit)
@@ -283,15 +282,15 @@ def find_ufc_events(
         )
         _GAMMA_EVENTS_FAILURE_CACHE = None
 
-    logger.info(
-        "Found %s UFC events on Polymarket",
-        len(events),
-        extra=(
-            {"alert_recovered_incident_keys": (_GAMMA_EVENTS_INCIDENT_KEY,)}
-            if had_failure
-            else None
-        ),
-    )
+        # Keep recovery ordered with fetch failures: a delayed older success
+        # must not clear a newer failure from another waiting reader.
+        logger.info(
+            "Found %s UFC events on Polymarket",
+            len(events),
+            # A successful network read can recover a durable pre-restart incident.
+            # The alert handler writes a recovery only if that incident is active.
+            extra={"alert_recovered_incident_keys": (_GAMMA_EVENTS_INCIDENT_KEY,)},
+        )
     return events
 
 

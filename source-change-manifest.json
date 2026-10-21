@@ -2,7 +2,7 @@
   "schema_version": 1,
   "base_manifest_sha256": "e94810e7422da2bc958d8c1b0a9cdff93cbb41891c6acb71b48684282834f464",
   "status": "declared",
-  "description": "Preserve account-read diagnostics and verified entry cash accounting. Continue current observations while unresolved original orders block execution; report safe failure stages and accurate dashboard coverage. Separate verified service readiness from strict trading readiness. Original orders, execution gates, models and strategy remain unchanged.",
+  "description": "Preserve account-read diagnostics, verified entry cash accounting, and current observations while unresolved original orders block execution. Separate verified service readiness from strict trading readiness. Recover observation alerts only after fresh verified observations, keep order recovery separate, and serialize Gamma alert transitions. Original orders, execution gates, models and strategy remain unchanged.",
   "files": {
     "src/polymarket/client.py": {
       "bytes": 89858,
@@ -25,8 +25,8 @@
       "sha256": "729634adc3d3e7f15926ca0429083ed8fa8728412ac4dcf7aab0ef6ade1bf920"
     },
     "src/trading_worker.py": {
-      "bytes": 23249,
-      "sha256": "ddd5fadf2b900138c7fe7b95545dbb82f8587754c9e491319b0a292a4abbaca9"
+      "bytes": 29323,
+      "sha256": "28e0ad64c532f294a623f26621e2f1cac1e1106b2f179bb20686db0afc52a236"
     },
     "src/web/app.py": {
       "bytes": 290262,
@@ -55,6 +55,10 @@
     "src/data/refresh_service.py": {
       "bytes": 37248,
       "sha256": "23fb003fcdff0529755908e12b77c70e1d1b518357ff77d6c1652b828e2be6d2"
+    },
+    "src/polymarket/markets.py": {
+      "bytes": 19440,
+      "sha256": "0aa6742d006d2426aea77300d4726afbeaa04754f8c0c247c81fd54d68f572e3"
     }
   },
   "additions": {

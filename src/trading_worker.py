@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import uuid
 
 logger = logging.getLogger(__name__)
+_EVALUATION_INCIDENT_PREFIX = "ufc_consumer_evaluation_unavailable:"
 
 
 def _now():
@@ -154,6 +155,55 @@ def _evaluation_failure_stage(exc):
     return stage
 
 
+def _recovered_evaluation_stages(report, cycle_started_at):
+    """Return only stages proved by a complete, fresh result from this cycle."""
+    cycle = report.get("cycle") or {}
+    blockers = report.get("blocking_conditions")
+    real = report.get("effective_live_mode") == "real"
+    blocked = blockers == ["original_order_unresolved"]
+    if (blockers not in ([], ["original_order_unresolved"]) or report.get("paused") is not False
+            or report.get("effective_live_mode") not in {"real", "off"}
+            or cycle.get("status") not in {"idle", "evaluated", "ok", "blocked"}
+            or cycle.get("blocking_conditions", []) != blockers
+            or cycle.get("status") == "blocked" and not blocked
+            or blocked and (not real or cycle.get("status") != "blocked"
+                            or cycle.get("blocking_conditions") != blockers)
+            or any(source.get("orders_disabled") is not (not real)
+                   or source.get("trading_enabled") is not (real and not blocked) for source in (report, cycle))
+            or real and report.get("startup_verified") is not True
+            or blocked and any(type(value) is not int or value != 0 for value in (
+                report.get("real_submissions"), cycle.get("total_orders"), cycle.get("confirmed_placed_orders")))
+            or not cycle.get("accepted_generation") or not cycle.get("publication_job_id")
+            or not (cycle.get("snapshot_binding") or {}).get("final_report_sha256")):
+        return set()
+    for rows, count in (("predictions", "prediction_count"), ("mapped_markets", "matched_market_count")):
+        if (not isinstance(cycle.get(rows), list) or not all(isinstance(row, dict) for row in cycle[rows])
+                or type(cycle.get(count)) is not int or cycle[count] != len(cycle[rows])):
+            return set()
+    try:
+        stamps = [datetime.fromisoformat(str(value).replace("Z", "+00:00")) for value in (
+            cycle_started_at, cycle.get("bookmaker_observed_at"), cycle.get("market_observed_at"),
+            report.get("completed_at_utc"))]
+        if (any(stamp.tzinfo is None or stamp.utcoffset() is None for stamp in stamps)
+                or not all(stamps[0] <= stamp <= stamps[-1] for stamp in stamps[1:-1])
+                or not 0 <= (stamps[-1] - stamps[0]).total_seconds() <= 600):
+            return set()
+    except (TypeError, ValueError):
+        return set()
+    recovered = {"published_snapshot", "bookmaker_observation", "market_observation", "prediction", "refresh_cycle"}
+    if real:
+        recovered.add("selected_live_model")
+    if (cycle.get("freshness") or {}).get("official_card_observed") is True:
+        recovered.add("official_card_observation")
+    maintenance = cycle.get("original_accounting_maintenance") or {}
+    if (real and not blocked and type(maintenance.get("unresolved_original_submissions")) is int
+            and maintenance["unresolved_original_submissions"] == 0):
+        recovered.add("original_accounting")
+    if not blocked and all(isinstance(cycle.get(name), dict) for name in ("trader_s", "trader_c", "trader_m")):
+        recovered.update(("portfolio_execution", "evaluation"))
+    return recovered
+
+
 class TradingWorker:
     def __init__(self, *, root, baseline, state_dir, real_logs_dir, client=None,
                  cycle_runner=None, account_reader=None, accounting_reader=None):
@@ -189,6 +239,7 @@ class TradingWorker:
         self._status(status="evaluating", cycle_in_progress=True)
 
     def run_once(self):
+        cycle_started_at = _now()
         mode = os.environ.get("LIVE_TRADING_MODE", "off")
         if mode not in {"off", "real"}:
             raise RuntimeError("Combined worker requires exact off or real trading mode")
@@ -285,14 +336,6 @@ class TradingWorker:
                     or result.get("real_submissions") != 0 or result.get("total_orders") != 0):
                 failures.append("blocked_result_contract_unconfirmed")
             evaluation_failure = ("blocked", *sorted(set(cycle_blockers)))
-        if evaluation_failure != self._last_evaluation_failure:
-            if evaluation_failure is not None:
-                if evaluation_failure[0] == "unavailable":
-                    logger.warning("Trading evaluation unavailable (stage=%s, error=%s)",
-                                   evaluation_failure[1], evaluation_failure[2])
-                else:
-                    logger.warning("Trading evaluation blocked (%s)", ", ".join(evaluation_failure[1:]))
-            self._last_evaluation_failure = evaluation_failure
         if not real and (result.get("trading_enabled") is True or result.get("orders_disabled") is False):
             raise RuntimeError("Orders-disabled cycle returned incompatible trading state")
         if not real and (result.get("trading_enabled") is not False or result.get("orders_disabled") is not True
@@ -356,7 +399,55 @@ class TradingWorker:
                      cycle_in_progress=False, cycle_id=cycle_id,
                      startup_verified=startup_verified, accounting_reconciled=reconciled,
                      blocking_conditions=sorted(set(failures)))
+        if evaluation_failure != self._last_evaluation_failure:
+            if evaluation_failure is not None:
+                if evaluation_failure[0] == "unavailable":
+                    logger.warning("Trading evaluation unavailable (stage=%s, error=%s)",
+                                   evaluation_failure[1], evaluation_failure[2],
+                                   extra={"alert_incident_key": _EVALUATION_INCIDENT_PREFIX + evaluation_failure[1]})
+                else:
+                    logger.warning("Trading evaluation blocked (%s)", ", ".join(evaluation_failure[1:]))
+            self._last_evaluation_failure = evaluation_failure
+        try:
+            self._recover_evaluation_alerts(report, cycle_started_at)
+        except Exception as exc:
+            logger.info("Evaluation alert recovery unavailable (%s)", type(exc).__name__)
         return report
+
+    def _recover_evaluation_alerts(self, report, cycle_started_at):
+        stages = _recovered_evaluation_stages(report, cycle_started_at)
+        if not stages:
+            return
+        keys = [_EVALUATION_INCIDENT_PREFIX + stage for stage in sorted(stages)]
+        message = ("Fresh UFC market observations recovered; new orders remain blocked by original_order_unresolved"
+                   if report.get("blocking_conditions") else "Fresh UFC evaluation observations verified")
+        # The handler appends only when an incident is active, including across restart.
+        logger.info(message, extra={"alert_recovered_incident_keys": keys})
+        logs = self.real_logs_dir if report.get("effective_live_mode") == "real" else self.state_dir / "logs"
+        path = logs / "alerts.jsonl"
+        if not path.exists():
+            return
+        # Migrate only exact old messages whose stage this new cycle has proved.
+        # A bare RuntimeError can have come from execution, so observation-only
+        # success cannot resolve it or any original-order recovery warning.
+        messages = {f"Trading evaluation unavailable (stage={stage}, error={error})"
+                    for stage in stages for error in ("RuntimeError", "GammaEventsUnavailableError")}
+        messages.add("Trading evaluation unavailable (GammaEventsUnavailableError)")
+        if "portfolio_execution" in stages and "original_accounting" in stages:
+            messages.add("Trading evaluation unavailable (RuntimeError)")
+        if "original_accounting" in stages:
+            messages.add("Trading evaluation blocked (original_order_unresolved)")
+        try:
+            from src.config import ACTIVITY_ALERT_RETENTION_HOURS
+            from src.web.alert_store import load_alert_incidents, record_recovery_if_active
+            for incident in load_alert_incidents(path, ACTIVITY_ALERT_RETENTION_HOURS):
+                if (incident.get("status") == "active" and not incident.get("incident_key")
+                        and incident.get("source") in {"__main__", "src.trading_worker"}
+                        and incident.get("message") in messages):
+                    record_recovery_if_active(path, source=incident["source"], message=incident["message"],
+                                              recovery_message=message)
+        except Exception as exc:
+            logger.info("Evaluation alert recovery unavailable (%s)", type(exc).__name__)
 
     def run(self, *, poll_seconds=300, once=False):
         from src.refresh_live import trading_consumer_lock

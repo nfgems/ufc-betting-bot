@@ -366,6 +366,167 @@ def test_worker_original_order_block_preserves_observations_without_claiming_rea
     assert json.loads((worker.state_dir / "status.json").read_text())["ready"] is True
 
 
+def _fresh_blocked_result():
+    return {"status": "blocked", "blocking_conditions": ["original_order_unresolved"],
+            "orders_disabled": False, "trading_enabled": False, "accepted_generation": "final",
+            "publication_job_id": "job", "snapshot_binding": {"final_report_sha256": "fixture-sha"},
+            "real_submissions": 0, "total_orders": 0, "confirmed_placed_orders": 0,
+            "prediction_count": 0, "matched_market_count": 0, "predictions": [], "mapped_markets": [],
+            "bookmaker_observed_at": trading_worker._now(), "market_observed_at": trading_worker._now()}
+
+
+def test_evaluation_alert_recovery_is_durable_separate_from_order_block_and_deduplicated(monkeypatch, tmp_path, caplog):
+    from src import live_control
+    from src.polymarket.markets import GammaEventsUnavailableError
+    from src.web.alert_store import DurableAlertHandler, load_alert_incidents
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+    monkeypatch.setattr(live_control, "assert_real_trading_allowed", lambda **kw: {"ready": True})
+    monkeypatch.setattr(trading_worker, "_evaluation_failure_stage", lambda exc: "market_observation")
+    def failed(_):
+        raise GammaEventsUnavailableError("private-query")
+    worker = _worker(tmp_path, cycle_runner=failed)
+    path = worker.real_logs_dir / "alerts.jsonl"
+    handler = DurableAlertHandler(path)
+    trading_worker.logger.addHandler(handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="src.trading_worker"):
+            worker.run_once()
+            worker.run_once()
+            worker.cycle_runner = lambda _: _fresh_blocked_result()
+            report = worker.run_once()
+            worker.run_once()
+            saved_incidents = load_alert_incidents(path, 72)
+            incidents = {row["incident_key"]: row for row in saved_incidents if row.get("incident_key")}
+            market_key = trading_worker._EVALUATION_INCIDENT_PREFIX + "market_observation"
+            assert incidents[market_key]["status"] == "recovered"
+            assert incidents[market_key]["occurrence_count"] == 1
+            order_block, = [row for row in saved_incidents
+                            if row["message"] == "Trading evaluation blocked (original_order_unresolved)"]
+            assert order_block["status"] == "active" and not order_block.get("incident_key")
+            assert report["blocking_conditions"] == ["original_order_unresolved"]
+            assert report["trading_enabled"] is False and report["real_submissions"] == 0
+            assert json.loads((worker.state_dir / "status.json").read_text())["ready"] is False
+            recoveries = [json.loads(line) for line in path.read_text().splitlines()
+                          if json.loads(line).get("event") == "recovery"]
+            assert len(recoveries) == 1
+            worker.cycle_runner = failed
+            worker.run_once()
+            market = next(row for row in load_alert_incidents(path, 72) if row.get("incident_key") == market_key)
+            assert market["status"] == "active" and market["occurrence_count"] == 2
+            worker.cycle_runner = lambda _: {**_fresh_blocked_result(), "status": "idle",
+                "blocking_conditions": [], "trading_enabled": True,
+                "original_accounting_maintenance": {"unresolved_original_submissions": 0}}
+            worker.run_once()
+            saved_incidents = load_alert_incidents(path, 72)
+            incidents = {row["incident_key"]: row for row in saved_incidents if row.get("incident_key")}
+            assert incidents[market_key]["status"] == "recovered"
+            order_block, = [row for row in saved_incidents
+                            if row["message"] == "Trading evaluation blocked (original_order_unresolved)"]
+            assert order_block["status"] == "recovered"
+        assert "private-query" not in path.read_text()
+    finally:
+        trading_worker.logger.removeHandler(handler)
+
+
+def test_fresh_restart_recovers_only_exact_legacy_observation_warnings(monkeypatch, tmp_path, caplog):
+    from src import live_control
+    from src.web.alert_store import DurableAlertHandler, load_alert_incidents, record_alert
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+    monkeypatch.setattr(live_control, "assert_real_trading_allowed", lambda **kw: {"ready": True})
+    worker = _worker(tmp_path, cycle_runner=lambda _: _fresh_blocked_result())
+    path = worker.real_logs_dir / "alerts.jsonl"
+    recovered_messages = ["Trading evaluation unavailable (stage=market_observation, error=GammaEventsUnavailableError)",
+                          "Trading evaluation unavailable (stage=market_observation, error=RuntimeError)",
+                          "Trading evaluation unavailable (GammaEventsUnavailableError)"]
+    retained_messages = ["Trading evaluation unavailable (RuntimeError)",
+                         "Trading evaluation unavailable (stage=portfolio_execution, error=RuntimeError)",
+                         "Trading evaluation blocked (original_order_unresolved)"]
+    for message in recovered_messages + retained_messages:
+        source = trading_worker.logger.name if message == retained_messages[-1] else "__main__"
+        record_alert(path, level="WARNING", source=source, message=message)
+    record_alert(path, level="WARNING", source="another.worker", message=recovered_messages[0])
+    market_key = trading_worker._EVALUATION_INCIDENT_PREFIX + "market_observation"
+    record_alert(path, level="WARNING", source="__main__", message="Prior worker market failure", incident_key=market_key)
+    handler = DurableAlertHandler(path)
+    trading_worker.logger.addHandler(handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="src.trading_worker"):
+            worker.run_once()
+            worker.run_once()
+        incidents = load_alert_incidents(path, 72)
+        for incident in incidents:
+            if incident.get("incident_key") == market_key:
+                assert incident["status"] == "recovered"
+            elif incident["source"] == "__main__":
+                assert incident["status"] == ("recovered" if incident["message"] in recovered_messages else "active")
+            else:
+                assert incident["status"] == "active"
+        assert sum(json.loads(line).get("event") == "recovery" for line in path.read_text().splitlines()) == 4
+        order_block, = [row for row in incidents if row["message"] == retained_messages[-1]]
+        assert order_block["status"] == "active" and order_block["occurrence_count"] == 2
+        assert not order_block.get("incident_key")
+        worker.cycle_runner = lambda _: {**_fresh_blocked_result(), "status": "idle",
+            "blocking_conditions": [], "trading_enabled": True,
+            "original_accounting_maintenance": {"unresolved_original_submissions": 0}}
+        with caplog.at_level(logging.INFO, logger="src.trading_worker"):
+            worker.run_once()
+        incidents = load_alert_incidents(path, 72)
+        order_block, = [row for row in incidents if row["message"] == retained_messages[-1]]
+        assert order_block["status"] == "recovered" and order_block["occurrence_count"] == 2
+        assert all(row["status"] == "active" for row in incidents if row["message"] in retained_messages[:-1])
+    finally:
+        trading_worker.logger.removeHandler(handler)
+
+
+def test_alert_recovery_failure_never_interrupts_saved_worker_state(monkeypatch, tmp_path, caplog):
+    worker = _worker(tmp_path)
+    def unavailable(*_):
+        raise OSError("private-alert-path")
+    monkeypatch.setattr(worker, "_recover_evaluation_alerts", unavailable)
+    with caplog.at_level(logging.INFO, logger="src.trading_worker"):
+        report = worker.run_once()
+    assert report["blocking_conditions"] == []
+    assert json.loads((worker.state_dir / "status.json").read_text())["ready"] is True
+    assert "Evaluation alert recovery unavailable (OSError)" in caplog.text
+    assert "private-alert-path" not in caplog.text
+
+
+@pytest.mark.parametrize("fault", ["other_failure", "stale", "missing_binding", "missing_market_time",
+    "count_mismatch", "submitted", "contradictory_blocker", "paused"])
+def test_incomplete_observations_cannot_recover_prior_alerts(monkeypatch, tmp_path, caplog, fault):
+    from src import live_control
+    from src.web.alert_store import DurableAlertHandler, load_alert_incidents, record_alert
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+    monkeypatch.setattr(live_control, "assert_real_trading_allowed", lambda **kw: {"ready": True})
+    def observed(_):
+        row = _fresh_blocked_result()
+        if fault == "stale": row["market_observed_at"] = "2000-01-01T00:00:00+00:00"
+        elif fault == "missing_binding": row.pop("snapshot_binding")
+        elif fault == "missing_market_time": row.pop("market_observed_at")
+        elif fault == "count_mismatch": row["prediction_count"] = 1
+        elif fault == "submitted": row["confirmed_placed_orders"] = 1
+        elif fault == "contradictory_blocker": row["status"] = "evaluated"
+        elif fault == "other_failure": row["blocking_conditions"].append("private-vendor-failure")
+        return row
+    worker = _worker(tmp_path, cycle_runner=observed)
+    if fault == "paused":
+        monkeypatch.setattr("src.trading_controls.paused_status", lambda _: {"paused": True})
+    path = worker.real_logs_dir / "alerts.jsonl"
+    key = trading_worker._EVALUATION_INCIDENT_PREFIX + "market_observation"
+    record_alert(path, level="WARNING", source="__main__", message="Prior market failure", incident_key=key)
+    handler = DurableAlertHandler(path)
+    trading_worker.logger.addHandler(handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="src.trading_worker"):
+            report = worker.run_once()
+        incident = next(row for row in load_alert_incidents(path, 72) if row.get("incident_key") == key)
+        assert incident["status"] == "active"
+        assert report["trading_enabled"] is False
+        assert not any(json.loads(line).get("event") == "recovery" for line in path.read_text().splitlines())
+    finally:
+        trading_worker.logger.removeHandler(handler)
+
+
 @pytest.mark.parametrize("blockers", [["private-vendor-query"], [], "original_order_unresolved"])
 def test_worker_unknown_block_contract_never_claims_ready(tmp_path, blockers):
     worker = _worker(tmp_path, cycle_runner=lambda _: {"status": "blocked", "blocking_conditions": blockers,

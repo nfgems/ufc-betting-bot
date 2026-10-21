@@ -17,6 +17,13 @@ The dashboard distinguishes unavailable coverage from observed empty markets
 and dates market checks using actual observations. Rollout still requires the
 release receipt and runtime verification described below.
 
+Evaluation alerts have separate recovery lifecycles for observation failures
+and unresolved original orders. A completed fresh observation can recover an
+earlier market-fetch warning while the order blocker stays active. Recovery
+survives a worker restart, preserves alert history, and never changes accounting
+records or trading controls. Gamma fetch results and their alert transitions
+are serialized so an older success cannot clear a newer failure.
+
 A source manifest proves bytes, not rollout. The [CI production job](https://github.com/nfgems/ufc-betting-bot/actions/workflows/ci.yml)
 and its `railway-release-<commit>` artifact identify the commit, immutable image,
 previous image, Railway deployment and health/readiness result. The built image
