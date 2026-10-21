@@ -3341,7 +3341,7 @@
             if (runtime && runtime.components) {
                 for (const [name, comp] of Object.entries(runtime.components)) {
                     const state = (comp.state || '').toLowerCase();
-                    if (['dead', 'stale', 'degraded'].includes(state)) {
+                    if (['dead', 'stale', 'degraded', 'blocked'].includes(state)) {
                         issues.push({
                             timestamp: comp.updated_at || '',
                             source: state.toUpperCase(),

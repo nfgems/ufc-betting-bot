@@ -88,6 +88,33 @@ def test_activity_merges_original_log_and_current_saved_cycle_without_inventing_
     assert feed["last_entry"] == "2026-10-11 16:15:44"
 
 
+def test_blocked_runtime_is_one_actionable_warning_and_failures_remain_errors(dashboard, monkeypatch):
+    app, client, legacy, _public, logs = dashboard
+    data = app.extensions["refresh_dashboard"]["data"]
+    message = "New orders are blocked until the exchange outcome of an existing order is confirmed"
+    runtime = {"ready": False, "trading_enabled": False, "errors": [],
+               "readiness_errors": ["trading_consumer_not_ready"],
+               "components": {"betting_loop": {"state": "blocked", "message": message,
+                                               "updated_at": "2026-10-11T16:15:44+00:00"}}}
+    monkeypatch.setattr(data, "runtime_status", lambda: runtime)
+    for _ in range(2):
+        alerts = client.get("/api/bot-alerts").get_json()
+        assert alerts["active_warning_count"] == 1 and alerts["active_error_count"] == 0
+        assert alerts["active_count"] == 1
+        warning = alerts["active_entries"][0]
+        assert warning["level"] == "WARNING" and warning["source"] == "runtime.betting_loop"
+        assert warning["message"] == "Betting Loop blocked: " + message
+        assert warning["evidence_scope"] == "current_runtime_status"
+    assert not (logs / "alerts.jsonl").exists()
+    action = legacy._runtime_issue_significant_actions(runtime)[0]
+    assert action["level"] == "WARNING" and action["color"] == "yellow"
+    for failure in ("degraded", "dead", "stale"):
+        runtime["components"]["betting_loop"]["state"] = failure
+        alerts = client.get("/api/bot-alerts").get_json()
+        assert alerts["active_error_count"] == 1 and alerts["active_warning_count"] == 0
+        assert legacy._runtime_issue_significant_actions(runtime)[0]["color"] == "red"
+
+
 def test_original_real_history_retains_dormant_b_and_excludes_paper_without_writes(dashboard):
     _app, client, legacy, _public, logs = dashboard
     rows = [{"id": 1, "fighter": "A", "opponent": "B", "status": "open", "dry_run": False,

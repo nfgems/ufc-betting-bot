@@ -163,6 +163,7 @@ HANDLED_ACTIVITY_WARNING_PATTERNS = (
     "available regions",
 )
 RUNTIME_ACTIVITY_ERROR_STATES = {"degraded", "dead", "stale"}
+RUNTIME_ACTIVITY_WARNING_STATES = {"blocked"}
 RUNTIME_COMPONENT_LABELS = {
     "ufc_refresh_loop": "UFC Refresh",
     "betting_loop": "Betting Loop",
@@ -636,7 +637,7 @@ def _runtime_issue_activity_entries(status: dict | None = None) -> list[dict]:
     for component, payload in components.items():
         entry = dict(payload or {})
         state = str(entry.get("state", "") or "").strip().lower()
-        if state not in RUNTIME_ACTIVITY_ERROR_STATES:
+        if state not in RUNTIME_ACTIVITY_ERROR_STATES | RUNTIME_ACTIVITY_WARNING_STATES:
             continue
 
         updated_at = _parse_runtime_timestamp(entry.get("updated_at"))
@@ -659,7 +660,7 @@ def _runtime_issue_activity_entries(status: dict | None = None) -> list[dict]:
         normalized_entry = _normalize_activity_entry(
             {
                 "timestamp": timestamp,
-                "level": "ERROR",
+                "level": "WARNING" if state in RUNTIME_ACTIVITY_WARNING_STATES else "ERROR",
                 "source": f"runtime.{component}",
                 "message": message,
                 "activity_kind": "runtime_component_issue",
@@ -729,7 +730,7 @@ def _runtime_issue_significant_actions(status: dict | None = None) -> list[dict]
                 "level": entry.get("level", "ERROR"),
                 "source": entry.get("source", ""),
                 "tag": "ALERT",
-                "color": "red",
+                "color": "yellow" if entry.get("level") == "WARNING" else "red",
                 "message": entry.get("message", ""),
                 "sport": entry.get("sport", _classify_activity_sport(entry)),
             }

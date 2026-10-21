@@ -133,7 +133,7 @@ class TradingProcess:
     def report(self):
         return json.loads((self.state_dir / "latest.json").read_text(encoding="utf-8"))
 
-    def readiness(self):
+    def _running_status(self):
         saved = self.status()
         if not saved["process_alive"] or saved.get("pid") != self.process.pid:
             raise RuntimeError("Trading consumer owner is not running")
@@ -143,6 +143,11 @@ class TradingProcess:
         age = (datetime.now(timezone.utc) - instant).total_seconds()
         if age < -30 or age > self.max_age_seconds:
             raise RuntimeError("Trading consumer heartbeat is stale")
+        return saved
+
+    def readiness(self):
+        """Strict execution readiness, independent of HTTP service readiness."""
+        saved = self._running_status()
         real = self.mode == "real"
         paused = saved.get("paused") is True
         if (saved.get("ready") is not True or saved.get("orders_disabled") is not (not real)
@@ -155,6 +160,66 @@ class TradingProcess:
         return {"ready": True, "process_alive": True, "orders_disabled": not real,
                 "trading_enabled": real and not paused, "effective_live_mode": self.mode,
                 "paused": paused}
+
+    def service_readiness(self, publication):
+        """Serve verified observations while a known order blocks execution.
+
+        This does not change ``readiness`` or any execution control. A stopped,
+        stale, failed or unverified consumer still fails the deployment check.
+        """
+        try:
+            return {**self.readiness(), "trading_ready": True}
+        except RuntimeError:
+            pass
+        saved = self._running_status()
+        report = self.report()
+        cycle = report.get("cycle") or {}
+        blocker = ["original_order_unresolved"]
+        if (self.mode != "real" or saved.get("status") != "blocked"
+                or saved.get("cycle_in_progress") is not False
+                or saved.get("ready") is not False or saved.get("accounting_reconciled") is not False
+                or saved.get("blocking_conditions") != blocker
+                or report.get("blocking_conditions") != blocker
+                or cycle.get("blocking_conditions") != blocker or cycle.get("status") != "blocked"
+                or any(source.get("trading_enabled") is not False or source.get("orders_disabled") is not False
+                       for source in (saved, report, cycle))
+                or any(source.get("startup_verified") is not True or source.get("effective_live_mode") != "real"
+                       for source in (saved, report))
+                or report.get("accounting_reconciled") is not False
+                or any(type(value) is not int or value != 0 for value in (
+                    report.get("real_submissions"), cycle.get("total_orders"), cycle.get("confirmed_placed_orders")))):
+            raise RuntimeError("Consumer is not safely observing with a known execution block")
+        if (report.get("worker_pid") != self.process.pid
+                or not saved.get("started_at_utc")
+                or report.get("worker_started_at_utc") != saved["started_at_utc"]
+                or not saved.get("cycle_id") or report.get("cycle_id") != saved["cycle_id"]
+                or report.get("completed_at_utc") != saved.get("last_completed_at_utc")):
+            raise RuntimeError("Observation report does not belong to the current worker cycle")
+        generation, job = publication.get("generation_id"), publication.get("job_id")
+        pin = (publication.get("prediction_report") or {}).get("sha256")
+        if (not generation or not job or not pin or cycle.get("accepted_generation") != generation
+                or cycle.get("publication_job_id") != job
+                or (cycle.get("snapshot_binding") or {}).get("final_report_sha256") != pin):
+            raise RuntimeError("Observation report is not bound to the current publication")
+        now = datetime.now(timezone.utc)
+        times = {}
+        for name, value in (("started", saved["started_at_utc"]),
+                            ("completed", report.get("completed_at_utc")),
+                            ("bookmaker", cycle.get("bookmaker_observed_at")),
+                            ("market", cycle.get("market_observed_at"))):
+            instant = datetime.fromisoformat(value)
+            if instant.tzinfo is None or instant.utcoffset() is None:
+                raise RuntimeError("Observation time has no timezone")
+            if name != "started" and not -30 <= (now - instant).total_seconds() <= self.max_age_seconds:
+                raise RuntimeError("Consumer observations are stale")
+            times[name] = instant
+        if not (times["started"] <= times["bookmaker"] <= times["completed"]
+                and times["started"] <= times["market"] <= times["completed"]):
+            raise RuntimeError("Observation times do not belong to this worker cycle")
+        return {"ready": True, "trading_ready": False, "process_alive": True,
+                "orders_disabled": False, "trading_enabled": False, "effective_live_mode": "real",
+                "paused": saved.get("paused") is True, "blocking_conditions": blocker,
+                "observation_status": "current", "cycle_id": saved["cycle_id"]}
 
 
 def serve(service, *, state_dir, host="0.0.0.0", port=5050,

@@ -36,6 +36,16 @@ is not a successful release, even if public checks passed. Compare the receipt
 to Railway's currently active deployment; later releases can supersede it.
 The image records the commit in `/app/release-build.json` and its OCI revision label.
 
+`/readyz` measures whether the service can serve verified observations. Its
+`trading_ready` and `trading_enabled` fields separately describe execution.
+A completed consumer cycle blocked only by an unresolved original order can
+pass service readiness with both trading fields false. This requires fresh
+bookmaker/market observations, the exact current publication binding, a live
+worker and a report belonging to that worker's current cycle, verified startup,
+and zero submissions/orders. Failed, stale, mismatched or incomplete cycles
+still fail readiness. The strict trading-readiness check and order-recovery
+guards remain unchanged; a successful release does not clear an order blocker.
+
 Runtime/source verification uses read-only inspection, including installed source
 hashes and existing persistent paths. Do not provoke an account failure or force
 trading/refresh work to demonstrate a diagnostics change. Preserve current controls,

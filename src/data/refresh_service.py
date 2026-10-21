@@ -539,15 +539,18 @@ def create_app(service, *, worker=None, trading=None):
     @app.get("/readyz")
     def ready():
         try:
-            _publication, current, saved = service.published_pair()
+            publication, current, saved = service.published_pair()
             if worker is not None and not worker.is_alive():
                 raise RuntimeError("Refresh worker is not running")
             components = {"refresh": {"ready": True}}
             state = trading_state()
             if trading is not None:
-                components["trading_consumer"] = trading.readiness()
+                service_readiness = getattr(trading, "service_readiness", None)
+                components["trading_consumer"] = (service_readiness(publication) if callable(service_readiness)
+                                                   else trading.readiness())
                 state = {key: components["trading_consumer"][key] for key in
                          ("effective_live_mode", "trading_enabled", "orders_disabled", "paused")}
+                state["trading_ready"] = components["trading_consumer"].get("trading_ready", True)
             return jsonify({"ready": True, "accepted_generation": saved["accepted_generation"],
                             "total_rows": current.get("total_rows") or current.get("artifacts", {}).get("fights_cleaned.csv", {}).get("rows"),
                             "prediction_count": saved.get("prediction_count", len(saved.get("predictions", []))),

@@ -256,7 +256,9 @@ def test_authenticated_pause_resume_is_durable_and_live_health_reports_actual_mo
         assert current.status_code == 200
         assert current.json["trading_enabled"] is True
         assert current.json["effective_live_mode"] == "real"
-    assert b"real trading is enabled" in client.get("/predictions", headers=headers).data
+    # Runtime mode alone does not establish current observations. This fixture
+    # has no coherent cycle, so the page must retain its availability warning.
+    assert b"status needs attention" in client.get("/predictions", headers=headers).data
     assert client.post("/api/trading-control", json={"paused": True}).status_code == 401
     assert client.post("/api/trading-control", json={"paused": True},
                        headers={"Authorization": "Bearer wrong"}).status_code == 401
@@ -275,6 +277,160 @@ def test_authenticated_pause_resume_is_durable_and_live_health_reports_actual_mo
     assert resumed.status_code == 200 and resumed.json["paused"] is False
     assert restarted_view.readiness()["trading_enabled"] is True
     assert os.environ.get("LIVE_TRADING_MODE") is None
+
+
+def test_original_order_block_without_observations_does_not_pass_release_readiness(process_state, tmp_path, monkeypatch):
+    path, saved = process_state
+    saved.update(ready=False, status="blocked", orders_disabled=False, trading_enabled=False,
+                 effective_live_mode="real", startup_verified=True, accounting_reconciled=False,
+                 blocking_conditions=["original_order_unresolved"])
+    (path / "status.json").write_text(json.dumps(saved))
+    monkeypatch.setenv("WEB_DASHBOARD_TOKEN", "fixture-access")
+    trading = combined_service.TradingProcess(Process(), path, mode="real")
+    client = create_app(Service(tmp_path), trading=trading).test_client()
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/readyz").status_code == 503
+    assert client.get("/healthz").json["trading_enabled"] is False
+    page = client.get("/predictions", headers={"Authorization": "Bearer fixture-access"})
+    assert b"new orders are blocked pending recovery" in page.data
+
+
+@pytest.fixture
+def current_blocked_consumer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("WEB_DASHBOARD_TOKEN", "fixture-access")
+    now = datetime.now(timezone.utc)
+    started = (now - timedelta(minutes=2)).isoformat()
+    observed = (now - timedelta(seconds=15)).isoformat()
+    completed = (now - timedelta(seconds=5)).isoformat()
+    blocker = ["original_order_unresolved"]
+    state_dir = tmp_path / "consumer"
+    state_dir.mkdir()
+    status = {"status": "blocked", "ready": False, "pid": Process.pid,
+              "orders_disabled": False, "trading_enabled": False, "effective_live_mode": "real",
+              "startup_verified": True, "accounting_reconciled": False, "paused": False,
+              "blocking_conditions": list(blocker), "cycle_in_progress": False,
+              "cycle_id": "current-cycle", "started_at_utc": started,
+              "last_completed_at_utc": completed, "updated_at_utc": now.isoformat()}
+    report = {"orders_disabled": False, "trading_enabled": False, "effective_live_mode": "real",
+              "startup_verified": True, "accounting_reconciled": False, "paused": False,
+              "blocking_conditions": list(blocker), "real_submissions": 0,
+              "worker_pid": Process.pid, "worker_started_at_utc": started,
+              "cycle_id": "current-cycle", "completed_at_utc": completed,
+              "cycle": {"status": "blocked", "blocking_conditions": list(blocker),
+                        "orders_disabled": False, "trading_enabled": False, "total_orders": 0,
+                        "confirmed_placed_orders": 0, "accepted_generation": "accepted",
+                        "publication_job_id": "final-job", "snapshot_binding": {"final_report_sha256": "f" * 64},
+                        "bookmaker_observed_at": observed, "market_observed_at": observed}}
+    publication = {"generation_id": "accepted", "job_id": "final-job",
+                   "prediction_report": {"sha256": "f" * 64}}
+    service = Service(tmp_path)
+    service.published_pair = lambda: (publication, {"total_rows": 9503},
+        {"accepted_generation": "accepted", "prediction_count": 13, "predictions": []})
+    process = Process()
+    trading = combined_service.TradingProcess(process, state_dir, mode="real")
+    def save():
+        (state_dir / "status.json").write_text(json.dumps(status))
+        (state_dir / "latest.json").write_text(json.dumps(report))
+    save()
+    return SimpleNamespace(status=status, report=report, publication=publication, service=service,
+                           process=process, trading=trading, save=save, now=now)
+
+
+def test_current_order_block_is_ready_to_serve_but_never_ready_to_trade(current_blocked_consumer):
+    view = current_blocked_consumer
+    with pytest.raises(RuntimeError, match="not ready"):
+        view.trading.readiness()
+    service_ready = view.trading.service_readiness(view.publication)
+    assert service_ready["ready"] is True and service_ready["trading_ready"] is False
+    assert service_ready["trading_enabled"] is False and service_ready["orders_disabled"] is False
+    assert service_ready["blocking_conditions"] == ["original_order_unresolved"]
+    client = create_app(view.service, trading=view.trading).test_client()
+    response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.json["ready"] is True and response.json["trading_ready"] is False
+    assert response.json["trading_enabled"] is False
+    assert response.json["effective_live_mode"] == "real" and response.json["orders_disabled"] is False
+    assert response.json["components"]["trading_consumer"]["blocking_conditions"] == ["original_order_unresolved"]
+    assert view.trading.status()["ready"] is False
+
+
+@pytest.mark.parametrize("source,key,value", [
+    ("status", "pid", Process.pid + 1),
+    ("status", "status", "degraded"),
+    ("status", "status", "evaluating"),
+    ("status", "cycle_in_progress", True),
+    ("status", "ready", True),
+    ("status", "startup_verified", False),
+    ("status", "accounting_reconciled", True),
+    ("status", "blocking_conditions", ["original_order_unresolved", "account_read_unavailable"]),
+    ("report", "worker_pid", Process.pid + 1),
+    ("report", "worker_started_at_utc", "2020-01-01T00:00:00+00:00"),
+    ("report", "cycle_id", "previous-cycle"),
+    ("report", "startup_verified", False),
+    ("report", "accounting_reconciled", True),
+    ("report", "effective_live_mode", "off"),
+    ("report", "orders_disabled", True),
+    ("report", "trading_enabled", True),
+    ("report", "blocking_conditions", []),
+    ("report", "real_submissions", None),
+    ("report", "real_submissions", False),
+    ("report", "real_submissions", 1),
+    ("cycle", "status", "degraded"),
+    ("cycle", "blocking_conditions", ["unknown_blocker"]),
+    ("cycle", "trading_enabled", True),
+    ("cycle", "orders_disabled", True),
+    ("cycle", "total_orders", False),
+    ("cycle", "total_orders", 1),
+    ("cycle", "confirmed_placed_orders", 1),
+    ("cycle", "accepted_generation", "previous-generation"),
+    ("cycle", "publication_job_id", "previous-job"),
+    ("cycle", "snapshot_binding", {"final_report_sha256": "a" * 64}),
+])
+def test_service_readiness_rejects_unverified_or_conflicting_blocked_state(current_blocked_consumer,
+                                                                          source, key, value):
+    view = current_blocked_consumer
+    target = {"status": view.status, "report": view.report, "cycle": view.report["cycle"]}[source]
+    target[key] = value
+    view.save()
+    with pytest.raises(RuntimeError):
+        view.trading.service_readiness(view.publication)
+
+
+@pytest.mark.parametrize("damage", ["dead", "stale_heartbeat", "future_heartbeat", "naive_heartbeat",
+                                    "stale_observation", "future_observation", "naive_observation",
+                                    "missing_observation", "invalid_observation",
+                                    "previous_worker_observation", "observation_after_completion",
+                                    "mismatched_completion", "incomplete_publication"])
+def test_service_readiness_rejects_dead_stale_or_unbound_observations(current_blocked_consumer, damage):
+    view = current_blocked_consumer
+    if damage == "dead":
+        view.process.code = 1
+    elif damage in {"stale_heartbeat", "future_heartbeat", "naive_heartbeat"}:
+        stamp = view.now + timedelta(minutes=2 if damage == "future_heartbeat" else -11)
+        view.status["updated_at_utc"] = (stamp.replace(tzinfo=None) if damage == "naive_heartbeat" else stamp).isoformat()
+    elif damage in {"stale_observation", "future_observation", "naive_observation"}:
+        stamp = view.now + timedelta(minutes=2 if damage == "future_observation" else -11)
+        view.report["cycle"]["market_observed_at"] = (
+            stamp.replace(tzinfo=None) if damage == "naive_observation" else stamp).isoformat()
+    elif damage == "missing_observation":
+        view.report["cycle"].pop("market_observed_at")
+    elif damage == "invalid_observation":
+        view.report["cycle"]["market_observed_at"] = "private-invalid-time"
+    elif damage == "previous_worker_observation":
+        restarted = view.now.isoformat()
+        view.status["started_at_utc"] = view.report["worker_started_at_utc"] = restarted
+    elif damage == "observation_after_completion":
+        view.report["cycle"]["bookmaker_observed_at"] = view.now.isoformat()
+    elif damage == "mismatched_completion":
+        view.status["last_completed_at_utc"] = view.now.isoformat()
+    else:
+        view.publication.pop("prediction_report")
+    view.save()
+    client = create_app(view.service, trading=view.trading).test_client()
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert "private-invalid-time" not in response.get_data(as_text=True)
 
 
 def test_corrupt_pause_record_blocks_orders_and_deceased_consumer_reports_disabled(process_state):

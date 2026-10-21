@@ -10,6 +10,13 @@ observed entry charges, for original open real fills and future settlement.
 Original gross fill records and already-settled history remain intact. Missing or
 ambiguous cost delays financial finalization. See [Fee accounting](FEE_ACCOUNTING.md).
 
+The declared consumer overlay preserves current market observations when an
+unresolved original order blocks execution. It reports the blocker explicitly,
+keeps trading disabled, and separates service readiness from trading readiness.
+The dashboard distinguishes unavailable coverage from observed empty markets
+and dates market checks using actual observations. Rollout still requires the
+release receipt and runtime verification described below.
+
 A source manifest proves bytes, not rollout. The [CI production job](https://github.com/nfgems/ufc-betting-bot/actions/workflows/ci.yml)
 and its `railway-release-<commit>` artifact identify the commit, immutable image,
 previous image, Railway deployment and health/readiness result. The built image

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "base_manifest_sha256": "e94810e7422da2bc958d8c1b0a9cdff93cbb41891c6acb71b48684282834f464",
   "status": "declared",
-  "description": "Preserve account-read diagnostics; account for independently verified original entry cash debits and exact fill quantities, preserving gross records and settled history. Unknown cost postpones financial finalization. Betting strategy and sizing rules unchanged.",
+  "description": "Preserve account-read diagnostics and verified entry cash accounting. Continue current observations while unresolved original orders block execution; report safe failure stages and accurate dashboard coverage. Separate verified service readiness from strict trading readiness. Original orders, execution gates, models and strategy remain unchanged.",
   "files": {
     "src/polymarket/client.py": {
       "bytes": 89858,
@@ -21,24 +21,40 @@
       "sha256": "c7a1c495614bf369381f1ea3a449805bd68ffc75ba58227b15956e687e9b91aa"
     },
     "src/refresh_live.py": {
-      "bytes": 22929,
-      "sha256": "84e13813305b5f0a2388404bfd9a5901a211ef10886088ea296fc2bddcfe6e6a"
+      "bytes": 23877,
+      "sha256": "729634adc3d3e7f15926ca0429083ed8fa8728412ac4dcf7aab0ef6ade1bf920"
     },
     "src/trading_worker.py": {
-      "bytes": 20085,
-      "sha256": "46bd82fa81a797ac16af2f3d5c71e313795d27adc387f434610688f3a81f9a68"
+      "bytes": 23249,
+      "sha256": "ddd5fadf2b900138c7fe7b95545dbb82f8587754c9e491319b0a292a4abbaca9"
     },
     "src/web/app.py": {
-      "bytes": 290073,
-      "sha256": "bcb9567dd1b52cfe605f926baf878802c5a1745d7f7195a68ec28e5343252fb7"
+      "bytes": 290262,
+      "sha256": "2d806e34c08b97ee94aaa72026224ad9e437a185c313cef915be0aac65583a43"
     },
     "src/web/refresh_dashboard.py": {
-      "bytes": 23144,
-      "sha256": "ea00e5894c78d81e0fd13d1f877a77fb7ec34466c4a58346a41ee3cd95bc2ac4"
+      "bytes": 23524,
+      "sha256": "ccb32b6abc4533eb51380b09c598d269ef420f89cbde10758de246480ec4b10b"
     },
     "src/web/templates/dashboard.html": {
-      "bytes": 175547,
-      "sha256": "9372db72342c156f417bd25f6d6fc20eb4e11a7f4b1e54cbc0d40476690e946d"
+      "bytes": 175558,
+      "sha256": "9e7d67cf58c39ba7292c24fc39e909a1d77f3b622b3cc7b54bc8e977081acb6c"
+    },
+    "src/web/refresh_dashboard_data.py": {
+      "bytes": 39686,
+      "sha256": "a4c7db23a531f838ec7e8a7d84d2591cecdae8476b70b53041bf4e9f4e059634"
+    },
+    "src/web/static/dashboard-freshness.js": {
+      "bytes": 3915,
+      "sha256": "7f577947fe352c967f08952c15da40610c549e85566d9d1a6f0c30586017d13e"
+    },
+    "src/combined_service.py": {
+      "bytes": 16741,
+      "sha256": "e36fa5265ec415a84ac0d1821cabf17f62bc4acab6920d843969b846326079e6"
+    },
+    "src/data/refresh_service.py": {
+      "bytes": 37248,
+      "sha256": "23fb003fcdff0529755908e12b77c70e1d1b518357ff77d6c1652b828e2be6d2"
     }
   },
   "additions": {

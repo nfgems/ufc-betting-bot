@@ -394,8 +394,11 @@ def install_dashboard(app, service, trading):
         except Exception:
             freshness, state = {"state": "unavailable"}, {}
         text = ("UFC trading is paused." if state.get("paused") else
+                "UFC new orders are blocked pending recovery of an existing order." if freshness.get("order_recovery_required") else
+                "The latest UFC consumer cycle failed; new orders are blocked." if freshness.get("consumer_failed") else
+                "UFC status needs attention. Last verified information is shown below." if freshness.get("is_stale") else
                 "UFC consumer is checking current data; the last completed cycle is shown." if freshness.get("consumer_evaluating") else
-                "UFC real trading is enabled under the existing entry and risk rules." if state.get("trading_enabled") else
+                "UFC real trading is enabled under the existing entry and risk rules." if freshness.get("trading_enabled") else
                 "UFC trading is off or waiting for verified startup.")
         return {"dashboard_freshness": freshness, "dashboard_live_mode_text": text,
                 "dashboard_trading_text": text}

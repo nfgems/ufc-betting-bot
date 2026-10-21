@@ -311,6 +311,71 @@ def test_worker_market_failure_is_durable_and_next_cycle_recovers(tmp_path):
     assert len(list((worker.state_dir / "cycles").glob("*.json"))) == 2
 
 
+def test_worker_failure_stage_is_safe_and_repeat_warnings_resume_after_recovery(tmp_path, caplog):
+    from src import refresh_live
+    snapshot = SimpleNamespace(snapshot={"models": {"primary": {"bytes": 1, "sha256": "fixture"}}})
+    def failed(_):
+        refresh_live._assert_selected_live_model(snapshot, str(tmp_path / "private-model-path.pkl"))
+    worker = _worker(tmp_path, cycle_runner=failed)
+    with caplog.at_level(logging.WARNING, logger="src.trading_worker"):
+        first = worker.run_once()
+        second = worker.run_once()
+        worker.cycle_runner = lambda _: {"status": "idle", "orders_disabled": True,
+            "trading_enabled": False, "accepted_generation": "good"}
+        recovered = worker.run_once()
+        worker.cycle_runner = failed
+        worker.run_once()
+    assert first["cycle"]["failure_stage"] == "selected_live_model"
+    assert second["cycle"]["error_class"] == "RuntimeError"
+    assert caplog.text.count("Trading evaluation unavailable (stage=selected_live_model, error=RuntimeError)") == 2
+    assert not recovered["blocking_conditions"]
+    assert len(list((worker.state_dir / "cycles").glob("*.json"))) == 4
+    retained = caplog.text + "".join(path.read_text() for path in worker.state_dir.rglob("*.json"))
+    assert "private-model-path" not in retained
+    assert "LIVE_MODEL does not match" not in retained
+
+
+def test_worker_original_order_block_preserves_observations_without_claiming_ready(monkeypatch, tmp_path, caplog):
+    from src import live_control
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+    monkeypatch.setattr(live_control, "assert_real_trading_allowed", lambda **kw: {"ready": True})
+    observed = {"status": "blocked", "blocking_conditions": ["original_order_unresolved"],
+                "orders_disabled": False, "trading_enabled": False, "accepted_generation": "final",
+                "real_submissions": 0, "total_orders": 0, "prediction_count": 2,
+                "bookmaker_observed_at": "2026-10-20T20:00:00+00:00",
+                "market_observed_at": "2026-10-20T20:00:00+00:00",
+                "mapped_markets": [{"fighter_a": "Alpha", "fighter_b": "Beta"}],
+                "predictions": [{"fighter_a": "Alpha", "prob_a": .6}]}
+    worker = _worker(tmp_path, cycle_runner=lambda _: observed)
+    with caplog.at_level(logging.WARNING, logger="src.trading_worker"):
+        report = worker.run_once()
+        worker.run_once()
+    assert report["blocking_conditions"] == ["original_order_unresolved"]
+    assert report["cycle"]["blocking_conditions"] == ["original_order_unresolved"]
+    assert report["cycle"]["prediction_count"] == 2
+    assert report["cycle"]["mapped_markets"] == observed["mapped_markets"]
+    assert report["cycle"]["market_observed_at"] == observed["market_observed_at"]
+    assert not report["trading_enabled"] and not report["orders_disabled"]
+    assert not report["accounting_reconciled"] and report["real_submissions"] == 0
+    status = json.loads((worker.state_dir / "status.json").read_text())
+    assert status["status"] == "blocked" and not status["ready"] and not status["trading_enabled"]
+    assert caplog.text.count("Trading evaluation blocked (original_order_unresolved)") == 1
+    worker.cycle_runner = lambda _: {**observed, "status": "idle", "blocking_conditions": [], "trading_enabled": True}
+    recovered = worker.run_once()
+    assert not recovered["blocking_conditions"] and recovered["trading_enabled"]
+    assert json.loads((worker.state_dir / "status.json").read_text())["ready"] is True
+
+
+@pytest.mark.parametrize("blockers", [["private-vendor-query"], [], "original_order_unresolved"])
+def test_worker_unknown_block_contract_never_claims_ready(tmp_path, blockers):
+    worker = _worker(tmp_path, cycle_runner=lambda _: {"status": "blocked", "blocking_conditions": blockers,
+        "orders_disabled": True, "trading_enabled": False, "accepted_generation": "final"})
+    report = worker.run_once()
+    assert "cycle_blocker_unconfirmed" in report["blocking_conditions"]
+    assert json.loads((worker.state_dir / "status.json").read_text())["ready"] is False
+    assert "private-vendor-query" not in json.dumps(report)
+
+
 def test_worker_receipts_survive_new_instance_without_reusing_cycle_id(tmp_path):
     first = _worker(tmp_path).run_once()
     second = _worker(tmp_path).run_once()

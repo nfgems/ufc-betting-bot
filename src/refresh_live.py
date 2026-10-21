@@ -27,6 +27,14 @@ class TradingConsumerBusy(RuntimeError):
     pass
 
 
+class OriginalAccountingUnresolved(RuntimeError):
+    """Original order evidence blocks execution, not current observations."""
+
+    def __init__(self, count):
+        self.count = count
+        super().__init__("Original real submission ownership/fill remains unresolved; new orders blocked")
+
+
 @contextmanager
 def trading_consumer_lock(path):
     """One finite market/prediction/execution reader per retained state root."""
@@ -152,12 +160,20 @@ def _run_cycle(*, root, baseline, min_edge, progress_callback,
 
     consumer = PublishedTradingSnapshot(RefreshService(root=root, baseline=baseline)).read()
     original_accounting = None
+    blocking_conditions = []
     clob = readonly_clob
     if not dry_run:
         _assert_selected_live_model(consumer, model_name)
         from src.polymarket.client import ClobClientWrapper
         clob = clob_client if clob_client is not None else ClobClientWrapper()
-        original_accounting = _maintain_original_accounting(clob)
+        try:
+            original_accounting = _maintain_original_accounting(clob)
+        except OriginalAccountingUnresolved as exc:
+            # Missing exchange evidence never cancels an intent or permits a
+            # replacement. Still collect this cycle's real market observations.
+            blocking_conditions.append("original_order_unresolved")
+            original_accounting = {"status": "blocked",
+                                   "unresolved_original_submissions": exc.count}
     freshness = None
     if observation_dir is not None:
         from src.data.refresh_live_observations import observe_publication
@@ -203,7 +219,7 @@ def _run_cycle(*, root, baseline, min_edge, progress_callback,
             row["model_features"], row["feature_provenance"],
             fighter_a=row["fighter_a"], fighter_b=row["fighter_b"],
             a_fights=row["a_num_fights"], b_fights=row["b_num_fights"])
-        reasons = list(quality["reasons"])
+        reasons = list(quality["reasons"]) + blocking_conditions
         if freshness:
             reasons.extend(freshness["trade_block_reasons"])
         if row.get("market_inputs_available") is not True:
@@ -224,18 +240,21 @@ def _run_cycle(*, root, baseline, min_edge, progress_callback,
                    bet_window=bet_window_status(row.get("commence_time"), fail_closed=True))
     executable = pd.DataFrame([row for row in predictions if not row["trade_blocked"]])
     result = {"status": "idle", "reason": "no_executable_opportunities", "total_orders": 0}
-    if not executable.empty and not execution_markets.empty:
+    if not blocking_conditions and not executable.empty and not execution_markets.empty:
         # The original S -> C -> M runner retains its existing timing, stake,
         # risk, ledger, no-odds and exposure rules.
         result = run_duo_traders(executable, execution_markets, clob=clob, dry_run=dry_run,
                                 min_edge=min_edge, event_title=consumer.report.get("event_date", ""),
                                 progress_callback=progress_callback, bankroll_basis=bankroll_basis)
     result.setdefault("status", "evaluated")
+    if blocking_conditions:
+        result.update(status="blocked", reason="original_order_unresolved")
     real_orders = [order for name in ("trader_s", "trader_c", "trader_m")
                    for group in ("orders", "near_miss_orders")
                    for order in result.get(name, {}).get(group, [])
                    if order.get("dry_run") is False]
-    result.update(trading_enabled=not dry_run, orders_disabled=dry_run,
+    result.update(trading_enabled=not dry_run and not blocking_conditions, orders_disabled=dry_run,
+                  blocking_conditions=blocking_conditions,
                   # A failed/unknown result is not proof that POST never reached
                   # the exchange. Keep that distinction in the saved cycle.
                   real_submissions=0 if not real_orders else None,
@@ -355,7 +374,7 @@ def _maintain_original_accounting(clob):
             else:
                 reconciled += 1
     if unresolved:
-        raise RuntimeError("Original real submission ownership/fill remains unresolved; new orders blocked")
+        raise OriginalAccountingUnresolved(len(unresolved))
     # Original gross evidence remains unchanged. Cash cost is established only
     # by exact exchange-trade and activity linkage before financial finalization.
     from src.polymarket.fill_cashflow import (

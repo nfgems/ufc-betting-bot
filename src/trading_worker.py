@@ -133,6 +133,27 @@ def _safe_predictions(rows):
     return [{key: value for key, value in row.items() if key in allowed} for row in rows]
 
 
+def _evaluation_failure_stage(exc):
+    """Classify trusted call sites without retaining paths or exception text."""
+    stages = {
+        ("src.refresh_live", "_run_cycle"): "refresh_cycle",
+        ("src.refresh_live", "_assert_selected_live_model"): "selected_live_model",
+        ("src.refresh_live", "_maintain_original_accounting"): "original_accounting",
+        ("src.data.refresh_trading", "read"): "published_snapshot",
+        ("src.data.refresh_trading", "score"): "prediction",
+        ("src.data.refresh_live_observations", "observe_publication"): "official_card_observation",
+        ("src.data.odds_client", "get_live_odds"): "bookmaker_observation",
+        ("src.polymarket.markets", "get_ufc_fight_markets"): "market_observation",
+        ("src.strategy.duo_trader", "run_duo_traders"): "portfolio_execution",
+    }
+    stage, trace = "evaluation", exc.__traceback__
+    while trace is not None:
+        key = (trace.tb_frame.f_globals.get("__name__"), trace.tb_frame.f_code.co_name)
+        stage = stages.get(key, stage)
+        trace = trace.tb_next
+    return stage
+
+
 class TradingWorker:
     def __init__(self, *, root, baseline, state_dir, real_logs_dir, client=None,
                  cycle_runner=None, account_reader=None, accounting_reader=None):
@@ -146,6 +167,7 @@ class TradingWorker:
         self.started_at = _now()
         self.last_completed = None
         self.supervisor_pid = None
+        self._last_evaluation_failure = None
 
     def _status(self, *, status, ready=False, **extra):
         real = os.environ.get("LIVE_TRADING_MODE", "off") == "real"
@@ -233,6 +255,7 @@ class TradingWorker:
                                readonly_clob=self.client, bankroll_basis=basis,
                                observation_dir=self.state_dir / "observations",
                                model=os.environ.get("LIVE_MODEL"), host="0.0.0.0")
+        evaluation_failure = None
         try:
             if real and (failures or paused):
                 result = {"status": "paused" if paused and not failures else "degraded",
@@ -244,9 +267,32 @@ class TradingWorker:
                 raise TypeError("Trading cycle did not return a report")
         except Exception as exc:
             result = {"status": "degraded", "reason": "market_or_prediction_cycle_unavailable",
-                      "error_class": type(exc).__name__}
+                      "error_class": type(exc).__name__, "failure_stage": _evaluation_failure_stage(exc)}
             failures.append("market_or_prediction_cycle_unavailable")
-            logger.warning("Trading evaluation unavailable (%s)", type(exc).__name__)
+            evaluation_failure = ("unavailable", result["failure_stage"], result["error_class"])
+        reported_blockers = result.get("blocking_conditions", [])
+        cycle_blockers = [code for code in reported_blockers
+                          if isinstance(code, str) and code == "original_order_unresolved"] \
+            if isinstance(reported_blockers, list) else []
+        if not isinstance(reported_blockers, list) or len(cycle_blockers) != len(reported_blockers):
+            failures.append("cycle_blocker_unconfirmed")
+        failures.extend(cycle_blockers)
+        if result.get("status") == "blocked" and not cycle_blockers:
+            failures.append("cycle_blocker_unconfirmed")
+        if cycle_blockers:
+            if (not real or result.get("status") != "blocked" or result.get("trading_enabled") is not False
+                    or result.get("orders_disabled") is not False or not result.get("accepted_generation")
+                    or result.get("real_submissions") != 0 or result.get("total_orders") != 0):
+                failures.append("blocked_result_contract_unconfirmed")
+            evaluation_failure = ("blocked", *sorted(set(cycle_blockers)))
+        if evaluation_failure != self._last_evaluation_failure:
+            if evaluation_failure is not None:
+                if evaluation_failure[0] == "unavailable":
+                    logger.warning("Trading evaluation unavailable (stage=%s, error=%s)",
+                                   evaluation_failure[1], evaluation_failure[2])
+                else:
+                    logger.warning("Trading evaluation blocked (%s)", ", ".join(evaluation_failure[1:]))
+            self._last_evaluation_failure = evaluation_failure
         if not real and (result.get("trading_enabled") is True or result.get("orders_disabled") is False):
             raise RuntimeError("Orders-disabled cycle returned incompatible trading state")
         if not real and (result.get("trading_enabled") is not False or result.get("orders_disabled") is not True
@@ -262,9 +308,11 @@ class TradingWorker:
         allowed = {"status", "accepted_generation", "publication_job_id", "bookmaker_observed_at",
                    "market_observed_at", "prediction_count", "executable_prediction_count",
                    "matched_market_count", "total_orders", "orders_disabled", "trading_enabled",
-                   "error_class", "freshness", "execution_audit", "current_card", "mapped_markets",
+                   "error_class", "failure_stage", "freshness", "execution_audit", "current_card", "mapped_markets",
                    "snapshot_binding", "original_accounting_maintenance", "confirmed_placed_orders"}
         safe_result = {key: result[key] for key in allowed if key in result}
+        if cycle_blockers:
+            safe_result["blocking_conditions"] = sorted(set(cycle_blockers))
         order_fields = {"fighter", "opponent", "status", "dry_run", "bet_size_usd",
                         "price", "shares", "order_type", "side"}
         for name in ("trader_s", "trader_c", "trader_m"):
@@ -281,6 +329,7 @@ class TradingWorker:
         safe_result["predictions"] = _safe_predictions(result.get("predictions", []))
         self.last_completed = _now()
         report = {"schema_version": 1, "cycle_id": cycle_id,
+                  "worker_pid": os.getpid(), "worker_started_at_utc": self.started_at,
                   "completed_at_utc": self.last_completed, "orders_disabled": not real,
                   "trading_enabled": real and not failures and not paused,
                   "effective_live_mode": mode, "paused": paused,
@@ -302,7 +351,8 @@ class TradingWorker:
         } | {"accepted_generation": result.get("accepted_generation"),
              "prediction_count": result.get("prediction_count"),
              "matched_market_count": result.get("matched_market_count")})
-        self._status(status="degraded" if failures else "waiting", ready=not failures,
+        blocked = bool(cycle_blockers) and set(failures) == set(cycle_blockers)
+        self._status(status="blocked" if blocked else "degraded" if failures else "waiting", ready=not failures,
                      cycle_in_progress=False, cycle_id=cycle_id,
                      startup_verified=startup_verified, accounting_reconciled=reconciled,
                      blocking_conditions=sorted(set(failures)))

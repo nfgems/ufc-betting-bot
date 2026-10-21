@@ -178,7 +178,8 @@ def test_wallet_assertion_never_adopts_or_erases_manual_positions(monkeypatch, t
     assert path.read_bytes() == before
 
 
-def test_low_cash_real_cycle_uses_original_portfolio_without_submission(monkeypatch, tmp_path):
+@pytest.mark.parametrize("accounting_state", ["confirmed", "unresolved", "invalid"])
+def test_real_cycle_keeps_observations_without_submission(monkeypatch, tmp_path, accounting_state):
     from src.data import refresh_service, refresh_trading, odds_client, line_tracker
     from src.polymarket import markets, monitor
     from src import bot
@@ -217,19 +218,49 @@ def test_low_cash_real_cycle_uses_original_portfolio_without_submission(monkeypa
     monkeypatch.setattr(line_tracker, "detect_injury_or_cancellation", lambda *a, **kw: {"severity": "none"})
     monkeypatch.setattr(monitor, "PositionMonitor", lambda **kw: SimpleNamespace(wallet_address="fixture-wallet"))
     monkeypatch.setattr(executor_module, "_fetch_wallet_positions_for_reconciliation", lambda wallet: [])
+    reads = []
     client = SimpleNamespace(get_open_orders=lambda: [],
+        get_order=lambda order_id: reads.append(("order", order_id)) or None,
+        get_trades=lambda **kw: reads.append(("trades", None)) or [],
         get_clob_market_info=lambda cid: {"mts": "0.01", "nr": False, "t": [{"t": "alpha-token"}, {"t": "beta-token"}]},
         create_limit_order=lambda **kw: pytest.fail("insufficient cash must never submit"))
     for path in (duo_trader.SINGLE_LEDGER, duo_trader.CONVICTION_LEDGER, duo_trader.MODEL_TRACKER_LEDGER):
         path.write_text(json.dumps({"bets": []}), encoding="utf-8")
+    if accounting_state == "invalid":
+        def invalid_accounting(_):
+            raise RuntimeError("Invalid original accounting")
+        monkeypatch.setattr(refresh_live, "_maintain_original_accounting", invalid_accounting)
+        monkeypatch.setattr(odds_client, "OddsClient", lambda: pytest.fail("invalid accounting must abort"))
+        with pytest.raises(RuntimeError, match="Invalid original accounting"):
+            refresh_live.run_refresh_live_cycle(root=tmp_path, baseline=tmp_path, dry_run=False,
+                                               clob_client=client)
+        return
+    unresolved_order = accounting_state == "unresolved"
+    if unresolved_order:
+        intent(duo_trader.CONVICTION_LEDGER, order_id="original-submitted-order", state="submitted")
+        monkeypatch.setattr(duo_trader, "run_duo_traders",
+                            lambda *a, **kw: pytest.fail("unresolved original order must block portfolio execution"))
     originals = {path: path.read_bytes() for path in tmp_path.glob("bet_ledger*.json")}
     result = refresh_live.run_refresh_live_cycle(root=tmp_path, baseline=tmp_path, dry_run=False,
         clob_client=client, readonly_clob=SimpleNamespace(),
         bankroll_basis=duo_trader.WalletBankrollBasis(.50334, .50334, "confirmed offline account"))
-    assert result["trading_enabled"] is True and result["orders_disabled"] is False
+    assert result["trading_enabled"] is (not unresolved_order) and result["orders_disabled"] is False
     assert result["real_submissions"] == result["total_orders"] == 0
     assert result["current_card"]["bet_window_open_count"] == 1
-    assert result["trader_s"]["allocation"] == .50334
+    assert result["prediction_count"] == result["matched_market_count"] == 1
+    assert result["accepted_generation"] == "final-original"
+    assert result["bookmaker_observed_at"] and result["market_observed_at"]
+    if unresolved_order:
+        assert reads == [("order", "original-submitted-order"), ("trades", None)]
+        assert result["status"] == "blocked"
+        assert result["blocking_conditions"] == ["original_order_unresolved"]
+        assert result["original_accounting_maintenance"]["unresolved_original_submissions"] == 1
+        assert result["predictions"][0]["market_inputs_available"] is True
+        assert result["predictions"][0]["trade_blocked"] is True
+        assert "original_order_unresolved" in result["predictions"][0]["trade_block_reason"]
+        assert result["executable_prediction_count"] == 0
+    else:
+        assert result["trader_s"]["allocation"] == .50334
     assert all(path.read_bytes() == original for path, original in originals.items())
 
 

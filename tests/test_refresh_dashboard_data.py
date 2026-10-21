@@ -288,6 +288,11 @@ def test_missing_report_retains_publication_and_emits_unavailability(view):
     data = view.data.predictions()
     assert data["prediction_count"] == 13 and data["current_prediction_count"] == 0
     assert data["freshness"]["state"] == "waiting_for_consumer"
+    assert data["freshness"]["consumer_failed"] is False
+    assert data["freshness"]["bookmaker_coverage_available"] is False
+    assert data["freshness"]["polymarket_coverage_available"] is False
+    assert data["predictions"][0]["pick_filter_reason"] == "Current bookmaker coverage unavailable"
+    assert "13 bouts have no current bookmaker inputs; saved predictions are shown" not in data["freshness"]["warnings"]
     assert data["is_stale"] is True
     assert "private-path" not in json.dumps(data)
 
@@ -375,3 +380,144 @@ def test_evaluating_runtime_has_no_error_badge_but_retains_unready_evidence(view
     runtime = view.data.runtime_status()
     assert runtime["consumer_evaluating"] is False
     assert runtime["errors"] == ["trading_consumer_not_ready"]
+
+
+def blocked(view):
+    for source in (view.status, view.report, view.report["cycle"]):
+        source.update(blocking_conditions=["original_order_unresolved"], trading_enabled=False, orders_disabled=False)
+    for source in (view.status, view.report):
+        source.update(effective_live_mode="real", paused=False, startup_verified=True, accounting_reconciled=False)
+    view.status.update(status="blocked", ready=False)
+    view.report["cycle"].update(status="blocked", total_orders=0, confirmed_placed_orders=0)
+    for row in view.report["cycle"]["predictions"]:
+        row.update(trade_blocked=True, trade_block_reason="original_order_unresolved")
+    def unready():
+        raise RuntimeError("private-order-id")
+    view.trading.readiness = unready
+
+
+def test_order_recovery_blocks_execution_while_preserving_current_observations(view):
+    blocked(view)
+    before = deepcopy(view.saved), deepcopy(view.report), deepcopy(view.status)
+
+    data = view.data.predictions()
+    fresh = data["freshness"]
+    assert fresh["state"] == "blocked" and fresh["order_recovery_required"] is True
+    assert fresh["consumer_failed"] is False and fresh["is_stale"] is False
+    assert fresh["bookmaker_coverage_available"] is fresh["polymarket_coverage_available"] is True
+    assert fresh["trading_enabled"] is False and data["cache_status"] == "current"
+    assert (data["current_prediction_count"], data["matched_market_count"]) == (9, 8)
+    assert data["predictions"][0]["a_market_prob"] == .55
+    assert data["predictions"][0]["a_polymarket_prob"] == .455
+    for row in data["predictions"]:
+        assert row["pick_filter_reason"] == "Order recovery required"
+        assert row["pick_execution_status"] == "blocked" and row["pick_is_bettable"] is False
+        assert row["execution_eligibility_confirmed"] is False
+    runtime = view.data.runtime_status()
+    assert runtime["ready"] is runtime["trading_enabled"] is False
+    assert runtime["errors"] == []
+    assert runtime["readiness_errors"] == ["trading_consumer_not_ready"]
+    assert runtime["components"]["betting_loop"]["state"] == "blocked"
+    assert runtime["orders_disabled"] is False
+    assert runtime["components"]["monitor_loop"]["state"] == "running"
+    assert "exchange outcome of an existing order is confirmed" in runtime["components"]["betting_loop"]["message"]
+    assert "current market observations remain available" in runtime["components"]["betting_loop"]["message"]
+    heartbeat = next(row for row in view.data.activity() if "heartbeat" in row["message"])
+    assert "new orders blocked" in heartbeat["message"]
+    assert "waiting_for_consumer" not in json.dumps(data)
+    assert "private-order-id" not in json.dumps(data)
+    assert (view.saved, view.report, view.status) == before
+    view.status["process_alive"] = False
+    assert view.data.runtime_status()["components"]["monitor_loop"]["state"] == "unavailable"
+    assert view.data.runtime_status()["components"]["betting_loop"]["state"] == "dead"
+    assert view.data.runtime_status()["errors"] == ["trading_consumer_not_ready"]
+    with pytest.raises(RuntimeError):
+        view.trading.readiness()
+
+
+def test_blocked_consumer_evaluation_keeps_warning_and_last_verified_observations(view):
+    blocked(view)
+    view.status.update(status="evaluating", cycle_in_progress=True)
+    for field in ("blocking_conditions", "startup_verified", "accounting_reconciled"):
+        view.status.pop(field)
+    runtime = view.data.runtime_status()
+    assert runtime["errors"] == [] and runtime["readiness_errors"] == ["trading_consumer_not_ready"]
+    assert runtime["ready"] is runtime["trading_enabled"] is False
+    assert runtime["components"]["monitor_loop"]["state"] == "evaluating"
+    assert runtime["components"]["betting_loop"]["state"] == "blocked"
+    assert runtime["freshness"]["order_recovery_required"] is True
+    assert view.data.predictions()["current_prediction_count"] == 9
+    view.status["cycle_in_progress"] = False
+    assert view.data.runtime_status()["errors"] == ["trading_consumer_not_ready"]
+
+
+@pytest.mark.parametrize("fault", ["extra_blocker", "missing_status_blocker", "missing_report_blocker",
+    "missing_cycle_blocker", "armed_status", "orders_disabled", "paused", "startup", "mode", "submitted",
+    "unknown_orders", "confirmed_orders", "stale_bookmaker", "old_report", "refresh_stale", "generation"])
+def test_order_blocker_does_not_hide_other_runtime_faults(view, fault):
+    blocked(view)
+    old = (NOW - timedelta(minutes=30)).isoformat()
+    if fault == "extra_blocker": view.report["blocking_conditions"].append("account_read_unavailable")
+    elif fault == "missing_status_blocker": view.status.pop("blocking_conditions")
+    elif fault == "missing_report_blocker": view.report.pop("blocking_conditions")
+    elif fault == "missing_cycle_blocker": view.report["cycle"].pop("blocking_conditions")
+    elif fault == "armed_status": view.status["trading_enabled"] = True
+    elif fault == "orders_disabled": view.report["cycle"]["orders_disabled"] = True
+    elif fault == "paused": view.status["paused"] = True
+    elif fault == "startup": view.report["startup_verified"] = False
+    elif fault == "mode": view.status["effective_live_mode"] = "off"
+    elif fault == "submitted": view.report["real_submissions"] = 1
+    elif fault == "unknown_orders": view.report["cycle"].pop("total_orders")
+    elif fault == "confirmed_orders": view.report["cycle"]["confirmed_placed_orders"] = 1
+    elif fault == "stale_bookmaker": view.report["cycle"]["bookmaker_observed_at"] = old
+    elif fault == "old_report": view.report["completed_at_utc"] = old
+    elif fault == "refresh_stale":
+        view.refresh["updated_at_utc"] = old
+        view.service.status_path.write_text(json.dumps(view.refresh))
+    else: view.report["cycle"]["accepted_generation"] = "different"
+    runtime = view.data.runtime_status()
+    assert "trading_consumer_not_ready" in runtime["errors"]
+    assert runtime["ready"] is runtime["trading_enabled"] is False
+    assert runtime["components"]["monitor_loop"]["state"] == "unavailable"
+    assert runtime["components"]["betting_loop"]["state"] in {"degraded", "stale"}
+
+
+@pytest.mark.parametrize("source", ["status", "report", "cycle"])
+def test_failed_incoherent_cycle_is_not_presented_as_startup_or_no_odds(view, source):
+    view.report["cycle"] = {"status": "evaluated", "predictions": []}
+    target = view.report["cycle"] if source == "cycle" else getattr(view, source)
+    target.update(status="degraded", blocking_conditions=["market_or_prediction_cycle_unavailable"])
+    data = view.data.predictions()
+    fresh = data["freshness"]
+    assert fresh["state"] == "degraded" and fresh["consumer_failed"] is True
+    assert fresh["bookmaker_coverage_available"] is fresh["polymarket_coverage_available"] is False
+    assert fresh["polymarket_observed_at"] is fresh["bookmaker_observed_at"] is None
+    assert fresh["trading_enabled"] is False
+    assert data["prediction_count"] == 13 and data["current_prediction_count"] == 0
+    assert data["predictions"][0]["pick_filter_reason"] == "Current bookmaker coverage unavailable"
+    assert "no current bookmaker inputs" not in " ".join(fresh["warnings"])
+    assert "Latest consumer cycle failed" in " ".join(fresh["warnings"])
+    runtime = view.data.runtime_status()
+    assert runtime["ready"] is runtime["trading_enabled"] is False
+    assert "Latest consumer cycle failed" in runtime["components"]["betting_loop"]["message"]
+
+
+def test_order_blocker_cannot_promote_stale_or_conflicting_observations(view):
+    view.report["cycle"]["blocking_conditions"] = ["original_order_unresolved"]
+    view.report["cycle"]["accepted_generation"] = "other"
+    data = view.data.predictions()
+    assert data["freshness"]["state"] == "degraded"
+    assert data["freshness"]["is_stale"] is True and data["freshness"]["trading_enabled"] is False
+    assert data["current_prediction_count"] == data["matched_market_count"] == 0
+    assert data["cache_status"] == "stale"
+    assert "stale or unavailable" in view.data.runtime_status()["components"]["betting_loop"]["message"]
+
+
+def test_successful_empty_market_observations_are_distinct_from_failed_acquisition(view):
+    view.report["cycle"].update(predictions=[], mapped_markets=[], prediction_count=0)
+    data = view.data.predictions()
+    assert data["freshness"]["state"] == "current"
+    assert data["freshness"]["bookmaker_coverage_available"] is True
+    assert data["freshness"]["polymarket_coverage_available"] is True
+    assert data["current_prediction_count"] == data["matched_market_count"] == 0
+    assert data["freshness"]["warnings"] == ["13 bouts have no current bookmaker inputs; saved predictions are shown"]

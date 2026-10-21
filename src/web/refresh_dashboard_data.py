@@ -202,10 +202,19 @@ class DashboardData:
         stale = (not coherent or live_age is None or live_age < -30 or live_age > self.stale_after_seconds
                  or heartbeat_age is None or heartbeat_age < -30 or heartbeat_age > self.stale_after_seconds)
         evaluating = self._evaluating(snap)
-        failed = bool([error for error in errors if not (evaluating and error == "trading_consumer_not_ready")]
-                      or report.get("blocking_conditions") or status.get("blocking_conditions")
-                      or cycle.get("status") in {"error", "degraded", "busy"})
-        state = "unavailable" if not saved else "waiting_for_consumer" if not coherent else "stale" if stale else "degraded" if failed else "evaluating" if evaluating else "current"
+        blockers = [condition for source in (report, status, cycle)
+                    for condition in (source.get("blocking_conditions") or [])]
+        order_recovery = "original_order_unresolved" in blockers
+        consumer_failed = (any(source.get("status") in {"error", "degraded", "busy"}
+                               for source in (report, status, cycle))
+                           or any(condition != "original_order_unresolved" for condition in blockers))
+        failed = bool([error for error in errors if not (
+            (evaluating or order_recovery) and error == "trading_consumer_not_ready")]
+            or any(condition != "original_order_unresolved" for condition in blockers) or consumer_failed)
+        # An attempted, failed cycle must not masquerade as initial startup.
+        state = ("unavailable" if not saved else "degraded" if not coherent and (consumer_failed or order_recovery) else
+                 "waiting_for_consumer" if not coherent else "stale" if stale else "degraded" if failed else
+                 "blocked" if order_recovery else "evaluating" if evaluating else "current")
         source = cycle.get("freshness") or {}
         rows = saved.get("predictions") or []
         dataset = pointer.get("total_rows") or (pointer.get("artifacts") or {}).get("fights_cleaned.csv", {}).get("rows")
@@ -215,6 +224,9 @@ class DashboardData:
         return {
             "state": state, "is_stale": stale, "live_available": coherent and bool(cycle.get("predictions")),
             "consumer_evaluating": evaluating,
+            "consumer_failed": consumer_failed, "order_recovery_required": order_recovery,
+            "bookmaker_coverage_available": coherent and _instant(cycle.get("bookmaker_observed_at")) is not None,
+            "polymarket_coverage_available": coherent and _instant(observed) is not None,
             "live_generation_matches_publication": coherent,
             "accepted_generation": publication.get("generation_id"),
             "published_at": publication.get("published_at_utc"), "saved_prediction_at": saved.get("decision_at"),
@@ -302,13 +314,17 @@ class DashboardData:
                      matched_market_count=sum(row["polymarket_market_available"] for row in rows),
                      bet_window_open_count=sum((row.get("bet_window") or {}).get("open") is True for row in rows),
                      effective_live_mode=status.get("effective_live_mode") or getattr(self.trading, "mode", "off"),
-                     trading_enabled=status.get("trading_enabled") is True and not any(
+                     trading_enabled=status.get("trading_enabled") is True and not fresh["order_recovery_required"] and not fresh["consumer_failed"] and not any(
                          error in {"trading_status_unavailable", "trading_consumer_not_ready"} for error in _errors),
                      paused=status.get("paused") is True, consumer_status=status.get("status") or "unavailable")
         fresh["warnings"] = []
-        if len(rows) - current_count:
+        if not fresh["bookmaker_coverage_available"]:
+            fresh["warnings"].append("Current bookmaker coverage is unavailable; saved predictions are shown")
+        elif len(rows) - current_count:
             fresh["warnings"].append(f"{len(rows) - current_count} bouts have no current bookmaker inputs; saved predictions are shown")
-        if fresh["state"] not in {"current", "evaluating"}:
+        if fresh["order_recovery_required"] or fresh["consumer_failed"]:
+            fresh["warnings"].append(self._consumer_message(fresh))
+        elif fresh["state"] not in {"current", "evaluating"}:
             fresh["warnings"].append(f"Live consumer data status: {fresh['state']}")
         if fresh["refresh_error"]:
             fresh["warnings"].append("Latest refresh attempt failed; the prior accepted publication remains served")
@@ -323,11 +339,12 @@ class DashboardData:
             "data_timestamp": fresh["polymarket_observed_at"] or fresh["published_at"] or saved.get("decision_at"),
             "timestamp_parse_failed": False, "freshness_age_minutes": None if fresh["live_age_seconds"] is None else round(max(0, fresh["live_age_seconds"]) / 60, 1),
             "stale_after_minutes": self.stale_after_seconds / 60, "is_stale": fresh["is_stale"],
-            "cache_status": "current" if fresh["state"] in {"current", "evaluating"} else "stale" if saved else "missing",
+            "cache_status": "current" if fresh["state"] in {"current", "evaluating", "blocked"} else "stale" if saved else "missing",
             "cache_available": bool(saved), "freshness": fresh,
             "market_probability_source": "bookmaker_consensus",
             "market_price_source": "polymarket_indicative_price",
-            "message": f"{current_count} current predictions; {len(rows) - current_count} saved predictions without current bookmaker inputs.",
+            "message": (f"{current_count} current predictions; {len(rows) - current_count} saved predictions without current bookmaker inputs."
+                        if fresh["bookmaker_coverage_available"] else "Current bookmaker coverage is unavailable; saved predictions are shown."),
         }
         if include_global_feature_importance:
             payload["global_feature_importance"] = []  # No attribution artifact is saved by this consumer.
@@ -387,13 +404,16 @@ class DashboardData:
 
     @staticmethod
     def _execution_display(row, fresh, status):
+        if fresh["order_recovery_required"]:
+            return "blocked", "Order recovery required", "New orders are blocked until the exchange outcome of an existing order is confirmed"
         if not row["market_inputs_available"]:
             detail = ("Showing the saved accepted prediction and observed Polymarket quote; "
                       "current bookmaker inputs and order eligibility are unavailable"
                       if row["polymarket_market_available"] else
                       "Showing the saved accepted prediction; current bookmaker inputs, "
                       "Polymarket quote and order eligibility are unavailable")
-            return "saved_only", "No current bookmaker odds", detail
+            reason = "No current bookmaker odds" if fresh["bookmaker_coverage_available"] else "Current bookmaker coverage unavailable"
+            return "saved_only", reason, detail
         if row.get("trade_blocked"):
             return "data_quality_blocked", "Data quality blocked", "The current consumer rejected live data quality"
         if row["prediction_is_stale"]:
@@ -435,29 +455,87 @@ class DashboardData:
         snap = self._snapshot()
         _pub, _pointer, saved, report, status, refresh, errors = snap
         fresh = self._freshness(snap)
-        ready = bool(saved) and not errors and status.get("ready") is True and not fresh["refresh_is_stale"]
+        ready = (bool(saved) and not errors and status.get("ready") is True and not fresh["refresh_is_stale"]
+                 and not fresh["order_recovery_required"] and not fresh["consumer_failed"])
+        observing_while_blocked = self._observing_while_blocked(snap, fresh)
         display_errors = [error for error in errors if not (
-            fresh["consumer_evaluating"] and error == "trading_consumer_not_ready")]
+            (fresh["consumer_evaluating"] or observing_while_blocked) and error == "trading_consumer_not_ready")]
+        betting_state = status.get("status") or "unavailable"
+        if status.get("process_alive") is False:
+            betting_state = "dead"
+        elif fresh["order_recovery_required"] and fresh["is_stale"]:
+            betting_state = "stale"
+        elif betting_state == "blocked" and not observing_while_blocked:
+            betting_state = "degraded"
+        elif observing_while_blocked:
+            betting_state = "blocked"
         return {"ok": ready, "ready": ready, "startup_source": "refresh-combined",
                 "consumer_evaluating": fresh["consumer_evaluating"],
                 "effective_live_mode": status.get("effective_live_mode") or getattr(self.trading, "mode", "off"),
-                "trading_enabled": status.get("trading_enabled") is True and not any(
+                "trading_enabled": status.get("trading_enabled") is True and not fresh["order_recovery_required"] and not fresh["consumer_failed"] and not any(
                     error in {"trading_status_unavailable", "trading_consumer_not_ready"} for error in errors),
                 "orders_disabled": status.get("orders_disabled", True), "paused": status.get("paused", False),
                 "enabled_sports": ["ufc"], "updated_at": status.get("updated_at_utc"),
                 "errors": display_errors, "readiness_errors": errors,
                 "warnings": (["Live prediction observations are stale"] if fresh["is_stale"] else [])
-                    + (["Refresh scheduler heartbeat is stale or unavailable"] if fresh["refresh_is_stale"] else []),
+                    + (["Refresh scheduler heartbeat is stale or unavailable"] if fresh["refresh_is_stale"] else [])
+                    + ([self._consumer_message(fresh)] if fresh["order_recovery_required"] else []),
                 "components": {
                     "refresh_loop": {"state": "stale" if fresh["refresh_is_stale"] else refresh.get("state") or "unavailable", "updated_at": refresh.get("updated_at_utc"),
                                      "stale_after_seconds": 180, "message": "Final accepted publication served; scheduled refresh owns data updates"},
-                    "betting_loop": {"state": status.get("status") or "unavailable", "updated_at": status.get("updated_at_utc"),
+                    "betting_loop": {"state": betting_state, "updated_at": status.get("updated_at_utc"),
                                      "stale_after_seconds": self.stale_after_seconds, "process_alive": status.get("process_alive"),
-                                     "message": "Guarded UFC consumer; current book and market observations refresh each cycle"},
-                    "monitor_loop": {"state": "evaluating" if fresh["consumer_evaluating"] else "running" if ready else "unavailable", "updated_at": report.get("completed_at_utc"),
+                                     "message": self._consumer_message(fresh)},
+                    "monitor_loop": {"state": "evaluating" if fresh["consumer_evaluating"] or (observing_while_blocked and status.get("status") == "evaluating") else "running" if ready or observing_while_blocked else "unavailable", "updated_at": report.get("completed_at_utc"),
                                      "stale_after_seconds": self.stale_after_seconds, "message": "Refresh consumer account and market monitoring"},
                     "btc5m_loop": {"state": "disabled", "message": "BTC is disabled"},
                 }, "freshness": fresh}
+
+    def _observing_while_blocked(self, snap, fresh):
+        """Recognize one verified execution guard without hiding other faults."""
+        _pub, _pointer, _saved, report, status, _refresh, errors = snap
+        cycle = report.get("cycle") or {}
+        known_status = (status.get("status") == "blocked"
+                        and status.get("blocking_conditions") == ["original_order_unresolved"]
+                        and status.get("startup_verified") is True
+                        and status.get("accounting_reconciled") is False)
+        evaluating = (status.get("status") == "evaluating" and status.get("cycle_in_progress") is True
+                      and status.get("blocking_conditions", []) == [])
+        if (fresh["state"] != "blocked" or fresh["is_stale"] or fresh["refresh_is_stale"]
+                or fresh["consumer_failed"] or status.get("process_alive") is not True
+                or not (known_status or evaluating) or status.get("ready") is not False
+                or cycle.get("status") != "blocked"
+                or any(source.get("blocking_conditions") != ["original_order_unresolved"]
+                       for source in (report, cycle))
+                or any(source.get("trading_enabled") is not False or source.get("orders_disabled") is not False
+                       for source in (status, report, cycle))
+                or any(source.get("effective_live_mode") != "real" or source.get("paused") is not False
+                       for source in (status, report))
+                or report.get("startup_verified") is not True or report.get("accounting_reconciled") is not False
+                or type(report.get("real_submissions")) is not int or report.get("real_submissions") != 0
+                or type(cycle.get("total_orders")) is not int or cycle.get("total_orders") != 0
+                or type(cycle.get("confirmed_placed_orders")) is not int or cycle.get("confirmed_placed_orders") != 0
+                or any(error != "trading_consumer_not_ready" for error in errors)):
+            return False
+        ages = [_age(stamp, self._now()) for stamp in
+                (report.get("completed_at_utc"), cycle.get("bookmaker_observed_at"))]
+        return all(age is not None and -30 <= age <= self.stale_after_seconds for age in ages)
+
+    @staticmethod
+    def _consumer_message(fresh):
+        if fresh["order_recovery_required"]:
+            message = "New orders are blocked until the exchange outcome of an existing order is confirmed"
+            if fresh["consumer_failed"]:
+                return message + "; the latest observation cycle also failed"
+            return message + ("; current market observations remain available" if not fresh["is_stale"]
+                              else "; current market observations are stale or unavailable")
+        if fresh["consumer_failed"]:
+            return "Latest consumer cycle failed; new orders are blocked and current market coverage could not be verified"
+        if fresh["consumer_evaluating"]:
+            return "Checking current data; the last completed cycle is shown"
+        if fresh["state"] == "degraded":
+            return "Consumer readiness checks have not passed; new orders are blocked"
+        return "UFC consumer refreshes current bookmaker and market observations each cycle"
 
     def tracker_decisions(self, history=False):
         data = self.predictions()
@@ -506,6 +584,8 @@ class DashboardData:
         add(refresh.get("updated_at_utc"), f"Refresh scheduler check: {refresh.get('state') or 'unavailable'}; next refresh {(refresh.get('schedule') or {}).get('next_due_at_local') or 'unavailable'}", "refresh_loop")
         if status.get("paused"):
             state_note = "paused"
+        elif any("original_order_unresolved" in (source.get("blocking_conditions") or []) for source in (status, report)):
+            state_note = "new orders blocked pending confirmation of an existing order's exchange outcome"
         elif status.get("orders_disabled") is True:
             state_note = "orders disabled"
         elif status.get("status") == "evaluating":
