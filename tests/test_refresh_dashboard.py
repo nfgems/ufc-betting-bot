@@ -78,6 +78,19 @@ def test_initial_page_context_distinguishes_verified_evaluation_from_startup_and
     assert data.trading.status()["ready"] is False and data.trading.status()["trading_enabled"] is False
 
 
+@pytest.mark.parametrize("order_recovery", [False, True])
+def test_initial_page_names_publication_checks_alongside_order_recovery(dashboard, monkeypatch, order_recovery):
+    app, client, _legacy, _public, _logs = dashboard
+    data = app.extensions["refresh_dashboard"]["data"]
+    monkeypatch.setattr(data, "freshness", lambda: {
+        "order_recovery_required": order_recovery,
+        "publication_block_reasons": ["current_official_card_changed", "final_publication_freshness_blocked"]})
+    phrase = (b"UFC new orders are blocked by order recovery and current card/data checks." if order_recovery else
+              b"UFC new orders are blocked by current card/data checks.")
+    response = client.get("/")
+    assert response.status_code == 200 and phrase in response.data
+
+
 def test_activity_merges_original_log_and_current_saved_cycle_without_inventing_time(dashboard):
     _app, client, _legacy, _public, logs = dashboard
     (logs / "bot.log").write_text("2026-10-10 12:00:00,123 [INFO] src.bot: Earlier real activity\n")

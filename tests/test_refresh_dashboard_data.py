@@ -451,6 +451,102 @@ def test_blocked_consumer_evaluation_keeps_warning_and_last_verified_observation
     assert view.data.runtime_status()["errors"] == ["trading_consumer_not_ready"]
 
 
+def publication_blocked(view):
+    reasons = ["current_official_card_changed", "final_publication_freshness_blocked"]
+    view.report["cycle"]["freshness"].update(
+        official_card_observed=True, official_card_matches_publication=False,
+        event_date="2026-10-24", trade_block_reasons=reasons,
+        strict_messages=["private-source-path: snapshot missing completed event"])
+    for row in view.report["cycle"]["predictions"]:
+        row.update(trade_blocked=True, trade_block_reason="; ".join(
+            (["original_order_unresolved"] if view.status.get("status") == "blocked" else []) + reasons))
+    return list(reasons)
+
+
+@pytest.mark.parametrize("evaluating_now", [False, True])
+def test_publication_blockers_remain_visible_alongside_order_recovery(view, evaluating_now):
+    blocked(view)
+    reasons = publication_blocked(view)
+    if evaluating_now:
+        view.status.update(status="evaluating", cycle_in_progress=True)
+        for field in ("blocking_conditions", "startup_verified", "accounting_reconciled"):
+            view.status.pop(field)
+    before = deepcopy(view.saved), deepcopy(view.report), deepcopy(view.status)
+    data = view.data.predictions()
+    fresh = data["freshness"]
+    assert fresh["publication_block_reasons"] == reasons
+    assert fresh["publication_block_messages"] == [
+        "Official card check is for 2026-10-24; saved predictions are for 2026-10-17",
+        "Saved predictions failed the current data freshness checks"]
+    assert fresh["state"] == "blocked" and fresh["is_stale"] is False
+    assert fresh["trading_enabled"] is False and fresh["consumer_failed"] is False
+    assert (data["current_prediction_count"], data["matched_market_count"]) == (9, 8)
+    warnings = " ".join(fresh["warnings"])
+    assert "exchange outcome of an existing order is unconfirmed" in warnings
+    for message in fresh["publication_block_messages"]:
+        assert message in warnings
+        assert message in data["predictions"][0]["pick_filter_detail"]
+    for row in data["predictions"]:
+        assert row["pick_filter_reason"] == "Order recovery and data checks"
+        assert row["pick_is_bettable"] is row["execution_eligibility_confirmed"] is False
+    assert data["predictions"][0]["trade_block_reason"] == "original_order_unresolved; " + "; ".join(reasons)
+    runtime = view.data.runtime_status()
+    assert runtime["ready"] is runtime["trading_enabled"] is False
+    assert runtime["readiness_errors"] == ["trading_consumer_not_ready"]
+    assert runtime["components"]["betting_loop"]["state"] == "blocked"
+    assert all(message in runtime["components"]["betting_loop"]["message"]
+               for message in fresh["publication_block_messages"])
+    assert "private-source-path" not in json.dumps(data)
+    assert (view.saved, view.report, view.status) == before
+    with pytest.raises(RuntimeError):
+        view.trading.readiness()
+
+
+@pytest.mark.parametrize("fault", ["generation", "job", "sha", "market_stale", "heartbeat_stale",
+    "official_stale", "official_future", "official_unknown", "old_report", "dead", "failed", "not_observed"])
+def test_publication_diagnostics_never_promote_stale_or_unbound_cycles(view, fault):
+    blocked(view)
+    publication_blocked(view)
+    cycle = view.report["cycle"]
+    old = (NOW - timedelta(minutes=30)).isoformat()
+    if fault == "generation": cycle["accepted_generation"] = "other"
+    elif fault == "job": cycle["publication_job_id"] = "other"
+    elif fault == "sha": cycle["snapshot_binding"]["final_report_sha256"] = "other"
+    elif fault == "market_stale": cycle["market_observed_at"] = old
+    elif fault == "heartbeat_stale": view.status["updated_at_utc"] = old
+    elif fault == "official_stale": cycle["freshness"]["observed_at_utc"] = old
+    elif fault == "official_future": cycle["freshness"]["observed_at_utc"] = (NOW + timedelta(minutes=5)).isoformat()
+    elif fault == "official_unknown": cycle["freshness"].pop("observed_at_utc")
+    elif fault == "old_report": view.report["completed_at_utc"] = old
+    elif fault == "dead": view.status["process_alive"] = False
+    elif fault == "failed": view.status["status"] = "degraded"
+    else: cycle["freshness"]["official_card_observed"] = False
+    data = view.data.predictions()
+    assert data["freshness"]["publication_block_reasons"] == []
+    assert data["freshness"]["publication_block_messages"] == []
+    assert "saved predictions are for" not in " ".join(data["freshness"]["warnings"])
+    assert data["freshness"]["order_recovery_required"] is True
+    assert data["freshness"]["trading_enabled"] is False
+
+
+def test_publication_diagnostics_do_not_change_global_controls_or_invent_dates(view):
+    before_runtime = view.data.runtime_status()
+    reasons = publication_blocked(view)
+    view.report["cycle"]["freshness"]["event_date"] = "invalid-private-date"
+    view.report["cycle"]["freshness"]["trade_block_reasons"] += ["private-unknown-reason", reasons[0]]
+    data = view.data.predictions()
+    assert data["freshness"]["publication_block_reasons"] == reasons
+    assert data["freshness"]["publication_block_messages"][0] == "Current official card differs from the saved prediction card"
+    assert "Current card/data checks block new orders" in " ".join(data["freshness"]["warnings"])
+    assert data["predictions"][0]["pick_filter_reason"] == "Card/data checks blocked"
+    assert all(row["pick_is_bettable"] is row["execution_eligibility_confirmed"] is False for row in data["predictions"])
+    runtime = view.data.runtime_status()
+    for field in ("ready", "trading_enabled", "orders_disabled", "paused", "errors", "readiness_errors"):
+        assert runtime[field] == before_runtime[field]
+    assert "invalid-private-date" not in json.dumps(data["freshness"])
+    assert "private-unknown-reason" not in json.dumps(data["freshness"])
+
+
 @pytest.mark.parametrize("fault", ["extra_blocker", "missing_status_blocker", "missing_report_blocker",
     "missing_cycle_blocker", "armed_status", "orders_disabled", "paused", "startup", "mode", "submitted",
     "unknown_orders", "confirmed_orders", "stale_bookmaker", "old_report", "refresh_stale", "generation"])

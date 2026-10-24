@@ -39,6 +39,19 @@ async function render(data) {
     'UFC new orders are blocked pending recovery of an existing order.');
   assert.match(elements.get('workflowCoverage').textContent, /10 with current bookmaker odds/);
 
+  const publicationBlocked = {...data, trading_enabled: false,
+    publication_block_reasons: ['current_official_card_changed', 'final_publication_freshness_blocked'],
+    warnings: ['Current official card differs from the saved prediction card',
+      'Saved predictions failed the current data freshness checks']};
+  elements = await render({...publicationBlocked, order_recovery_required: true});
+  assert.equal(elements.get('workflowMode').textContent,
+    'UFC new orders are blocked by order recovery and current card/data checks.');
+  assert.equal(elements.get('workflowWarning').textContent, publicationBlocked.warnings.join(' · '));
+  assert.match(elements.get('workflowCoverage').textContent, /10 with current bookmaker odds/);
+  elements = await render(publicationBlocked);
+  assert.equal(elements.get('workflowMode').textContent,
+    'UFC new orders are blocked by current card/data checks.');
+
   elements = await render({...data, trading_enabled: false, consumer_failed: true, is_stale: true,
     current_prediction_count: 0, matched_market_count: 0, saved_only_prediction_count: 13,
     bookmaker_coverage_available: false, polymarket_coverage_available: false,

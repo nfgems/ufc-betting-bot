@@ -2,7 +2,7 @@
   "schema_version": 1,
   "base_manifest_sha256": "e94810e7422da2bc958d8c1b0a9cdff93cbb41891c6acb71b48684282834f464",
   "status": "declared",
-  "description": "Preserve account-read diagnostics, verified entry cash accounting, and current observations while unresolved original orders block execution. Separate verified service readiness from strict trading readiness. Recover observation alerts only after fresh verified observations, keep order recovery separate, and serialize Gamma alert transitions. Original orders, execution gates, models and strategy remain unchanged.",
+  "description": "Preserve account-read diagnostics, verified entry cash accounting, and current observations while unresolved original orders block execution. Separate verified service readiness from strict trading readiness. Recover observation alerts only after fresh verified observations, keep order recovery separate, and serialize Gamma alert transitions. Display independently verified card and publication freshness holds alongside order recovery. Original orders, execution gates, models and strategy remain unchanged.",
   "files": {
     "src/polymarket/client.py": {
       "bytes": 89858,
@@ -33,20 +33,20 @@
       "sha256": "2d806e34c08b97ee94aaa72026224ad9e437a185c313cef915be0aac65583a43"
     },
     "src/web/refresh_dashboard.py": {
-      "bytes": 23524,
-      "sha256": "ccb32b6abc4533eb51380b09c598d269ef420f89cbde10758de246480ec4b10b"
+      "bytes": 23838,
+      "sha256": "614fc4b99fde1540c05d9d1aa05a4e3922be24f3a48e05fab27f42eacf34800a"
     },
     "src/web/templates/dashboard.html": {
       "bytes": 175558,
       "sha256": "9e7d67cf58c39ba7292c24fc39e909a1d77f3b622b3cc7b54bc8e977081acb6c"
     },
     "src/web/refresh_dashboard_data.py": {
-      "bytes": 39686,
-      "sha256": "a4c7db23a531f838ec7e8a7d84d2591cecdae8476b70b53041bf4e9f4e059634"
+      "bytes": 42319,
+      "sha256": "5d32ac46d39a11043f1049c8666ca387a5c49af9cdca7b23716550fab7321339"
     },
     "src/web/static/dashboard-freshness.js": {
-      "bytes": 3915,
-      "sha256": "7f577947fe352c967f08952c15da40610c549e85566d9d1a6f0c30586017d13e"
+      "bytes": 4291,
+      "sha256": "b99f4118f18180d1de2ae2a2c6cbe9b2dbb99e22f801c9cc4021d97d97fe68e8"
     },
     "src/combined_service.py": {
       "bytes": 16741,

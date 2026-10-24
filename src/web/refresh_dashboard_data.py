@@ -217,6 +217,26 @@ class DashboardData:
                  "blocked" if order_recovery else "evaluating" if evaluating else "current")
         source = cycle.get("freshness") or {}
         rows = saved.get("predictions") or []
+        # Presentation only: keep these separate from worker/service readiness.
+        # A prior or unbound observation must not become a current diagnosis.
+        publication_reasons, publication_messages = [], []
+        source_ages = [_age(stamp, now) for stamp in (source.get("observed_at_utc"), report.get("completed_at_utc"))]
+        if (not stale and not consumer_failed and status.get("process_alive") is True
+                and source.get("official_card_observed") is True
+                and all(age is not None and -30 <= age <= self.stale_after_seconds for age in source_ages)
+                and isinstance(source.get("trade_block_reasons"), list)):
+            publication_reasons = [reason for reason in ("current_official_card_changed", "final_publication_freshness_blocked")
+                                   if reason in source["trade_block_reasons"]]
+            if "current_official_card_changed" in publication_reasons:
+                saved_days = {_card_day(row) for row in rows if isinstance(row, dict)}
+                saved_day = next(iter(saved_days)) if len(saved_days) == 1 else None
+                observed_day = _day(source.get("event_date"))
+                publication_messages.append(
+                    f"Official card check is for {observed_day}; saved predictions are for {saved_day}"
+                    if observed_day and saved_day and observed_day != saved_day else
+                    "Current official card differs from the saved prediction card")
+            if "final_publication_freshness_blocked" in publication_reasons:
+                publication_messages.append("Saved predictions failed the current data freshness checks")
         dataset = pointer.get("total_rows") or (pointer.get("artifacts") or {}).get("fights_cleaned.csv", {}).get("rows")
         cutoff = source.get("processed_snapshot_max_event_date") if coherent else None
         if cutoff is None and rows:
@@ -225,6 +245,7 @@ class DashboardData:
             "state": state, "is_stale": stale, "live_available": coherent and bool(cycle.get("predictions")),
             "consumer_evaluating": evaluating,
             "consumer_failed": consumer_failed, "order_recovery_required": order_recovery,
+            "publication_block_reasons": publication_reasons, "publication_block_messages": publication_messages,
             "bookmaker_coverage_available": coherent and _instant(cycle.get("bookmaker_observed_at")) is not None,
             "polymarket_coverage_available": coherent and _instant(observed) is not None,
             "live_generation_matches_publication": coherent,
@@ -322,7 +343,7 @@ class DashboardData:
             fresh["warnings"].append("Current bookmaker coverage is unavailable; saved predictions are shown")
         elif len(rows) - current_count:
             fresh["warnings"].append(f"{len(rows) - current_count} bouts have no current bookmaker inputs; saved predictions are shown")
-        if fresh["order_recovery_required"] or fresh["consumer_failed"]:
+        if fresh["order_recovery_required"] or fresh["consumer_failed"] or fresh["publication_block_reasons"]:
             fresh["warnings"].append(self._consumer_message(fresh))
         elif fresh["state"] not in {"current", "evaluating"}:
             fresh["warnings"].append(f"Live consumer data status: {fresh['state']}")
@@ -404,8 +425,14 @@ class DashboardData:
 
     @staticmethod
     def _execution_display(row, fresh, status):
+        publication_detail = "; ".join(fresh["publication_block_messages"])
         if fresh["order_recovery_required"]:
+            if publication_detail:
+                return ("blocked", "Order recovery and data checks",
+                        "The exchange outcome of an existing order is unconfirmed; " + publication_detail)
             return "blocked", "Order recovery required", "New orders are blocked until the exchange outcome of an existing order is confirmed"
+        if publication_detail:
+            return "data_quality_blocked", "Card/data checks blocked", publication_detail
         if not row["market_inputs_available"]:
             detail = ("Showing the saved accepted prediction and observed Polymarket quote; "
                       "current bookmaker inputs and order eligibility are unavailable"
@@ -479,7 +506,7 @@ class DashboardData:
                 "errors": display_errors, "readiness_errors": errors,
                 "warnings": (["Live prediction observations are stale"] if fresh["is_stale"] else [])
                     + (["Refresh scheduler heartbeat is stale or unavailable"] if fresh["refresh_is_stale"] else [])
-                    + ([self._consumer_message(fresh)] if fresh["order_recovery_required"] else []),
+                    + ([self._consumer_message(fresh)] if fresh["order_recovery_required"] or fresh["publication_block_reasons"] else []),
                 "components": {
                     "refresh_loop": {"state": "stale" if fresh["refresh_is_stale"] else refresh.get("state") or "unavailable", "updated_at": refresh.get("updated_at_utc"),
                                      "stale_after_seconds": 180, "message": "Final accepted publication served; scheduled refresh owns data updates"},
@@ -523,14 +550,18 @@ class DashboardData:
 
     @staticmethod
     def _consumer_message(fresh):
+        publication_detail = "; ".join(fresh["publication_block_messages"])
         if fresh["order_recovery_required"]:
-            message = "New orders are blocked until the exchange outcome of an existing order is confirmed"
+            message = ("New orders remain blocked: the exchange outcome of an existing order is unconfirmed; " + publication_detail
+                       if publication_detail else "New orders are blocked until the exchange outcome of an existing order is confirmed")
             if fresh["consumer_failed"]:
                 return message + "; the latest observation cycle also failed"
             return message + ("; current market observations remain available" if not fresh["is_stale"]
                               else "; current market observations are stale or unavailable")
         if fresh["consumer_failed"]:
             return "Latest consumer cycle failed; new orders are blocked and current market coverage could not be verified"
+        if publication_detail:
+            return "Current card/data checks block new orders: " + publication_detail
         if fresh["consumer_evaluating"]:
             return "Checking current data; the last completed cycle is shown"
         if fresh["state"] == "degraded":

@@ -24,10 +24,13 @@
             const response = await fetch('/api/dashboard-status', { cache: 'no-store' });
             if (!response.ok) throw new Error('Status unavailable');
             const data = await response.json();
+            const publicationBlocked = Array.isArray(data.publication_block_reasons) && data.publication_block_reasons.length > 0;
             set('workflowMode', data.paused ? 'UFC trading is paused.'
+                : data.order_recovery_required && publicationBlocked ? 'UFC new orders are blocked by order recovery and current card/data checks.'
                 : data.order_recovery_required ? 'UFC new orders are blocked pending recovery of an existing order.'
                 : data.consumer_failed ? 'The latest UFC consumer cycle failed; new orders are blocked.'
                 : data.is_stale ? 'UFC status needs attention. Last verified information is shown below.'
+                : publicationBlocked ? 'UFC new orders are blocked by current card/data checks.'
                 : data.consumer_evaluating ? 'UFC consumer is checking current data; the last completed cycle is shown.'
                 : data.trading_enabled ? 'UFC real trading is enabled under the existing entry and risk rules.'
                 : data.effective_live_mode === 'off' ? 'UFC monitoring is running with orders disabled.'

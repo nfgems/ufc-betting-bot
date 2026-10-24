@@ -24,6 +24,11 @@ survives a worker restart, preserves alert history, and never changes accounting
 records or trading controls. Gamma fetch results and their alert transitions
 are serialized so an older success cannot clear a newer failure.
 
+The dashboard also reports independently observed card and publication freshness
+holds alongside order recovery. These messages come only from a coherent, fresh
+consumer report and use fixed public wording. They do not reconcile an order,
+refresh a publication, or change execution and readiness checks.
+
 A source manifest proves bytes, not rollout. The [CI production job](https://github.com/nfgems/ufc-betting-bot/actions/workflows/ci.yml)
 and its `railway-release-<commit>` artifact identify the commit, immutable image,
 previous image, Railway deployment and health/readiness result. The built image
